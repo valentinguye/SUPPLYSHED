@@ -256,10 +256,10 @@ ftpro =
   # clean other certification values
   mutate(
     `Programs  NON FT` = case_when(
-      `Programs  NON FT` %in% c("-", "NO", "NON", "NONE", "UNKNOWN") ~ NA, 
+      is.na(`Programs  NON FT`) | `Programs  NON FT` %in% c("-", "NA", "NO", "NON", "NONE", "UNKNOWN") ~ "9999", 
       TRUE ~ `Programs  NON FT`),
     `Others certification` = case_when(
-      `Others certification` %in% c("NO", "NON", "NONE", "UNKNOWN") ~ NA, 
+      is.na(`Others certification`) | `Others certification` %in% c("NA", "NO", "NON", "NONE", "UNKNOWN") ~ "9999", 
       TRUE ~ `Others certification`)) %>% 
   # group all reported certifications and programs together. 
   rowwise() %>% 
@@ -268,14 +268,14 @@ ftpro =
     CERTIFICATION_NAME = case_when(
       `Certification Status (Certified/decertified/Suspended)` == "CERTIFIED" ~ paste("FAIRTRADE; ", CERTIFICATION_NAME),
     TRUE ~ CERTIFICATION_NAME
-    )
+    ),
+    CERTIFICATION_NAME = str_squish(CERTIFICATION_NAME)
   )
 
-# Handle Ecookim coops: ECOOKIM as COMPANY, and value in () as acronym 
+# COOP NAME
 ftpro = 
   ftpro %>%
-  mutate(COMPANY = "FAIRTRADE",
-         SUPPLIER_ABRVNAME = NA_character_ , 
+  mutate(SUPPLIER_ABRVNAME = NA_character_ , 
          SUPPLIER_FULLNAME = NA_character_ ) %>% 
   
   mutate(
@@ -329,54 +329,57 @@ ftpro =
     )
   ) %>% 
   select(OUTSIDE, WITHIN, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, Name, everything()) 
+
 # 'region' are departments. 
 ftpro$Region %>% unique() %>% length()
-
+# Call it area name to match civ at this point. 
 ftpro = 
   ftpro %>% 
-  mutate(DISTRICT_NAME = Region)
+  mutate(AREA_NAME = Region)
 
 ftpro %>% View()
 
-# Traders/buyers/company
+# Traders/buyers
 # Split rows with several trader links into several rows. 
 ftpro <- 
   ftpro %>%
   mutate(
     TRADER_NAME = Traders,
-    TRADER_NAME = str_split(TRADER_NAME, pattern = ",|;|-|/"),
+    TRADER_NAME = list(str_split(TRADER_NAME, pattern = ",|;|-|/")),
     TRADER_NAME = map(TRADER_NAME, str_squish)
   ) %>%
   unnest(cols = c(TRADER_NAME)) 
 
-# change UNKNOWN to NA
+ftpro = 
+  ftpro %>% 
+  mutate(TRADER_NAME = if_else(TRADER_NAME=="UNKNOWN", NA, TRADER_NAME))
 
 # remaining column names
 names(ftpro)
 ftpro = 
   ftpro %>% 
-  rename(NUMBER_FARMERS = `Infos on members - Total`, 
-  ) 
+  mutate(NUMBER_FARMERS = as.numeric(`Infos on members - Total`)) 
 
-# Prepare for merging with master
+# Prepare for merging with master (called civ here)
 ftpro =
   ftpro %>% 
   mutate(COUNTRY_NAME = "IVORY_COAST", 
          YEAR = 2022) %>% # that's arbitrary
-  select(YEAR, COUNTRY_NAME, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, COMPANY, CERTIFICATION_NAME)
+  select(YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME,
+         AREA_NAME, COUNTRY_NAME, CERTIFICATION_NAME, NUMBER_FARMERS)  # order does not matter
 
 names(ftpro) <- paste0("DISCL_", names(ftpro))
 
-ftpro$COMPANY <- "RAINFOREST ALLIANCE"
+ftpro$COMPANY <- "FAIRTRADE"
 
-initcoln <- ncol(master)
-initrown <- nrow(master)
-master <- full_join(master, ftpro, 
-                  by = intersect(colnames(master), colnames(ftpro)), multiple = "all") 
+initcoln <- ncol(civ)
+initrown <- nrow(civ)
+civ <- full_join(civ, ftpro, 
+                  by = intersect(colnames(civ), colnames(ftpro)), multiple = "all") 
 
-if(ncol(master) != initcoln | nrow(master)==initrown){stop("something went wrong in consolidating disclosure data.")}
+if(ncol(civ) != initcoln | nrow(civ)==initrown){stop("something went wrong in consolidating disclosure data.")}
 
-rm(ftpro)
+rm(ft, ftpro)
 
 
 # --- CLEAN TRADER NAME ----------------------------------
