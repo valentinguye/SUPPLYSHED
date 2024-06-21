@@ -91,21 +91,21 @@ fn_unique_names_by_exporter_tax_id <- function(tax_id_var, name_var) {
 fn_trader_to_group_names <- function(col_name) {
   case_when(
     grepl("BARRY|CALLEBAUT|CALLIBAUT|CALLEBEAUT|CALLEABUT|CALLEBOUT|COLLEBAUT|CALLEEBAUT|SACO|BIOPARTENAIRE|B C COCOA|BC COCOA|BC AG|BC-COCOA|BCCOCOA|BG COCOA|BC COCA|BC-EDDYSTON|C COCOA AG GLOBAL", col_name) ~ "BARRY CALLEBAUT",
-    grepl("CARGIL|CARGRILL|CARILL", col_name) ~ "CARGILL",
+    grepl("CARGIL|CARGRILL|CARILL|CARLL", col_name) ~ "CARGILL",
     # whether this
-    grepl("SUCDEN|DENREE|DENRREE|DENRÉE|DENRRÉE|SUCRES ET DUREES|SUCRES & SENREES|SUCRES ET DENRES", col_name) ~ "SUCDEN",
+    grepl("SUCDEN|SUCCDEN|DENREE|DENRREE|DENRÉE|DENRRÉE|SUCRES ET DUREES|SUCRES & SENREES|SUCRES ET DENRES", col_name) ~ "SUCDEN",
     # ECOM must be handled before OLAM, to handle the 3 shipments in 2020 that are ECOM PC OLAM
     # this one must be above ECOM, otherwise it's turned into ECOM.
     grepl("AGROFORCE COM|AGROSFORCE COM|AGROFORCECOM", col_name) ~ "AGROFORCE COMMODITIES",
 
     # it's important that Theobroma, an ECOM subsidiary, be before ocean ~ cocoasource, because theobroma is often called with its address, which is in OCEANENWEG
-    grepl("ECOM|ZAMACOM|ECCOM|AGROTRADE|THEOBROMA|THEBROMA|THEOBRAMA|THOBROMA|ATLANTIC|DUTCH COCOA|TULIP", col_name) ~ "ECOM",
+    grepl("ECOM|ZAMACOM|ZACACOM|ECCOM|AGROTRADE|THEOBROMA|THEBROMA|THEOBRAMA|THOBROMA|ATLANTIC|DUTCH COCOA|TULIP", col_name) ~ "ECOM",
     # source: https://www.ecomtrading.com/products-services/cocoa/
 
     grepl("COCOASOURCE|OCEAN|OCEAN SA|OCEAN-SA|DIDWA COMMODITIES|COCOA SOURCE|COCOASSOURCE|COCO SOURCE|COCOA SOUR|COCASOUR|COCOASOUR", col_name) ~ "COCOASOURCE", # didwa commodities is in GHA.
 
     grepl("OLAM|OUTSPAN|UNICAO|OALM INTER|OLMA INTER|OLAN INTER", col_name) ~ "OLAM",
-    grepl("CEMOI", col_name) ~ "CEMOI",
+    grepl("CEMOI|CEMOA", col_name) ~ "CEMOI",
 
     grepl("UNILEVER|UNILIVER|UNILIIVER", col_name) ~ "UNILEVER",
     grepl("MONDELEZ", col_name) ~ "MONDELEZ",
@@ -122,7 +122,7 @@ fn_trader_to_group_names <- function(col_name) {
     grepl("FUJI|BLOMMER|INDUSTRIAL FOOD SERVICES|HARALD INDUSTRIA E COMERCIO", col_name) ~ "BLOMMER",
     grepl("GUITTARD", col_name) ~ "GUITTARD",
     grepl("HERSHEY", col_name) ~ "HERSHEY",
-    grepl("ARMAJARO|AFRICA SOURCING", col_name) ~ "AFRICA SOURCING",
+    grepl("ARMAJARO|AFRICA SOURCING|AFRCA SOURCING", col_name) ~ "AFRICA SOURCING",
     grepl("INTERREGIONALE VICTOIRE", col_name) ~ "UIREVI",
     grepl("SUCSO", col_name) ~ "SUCSO",
     grepl("TONY", col_name) ~ "TONY'S CHOCOLONELY",
@@ -252,7 +252,10 @@ fn_trader_to_group_names <- function(col_name) {
     # We don't deem these as being exporting coops (in official lists, they are not in this category, and they are not in the CAM)
     grepl("S 3 C|S3C|SOCIETE DE COMMERCIALISATION DE CAF", col_name) ~ "S3C",
 
-
+    # these are only in FAIRTRADE data
+    grepl("IVORY COCOA PRODUCT|^ICP", col_name) ~ "IVORY COCOA PRODUCTS",
+    grepl("KINEDEN", col_name) ~ "KINEDEN",
+    
     TRUE ~ col_name
   )
 }

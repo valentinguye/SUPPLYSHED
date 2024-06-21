@@ -339,20 +339,25 @@ ftpro =
 
 ftpro %>% View()
 
-# Traders/buyers
-# Split rows with several trader links into several rows. 
-ftpro <- 
-  ftpro %>%
-  mutate(
-    TRADER_NAME = Traders,
-    TRADER_NAME = list(str_split(TRADER_NAME, pattern = ",|;|-|/")),
-    TRADER_NAME = map(TRADER_NAME, str_squish)
-  ) %>%
-  unnest(cols = c(TRADER_NAME)) 
-
-ftpro = 
-  ftpro %>% 
-  mutate(TRADER_NAME = if_else(TRADER_NAME=="UNKNOWN", NA, TRADER_NAME))
+# Traders/buyers --- DO NOT INCLUDE THIS INFORMATION FOR NOW, because: 
+# it's not clear how it would be useful, 
+# how it would not introduce bias in whatever we use it for,
+# and how we would handle TRADER_NAME values coming from this data set. 
+# 
+# # Split rows with several trader links into several rows. 
+# ftpro <- 
+#   ftpro %>%
+#   mutate(
+#     TRADER_NAME = Traders,
+#     TRADER_NAME = list(str_split(TRADER_NAME, pattern = ",|;|-|/")),
+#     TRADER_NAME = map(TRADER_NAME, str_squish)
+#   ) %>%
+#   unnest(cols = c(TRADER_NAME)) 
+# 
+# ftpro = 
+#   ftpro %>% 
+#   mutate(TRADER_NAME = if_else(TRADER_NAME %in% c("UNKNOWN", "", " ", "NO", "NOT REACHED", "( FT)"), 
+#                                NA, TRADER_NAME))
 
 # remaining column names
 names(ftpro)
@@ -361,26 +366,27 @@ ftpro =
   mutate(NUMBER_FARMERS = as.numeric(`Infos on members - Total`)) 
 
 # Prepare for merging with master (called civ here)
-ftpro =
+ftmerge =
   ftpro %>% 
   mutate(COUNTRY_NAME = "IVORY_COAST", 
          YEAR = 2022) %>% # that's arbitrary
-  select(YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME,
+  select(YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, # TRADER_NAME, 
          AREA_NAME, COUNTRY_NAME, CERTIFICATION_NAME, NUMBER_FARMERS)  # order does not matter
 
-names(ftpro) <- paste0("DISCL_", names(ftpro))
+names(ftmerge) <- paste0("DISCL_", names(ftmerge))
 
-ftpro$COMPANY <- "FAIRTRADE"
+ftmerge$COMPANY <- "FAIRTRADE"
 
 initcoln <- ncol(civ)
 initrown <- nrow(civ)
-civ <- full_join(civ, ftpro, 
-                  by = intersect(colnames(civ), colnames(ftpro)), multiple = "all") 
+civ <- full_join(civ, ftmerge, 
+                  by = intersect(colnames(civ), colnames(ftmerge)), multiple = "all") 
 
 if(ncol(civ) != initcoln | nrow(civ)==initrown){stop("something went wrong in consolidating disclosure data.")}
 
-rm(ft, ftpro)
+# rm(ft, ftpro, ftmerge)
 
+civ_ft <- civ 
 
 # --- CLEAN TRADER NAME ----------------------------------
 # This is necessary to eventually match with custom data (and eases inspection for now) 
@@ -466,7 +472,7 @@ civ <-
 
 # AND REMOVE ECOOKIM AS WELL: we don't want to count it as a disclosing trader because flows from 
 # these cooperatives can be the same as those disclosed by other companies. In other words, we 
-# treat Ecookim as a source of information for the CAM, like manufacturers and Rainforest Alliance, 
+# treat Ecookim as a source of information for the CAM, like manufacturers, Rainforest Alliance and Fairtrade, 
 # and not as a trader in the sense that we want to understand it in Trase.  
 # this is to remove COMPANY values (in CAM V4) for those identified as making disclosures, 
 # but for which volumes spotted in customs data do not reflect total sourcing from Ivory Coast.  
@@ -475,7 +481,7 @@ non_trading_companies <-
     "BLOMMER", "COLRUYT", 
     "ECOOKIM", 
     "FERRERO",  "HERSHEY", 
-    "MARS", "MONDELEZ", "NESTLE", "PURATOS", "RAINFOREST ALLIANCE", 
+    "MARS", "MONDELEZ", "NESTLE", "PURATOS", "RAINFOREST ALLIANCE", "FAIRTRADE",
     "TONY'S CHOCOLONELY", "VALRHONA")
 # # Code to check their volumes in cd (read trade_data from DATA_FOR_SEIPCS_*)
 # for(pot_trad in sort(unique(civ$COMPANY))){
