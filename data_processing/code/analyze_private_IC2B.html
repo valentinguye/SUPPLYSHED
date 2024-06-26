@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+
+<meta name="author" content="Valentin" />
+
+<meta name="date" content="2024-06-25" />
+
+<title>analyze_private_IC2B</title>
+
+<script src="analyze_private_IC2B_files/header-attrs-2.20/header-attrs.js"></script>
+<script src="analyze_private_IC2B_files/jquery-3.6.0/jquery-3.6.0.min.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link href="analyze_private_IC2B_files/bootstrap-3.3.5/css/bootstrap.min.css" rel="stylesheet" />
+<script src="analyze_private_IC2B_files/bootstrap-3.3.5/js/bootstrap.min.js"></script>
+<script src="analyze_private_IC2B_files/bootstrap-3.3.5/shim/html5shiv.min.js"></script>
+<script src="analyze_private_IC2B_files/bootstrap-3.3.5/shim/respond.min.js"></script>
+<style>h1 {font-size: 34px;}
+       h1.title {font-size: 38px;}
+       h2 {font-size: 30px;}
+       h3 {font-size: 24px;}
+       h4 {font-size: 18px;}
+       h5 {font-size: 16px;}
+       h6 {font-size: 12px;}
+       code {color: inherit; background-color: rgba(0, 0, 0, 0.04);}
+       pre:not([class]) { background-color: white }</style>
+<script src="analyze_private_IC2B_files/navigation-1.1/tabsets.js"></script>
+<link href="analyze_private_IC2B_files/highlightjs-9.12.0/default.css" rel="stylesheet" />
+<script src="analyze_private_IC2B_files/highlightjs-9.12.0/highlight.js"></script>
+<script src="analyze_private_IC2B_files/kePrint-0.0.1/kePrint.js"></script>
+<link href="analyze_private_IC2B_files/lightable-0.0.1/lightable.css" rel="stylesheet" />
+
+<style type="text/css">
+  code{white-space: pre-wrap;}
+  span.smallcaps{font-variant: small-caps;}
+  span.underline{text-decoration: underline;}
+  div.column{display: inline-block; vertical-align: top; width: 50%;}
+  div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+  ul.task-list{list-style: none;}
+    </style>
+
+<style type="text/css">code{white-space: pre;}</style>
+<script type="text/javascript">
+if (window.hljs) {
+  hljs.configure({languages: []});
+  hljs.initHighlightingOnLoad();
+  if (document.readyState && document.readyState === "complete") {
+    window.setTimeout(function() { hljs.initHighlighting(); }, 0);
+  }
+}
+</script>
+
+
+
+
+
+
+
+
+
+<style type = "text/css">
+.main-container {
+  max-width: 940px;
+  margin-left: auto;
+  margin-right: auto;
+}
+img {
+  max-width:100%;
+}
+.tabbed-pane {
+  padding-top: 12px;
+}
+.html-widget {
+  margin-bottom: 20px;
+}
+button.code-folding-btn:focus {
+  outline: none;
+}
+summary {
+  display: list-item;
+}
+details > summary > p:only-child {
+  display: inline;
+}
+pre code {
+  padding: 0;
+}
+</style>
+
+
+
+<!-- tabsets -->
+
+<style type="text/css">
+.tabset-dropdown > .nav-tabs {
+  display: inline-table;
+  max-height: 500px;
+  min-height: 44px;
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.tabset-dropdown > .nav-tabs > li.active:before, .tabset-dropdown > .nav-tabs.nav-tabs-open:before {
+  content: "\e259";
+  font-family: 'Glyphicons Halflings';
+  display: inline-block;
+  padding: 10px;
+  border-right: 1px solid #ddd;
+}
+
+.tabset-dropdown > .nav-tabs.nav-tabs-open > li.active:before {
+  content: "\e258";
+  font-family: 'Glyphicons Halflings';
+  border: none;
+}
+
+.tabset-dropdown > .nav-tabs > li.active {
+  display: block;
+}
+
+.tabset-dropdown > .nav-tabs > li > a,
+.tabset-dropdown > .nav-tabs > li > a:focus,
+.tabset-dropdown > .nav-tabs > li > a:hover {
+  border: none;
+  display: inline-block;
+  border-radius: 4px;
+  background-color: transparent;
+}
+
+.tabset-dropdown > .nav-tabs.nav-tabs-open > li {
+  display: block;
+  float: none;
+}
+
+.tabset-dropdown > .nav-tabs > li {
+  display: none;
+}
+</style>
+
+<!-- code folding -->
+
+
+
+
+</head>
+
+<body>
+
+
+<div class="container-fluid main-container">
+
+
+
+
+<div id="header">
+
+
+
+<h1 class="title toc-ignore">analyze_private_IC2B</h1>
+<h4 class="author">Valentin</h4>
+<h4 class="date">2024-06-25</h4>
+
+</div>
+
+
+<div id="how-does-cam-v4-compare-to-previous-cam"
+class="section level1">
+<h1>How does CAM V4 compare to previous CAM?</h1>
+<p>Renier et al. 2023, describe the Cocoa Accountability Map they use
+(<strong>CAM V3</strong>) as follows: “<em>This map includes information
+on 4451 cooperatives across the country (…) from self-disclosures in
+2019 and 2020.</em>” Among which they identify “<em>1164
+cooperative-company links</em>” and that “<em>710 of the cooperatives in
+the Cocoa Accountability Map could be identified as providing some of
+the sourcing of one or more companies.</em>”. In addition, in CAM V3
+there are 510 distinct cooperatives where at least one company discloses
+how many farmers it sources from.<br />
+Finally, one can count 510 distinct cooperatives where at least one
+sustainable sourcing initiative (SSI) is reported (incl. by Rainforest
+Alliance or Fairtrade).</p>
+<p>In <strong>CAM V4</strong>, in 2020, <strong>66</strong> additional
+distinct cooperatives are identified. CAM V4 lists <strong>-69</strong>
+more cooperative-company links than the V3. <strong>124</strong>
+additional cooperatives are found to have a link with a company in the
+V4. This yields <strong>11</strong> more cooperatives with some
+information on the number of farmers. Finally, the V4 has
+<strong>149</strong> more cooperatives where at least one SSI is
+reported than the V3.</p>
+<table class=" lightable-minimal table table-striped table-hover" style="font-family: &quot;Trebuchet MS&quot;, verdana, sans-serif; margin-left: auto; margin-right: auto; margin-left: auto; margin-right: auto;">
+<caption>
+<strong>Table 1: Comparison of Cocoa Accountability Map versions for
+Ivory Coast 2020</strong>
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+</th>
+<th style="text-align:right;">
+Distinct cooperatives
+</th>
+<th style="text-align:right;">
+Coop-company links
+</th>
+<th style="text-align:right;">
+Coops linked with a company
+</th>
+<th style="text-align:right;">
+Coops with some farmer info
+</th>
+<th style="text-align:right;">
+Coops with some certification
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+V3
+</td>
+<td style="text-align:right;">
+4451
+</td>
+<td style="text-align:right;">
+1164
+</td>
+<td style="text-align:right;">
+710
+</td>
+<td style="text-align:right;">
+510
+</td>
+<td style="text-align:right;">
+439
+</td>
+</tr>
+<tr>
+<td style="text-align:left;font-weight: bold;">
+V4
+</td>
+<td style="text-align:right;font-weight: bold;">
+4517
+</td>
+<td style="text-align:right;font-weight: bold;">
+1095
+</td>
+<td style="text-align:right;font-weight: bold;">
+834
+</td>
+<td style="text-align:right;font-weight: bold;">
+521
+</td>
+<td style="text-align:right;font-weight: bold;">
+588
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+V4 with ‘V3 method’
+</td>
+<td style="text-align:right;">
+4586
+</td>
+<td style="text-align:right;">
+1095
+</td>
+<td style="text-align:right;">
+901
+</td>
+<td style="text-align:right;">
+581
+</td>
+<td style="text-align:right;">
+637
+</td>
+</tr>
+</tbody>
+</table>
+<div id="the-main-sources-of-differences" class="section level3">
+<h3>The main sources of differences</h3>
+<p><strong>1. The identification of distinct cooperatives </strong> In
+Renier et al. (2023), cooperatives are identified according to unique
+combinations of their disclosed abbreviated names, full names and
+spatial coordinates (“V3 method”).<br />
+As shown in Table 1 above, applying the same cooperative identification
+approach to CAM V4 data yields substantially different results. The
+method applied for CAM V4 does not systematically distinguish
+cooperatives because of differences in reported names or even
+coordinates.</p>
+<pre><code>##      DISCLOSURE_SOURCE     TRADER_NAME DISCL_SUPPLIER_ABRVNAME
+## 1      BARRY CALLEBAUT BARRY CALLEBAUT       COPACOL WAREHOUSE
+## 2      BARRY CALLEBAUT BARRY CALLEBAUT       COPACOL WAREHOUSE
+## 3      BARRY CALLEBAUT BARRY CALLEBAUT       COPACOL WAREHOUSE
+## 4      BARRY CALLEBAUT BARRY CALLEBAUT       COPACOL WAREHOUSE
+## 5                 MARS            &lt;NA&gt;         COOP CA COPACOL
+## 6                 MARS            &lt;NA&gt;         COOP CA COPACOL
+## 7             MONDELEZ            &lt;NA&gt;                 COPACOL
+## 8             MONDELEZ            &lt;NA&gt;                 COPACOL
+## 9             MONDELEZ            &lt;NA&gt;                 COPACOL
+## 10 RAINFOREST ALLIANCE            &lt;NA&gt;         COOP CA COPACOL
+##                DISCL_SUPPLIER_FULLNAME DISCL_LONGITUDE DISCL_LATITUDE COOP_ID
+## 1                                 &lt;NA&gt;       -5.371273       5.262833    2550
+## 2                                 &lt;NA&gt;       -5.371273       5.262833    2550
+## 3                                 &lt;NA&gt;       -5.371273       5.262833    2550
+## 4                                 &lt;NA&gt;       -5.371273       5.262833    2550
+## 5                                 &lt;NA&gt;       -5.371344       5.262790    2550
+## 6                                 &lt;NA&gt;       -5.371344       5.262790    2550
+## 7  Ste Coop agri cot lauzoua carrefour              NA             NA    2550
+## 8  Ste Coop agri cot lauzoua carrefour              NA             NA    2550
+## 9  Ste Coop agri cot lauzoua carrefour              NA             NA    2550
+## 10                                &lt;NA&gt;              NA             NA    2550</code></pre>
+<p><strong>2. The addition of disclosure data (see
+consolidated_disclosures.R)</strong> NOTE code below would need to be
+re-written because CAM V3 is now deemed valid for 2019 and so there has
+been extrapolation from 2019 to 2020.</p>
+<table class=" lightable-minimal table table-striped table-hover" style="font-family: &quot;Trebuchet MS&quot;, verdana, sans-serif; margin-left: auto; margin-right: auto; width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>
+<strong>Number of cooperatives disclosed in 2020, by source, in both CAM
+versions</strong>
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+</th>
+<th style="text-align:right;">
+V3
+</th>
+<th style="text-align:right;">
+V4
+</th>
+<th style="text-align:right;">
+V4 - V3
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+RAINFOREST ALLIANCE
+</td>
+<td style="text-align:right;">
+38
+</td>
+<td style="text-align:right;">
+106
+</td>
+<td style="text-align:right;">
+68
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ECOOKIM
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+23
+</td>
+<td style="text-align:right;">
+23
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ETC GROUP
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+15
+</td>
+<td style="text-align:right;">
+15
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ALFRED RITTER
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+2
+</td>
+<td style="text-align:right;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+TONY’S CHOCOLONELY
+</td>
+<td style="text-align:right;">
+4
+</td>
+<td style="text-align:right;">
+6
+</td>
+<td style="text-align:right;">
+2
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+VALRHONA
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+COLRUYT
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+FERRERO
+</td>
+<td style="text-align:right;">
+71
+</td>
+<td style="text-align:right;">
+71
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+OLAM
+</td>
+<td style="text-align:right;">
+198
+</td>
+<td style="text-align:right;">
+198
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+FAIRTRADE
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+CEMOI
+</td>
+<td style="text-align:right;">
+33
+</td>
+<td style="text-align:right;">
+33
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ECOM
+</td>
+<td style="text-align:right;">
+44
+</td>
+<td style="text-align:right;">
+44
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+SUCDEN
+</td>
+<td style="text-align:right;">
+25
+</td>
+<td style="text-align:right;">
+25
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+MONDELEZ
+</td>
+<td style="text-align:right;">
+62
+</td>
+<td style="text-align:right;">
+62
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+PURATOS
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+FILDISI
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ALTER ECO
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ETHIQUABLE
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ALBERT HEIJN
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+HERSHEY
+</td>
+<td style="text-align:right;">
+69
+</td>
+<td style="text-align:right;">
+68
+</td>
+<td style="text-align:right;">
+-1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+TOUTON
+</td>
+<td style="text-align:right;">
+34
+</td>
+<td style="text-align:right;">
+33
+</td>
+<td style="text-align:right;">
+-1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+MARS
+</td>
+<td style="text-align:right;">
+90
+</td>
+<td style="text-align:right;">
+88
+</td>
+<td style="text-align:right;">
+-2
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+BLOMMER
+</td>
+<td style="text-align:right;">
+79
+</td>
+<td style="text-align:right;">
+75
+</td>
+<td style="text-align:right;">
+-4
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+BARRY CALLEBAUT
+</td>
+<td style="text-align:right;">
+192
+</td>
+<td style="text-align:right;">
+174
+</td>
+<td style="text-align:right;">
+-18
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+NESTLE
+</td>
+<td style="text-align:right;">
+76
+</td>
+<td style="text-align:right;">
+50
+</td>
+<td style="text-align:right;">
+-26
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+CARGILL
+</td>
+<td style="text-align:right;">
+165
+</td>
+<td style="text-align:right;">
+122
+</td>
+<td style="text-align:right;">
+-43
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div id="number-of-coops-and-links-in-2022" class="section level1">
+<h1>Number of coops and links in 2022</h1>
+<pre><code>##  [1] NA                    &quot;RAINFOREST ALLIANCE&quot; &quot;FERRERO&quot;            
+##  [4] &quot;OLAM&quot;                &quot;CARGILL&quot;             &quot;BLOMMER&quot;            
+##  [7] &quot;NESTLE&quot;              &quot;BARRY CALLEBAUT&quot;     &quot;HERSHEY&quot;            
+## [10] &quot;TOUTON&quot;              &quot;FAIRTRADE&quot;           &quot;CEMOI&quot;              
+## [13] &quot;ALFRED RITTER&quot;       &quot;ECOM&quot;                &quot;SUCDEN&quot;             
+## [16] &quot;MONDELEZ&quot;            &quot;MARS&quot;                &quot;ETC GROUP&quot;          
+## [19] &quot;TONY&#39;S CHOCOLONELY&quot;  &quot;PURATOS&quot;             &quot;ECOOKIM&quot;            
+## [22] &quot;VALRHONA&quot;            &quot;FILDISI&quot;             &quot;COLRUYT&quot;            
+## [25] &quot;ALTER ECO&quot;           &quot;ETHIQUABLE&quot;          &quot;ALBERT HEIJN&quot;</code></pre>
+<pre><code>## [1] 1829</code></pre>
+<pre><code>##            A    B    C   D  E
+## In 2022 5641 1281 1073 611 NA</code></pre>
+</div>
+<div id="size-and-variability-of-direct-supply-chains"
+class="section level1">
+<h1>Size and variability of direct supply chains</h1>
+<p>Size in number of distinct coops and in number of farmers. For both
+metrics, we can show those strictly disclosed, and those extrapolated
+from other disclosures (from the same company or not). We can track not
+only disclosures made by traders, but also companies.</p>
+<p>Variability can be measured by a proper metric for stickiness (Reis
+et al. 2020) and it can be visualized by looking at coops added and
+removed from one disclosure to the other.</p>
+<div id="size" class="section level2">
+<h2>Size</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-5-1.png" width="672" /></p>
+<p>Companies
+<img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-6-1.png" width="672" /></p>
+</div>
+<div id="variability" class="section level2">
+<h2>Variability</h2>
+<p>Here, we show as long as it is the second disclosure (not counting
+coops disclosed by cam v3 as the first disclosure), and absolute sizes
+are shown the previous graphs. So we would have only Cargill in 2020. To
+achieve this, we need to remove disclosures made in 2019, except if it’s
+by Cargill (by Cargill directly, not through CAM only). AND to remove
+info from the CAM that got repeated.</p>
+<pre><code>## [1] 122</code></pre>
+<pre><code>## [1] 174</code></pre>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-7-1.png" width="672" /></p>
+<p>Repeat, but including the CAM v3, hence showing changes due to strong
+mis-identification of coops between this source and the other
+disclosures.</p>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-8-1.png" width="672" /></p>
+<p>Old code:</p>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-9-1.png" width="672" /></p>
+</div>
+</div>
+<div
+id="what-cam-v4-reveals-about-transparency-practices-in-ivorian-cocoa-supply-chains"
+class="section level1">
+<h1>What CAM V4 reveals about transparency practices in Ivorian cocoa
+supply chains</h1>
+<div id="which-companies-disclosed-how-many-times"
+class="section level2">
+<h2>Which companies disclosed how many times?</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-10-1.png" width="768" /></p>
+</div>
+<div id="who-disclosed-when" class="section level2">
+<h2>Who disclosed when?</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-11-1.png" width="672" /></p>
+</div>
+<div id="consistency-in-transparency-and-its-content"
+class="section level2">
+<h2>Consistency in transparency and its content</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-12-1.png" width="672" /></p>
+</div>
+<div id="the-spatial-distribution-of-transparency"
+class="section level2">
+<h2>The spatial distribution of transparency</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-13-1.png" width="1440" /></p>
+</div>
+</div>
+<div
+id="the-state-of-sustainability-initiatives-in-the-ivorian-cocoa-supply-chains"
+class="section level1">
+<h1>The state of sustainability initiatives in the Ivorian cocoa supply
+chains</h1>
+<p>In this section, we can make the assumption that what companies
+disclose gives a complete picture of reality, because there is little
+(less) motivation for a company to conceal its sustainability
+initiatives.</p>
+<div id="the-different-ssis-and-their-sizes" class="section level2">
+<h2>The different SSIs and their sizes</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-14-1.png" width="1152" /></p>
+</div>
+<div id="how-much-do-ssis-and-certification-overlap"
+class="section level2">
+<h2>How much do SSIs and certification overlap?</h2>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-15-1.png" width="1152" /></p>
+</div>
+<div id="the-spatial-distribution-of-ssis" class="section level2">
+<h2>The spatial distribution of SSIs</h2>
+<p>Given the relatively low number of cooperatives where several SSIs
+are implemented, we map SSI coverage irrespective of intensity (i.e.,
+whether a cooperative has at least one SSI being implemented,
+irrespective of how many there may be).</p>
+<p><img src="analyze_private_IC2B_files/figure-html/unnamed-chunk-17-1.png" width="960" /></p>
+</div>
+</div>
+
+
+
+
+</div>
+
+<script>
+
+// add bootstrap table styles to pandoc tables
+function bootstrapStylePandocTables() {
+  $('tr.odd').parent('tbody').parent('table').addClass('table table-condensed');
+}
+$(document).ready(function () {
+  bootstrapStylePandocTables();
+});
+
+
+</script>
+
+<!-- tabsets -->
+
+<script>
+$(document).ready(function () {
+  window.buildTabsets("TOC");
+});
+
+$(document).ready(function () {
+  $('.tabset-dropdown > .nav-tabs > li').click(function () {
+    $(this).parent().toggleClass('nav-tabs-open');
+  });
+});
+</script>
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

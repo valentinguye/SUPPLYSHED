@@ -54,15 +54,6 @@ init <- civ
 # country names have already been cleaned in world/~/consolidated_disclosures.R
 civ$DISCL_COUNTRY_NAME %>% unique()
 
-# This was saved through a previous run of the present script. 
-previous_arbitrary_ids <- 
-  s3read_using(
-    object = "cote_divoire/cocoa/logistics/out/all_arbitrary_coop_ids_ever.csv",
-    bucket = "trase-storage",
-    opts = c("check_region" = T),
-    FUN = read_delim,
-    delim = ";")
-
 
 # Departements (districts)
 departements <- s3read_using(
@@ -295,7 +286,7 @@ ftpro =
     # first extract what's within and outside parentheses
     OUTSIDE = str_trim(str_replace(Name, "\\s*\\(.*?\\)", "")),
     WITHIN = str_extract(Name, "(?<=\\().*?(?=\\))"), 
-    # then decide whether each is a full or abreviated name (if they feature typical full names)
+    # then decide whether each is a full or abreviated name 
     SUPPLIER_FULLNAME = case_when(
       nchar(WITHIN) > nchar(OUTSIDE) ~ WITHIN,
       nchar(WITHIN) < nchar(OUTSIDE) ~ OUTSIDE,
@@ -307,6 +298,7 @@ ftpro =
       TRUE ~ SUPPLIER_ABRVNAME,
     ), 
     # handle for ecookim, for which the above character length rule might not work
+    # this is consistent with how we handle it below.
     SUPPLIER_ABRVNAME = case_when(
       grepl("ECOOKIM", Name) ~ WITHIN, 
       TRUE ~ SUPPLIER_ABRVNAME
@@ -317,6 +309,7 @@ ftpro =
       TRUE ~ SUPPLIER_FULLNAME
     ), 
     # this handles cases where within or outside is NA and the > conditions above were not working. 
+    # it uses typical full name elements
     SUPPLIER_FULLNAME = case_when(
       is.na(SUPPLIER_FULLNAME) & grepl("COOPERATIVE|AGRICULTEUR|PRODUCTEUR", WITHIN) ~ WITHIN,
       is.na(SUPPLIER_FULLNAME) & grepl("COOPERATIVE|AGRICULTEUR|PRODUCTEUR", OUTSIDE) ~ OUTSIDE,
@@ -326,9 +319,16 @@ ftpro =
       is.na(SUPPLIER_FULLNAME) & !grepl("COOPERATIVE|AGRICULTEUR|PRODUCTEUR", WITHIN) ~ WITHIN, 
       is.na(SUPPLIER_FULLNAME) & !grepl("COOPERATIVE|AGRICULTEUR|PRODUCTEUR", OUTSIDE) ~ OUTSIDE, 
       TRUE ~ SUPPLIER_ABRVNAME
+    ),
+    # finally, handle cases where within is NA, i.e. there was no parentheses (full names have been given at previous stage)
+    SUPPLIER_ABRVNAME = case_when(
+      is.na(SUPPLIER_ABRVNAME) & is.na(WITHIN) & !grepl("COOPERATIVE|AGRICULTEUR|PRODUCTEUR", OUTSIDE) ~ OUTSIDE, 
+      TRUE ~ SUPPLIER_ABRVNAME
     )
   ) %>% 
   select(OUTSIDE, WITHIN, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, Name, everything()) 
+
+ftpro %>% distinct(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
 
 # 'region' are departments. 
 ftpro$Region %>% unique() %>% length()
@@ -424,6 +424,11 @@ civ <-
 civ <- mutate(civ,
               TRADER_NAME =  fn_trader_to_group_names(fn_clean_corp_accronyms(str_trans(TRADER_NAME))),
               COMPANY =      fn_trader_to_group_names(fn_clean_corp_accronyms(str_trans(COMPANY)))) 
+
+civ %>%  
+  filter(COMPANY == "FAIRTRADE") %>% 
+  distinct(DISCL_SUPPLIER_ABRVNAME, DISCL_SUPPLIER_FULLNAME) %>% 
+  nrow() 
 
 # at this point, DISCL_TRADER_NAME and TRADER_NAME are equally missing
 all.equal(is.na(civ$DISCL_TRADER_NAME), is.na(civ$TRADER_NAME))
@@ -533,6 +538,10 @@ sum(!is.na(civ$DISCL_TRADER_NAME))
 sum(!is.na(civ$TRADER_NAME))
 sum(!is.na(civ$COMPANY))
 
+civ %>%  
+  filter(COMPANY == "FAIRTRADE") %>% 
+  distinct(DISCL_SUPPLIER_ABRVNAME, DISCL_SUPPLIER_FULLNAME) %>% 
+  nrow() 
 
 # SEVERAL SUPPLIERS IN THE SAME ROW
 # bc <- 
@@ -879,6 +888,10 @@ while(keep_imputing > 0){
 # civ %>% filter(grepl("INDENIE", SUPPLIER_FULLNAME, ignore.case = T)) %>% View()
 # civ %>% filter(grepl("ECSP", SUPPLIER_ABRVNAME, ignore.case = T)) %>% View()
 
+civ %>%  
+  filter(COMPANY == "FAIRTRADE") %>% 
+  distinct(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% 
+  nrow() 
 
 ### STAGE 3 - HOMOGENIZATION ----------------------------------------------------------------
 
@@ -1035,90 +1048,26 @@ civ <-
   mutate(CCTN_COOP_ID = paste0(SUPPLIER_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
   arrange(CCTN_COOP_ID)
 
-### MAKE STABLE COOP IDS -----------------------------
+civ_save1 <- civ
 
-# I ran this code once, on the 12th of January 2024, to take the first screenshot of the coop IDs arbitrarily created according to the arrange just above.   
-# (12/01/2024 is at the time of 2020, 2021 and 2022 SEIPCS updates, and before any disclosure made in 2024 is added).
-
-# initial_arbitrary_ids <-
-#   civ %>%
-#   # select(CCTN_COOP_ID) %>%
-#   # keep only one row of each, don't need duplicates, now that we have only these two columns
-#   distinct(CCTN_COOP_ID) %>%
-#   mutate(COOP_ID = row_number()) # Arbitrary coop id, based on order (arrange above)
-
-# # This initial screenshot shall not be overwritten in future runs of this script
-# s3write_using(initial_arbitrary_ids,
-#               object = paste0("cote_divoire/cocoa/logistics/originals/arbitrary_coop_ids_", today(), ".csv"),
-#               bucket = "trase-storage",
-#               FUN = write_delim, delim = ";",
-#               opts = c("check_region" = T)
-# )
-# s3write_using(initial_arbitrary_ids,
-#               object = "cote_divoire/cocoa/logistics/out/all_arbitrary_coop_ids_ever.csv",
-#               bucket = "trase-storage",
-#               FUN = write_delim, delim = ";",
-#               opts = c("check_region" = T)
-# )
-
-# The join creates the COOP_ID column in civ, and fills it with previous IDs where there is a match,
-# i.e. where all attributes are exactly the same as in the previous version
-civ <- 
+### MAKE ARBITRARY COOP IDS -----------------------------
+# Don't make stable IDs because stable ids are necessary and built only for the public data set. 
+# here, we just want arbitrary IDs. They don't need to match with the public data set because 
+# we will never merge those, as they are intrinsically built differently by the addition of 
+# private inputs in the process above
+arbitrary_ids = 
+    civ %>% 
+    distinct(CCTN_COOP_ID) %>%
+    mutate(COOP_ID = row_number()) # Arbitrary coop id, based on order (arrange above)
+civ = 
   civ %>% 
-  left_join(previous_arbitrary_ids, 
+  left_join(arbitrary_ids, 
             by = "CCTN_COOP_ID") 
 
-# Split into 2 parts
-# coops that remain identically identified through the addition of disclosures. 
-civ <-
-  civ %>% 
-  filter(!is.na(COOP_ID)) 
+if(length(unique(civ$COOP_ID)) != nrow(arbitrary_ids)){stop("something wrong")}
 
-# Newly disclosed or identified coops 
-new_discl <- 
-  civ %>% 
-  filter(is.na(COOP_ID)) 
+rm(arbitrary_ids)
 
-# For new combinations of attributes, create new arbitrary COOP IDs, making sure that new ones were never given before.   
-# For this, let's start counting from the highest number in existing IDs
-highest_id <- max(previous_arbitrary_ids$COOP_ID)
-
-# condition to any new coop disclosed/identified, otherwise code crashes.
-if(nrow(new_discl) > 0){ 
-  
-  # make brand new ids in the dataset of newly disclosed/identified coops
-  new_discl$COOP_ID <- # (this way, not to throw a warning)
-    new_discl %>% 
-    group_by(CCTN_COOP_ID) %>% 
-    group_indices() + highest_id 
-  
-}
-
-# Stack already existing and new ones. 
-civ <- 
-  rbind(
-    civ, 
-    new_discl
-  )
-
-# Update the list of all arbitrary coop ids ever created: 
-updated_arbitrary_ids <-
-  civ %>% # start from all the currently active ones 
-  select(CCTN_COOP_ID, COOP_ID) %>%
-  # add those in the previous version that are not in the current one
-  rbind(previous_arbitrary_ids) %>% 
-  # remove duplicates
-  distinct(CCTN_COOP_ID, .keep_all = TRUE)  
-
-# This is to be overwritten and updated every time this script is run on more disclosure data 
-s3write_using(updated_arbitrary_ids,
-              object = "cote_divoire/cocoa/logistics/out/all_arbitrary_coop_ids_ever.csv",
-              bucket = "trase-storage",
-              FUN = write_delim, delim = ";",
-              opts = c("check_region" = T)
-)
-
-# **************
 
 # this is just to keep track of where the info comes from
 civ <- 
@@ -1136,9 +1085,6 @@ civ <-
   ungroup() %>% 
   select(-IS_CAM_V3)
 
-
-
-length(unique(civ$COOP_ID))
 civ <- ungroup(civ)
 
 civ %>% #filter(grepl("COASADA", SUPPLIER_ABRVNAME, ignore.case = T)) %>% 
@@ -1269,14 +1215,20 @@ fn_standard_certification_names <- function(x) {
   if(grepl("UTZ|UTS", x) & !grepl("DECERTIFIED", x)){
     y <- "UTZ"
   } 
+  if(grepl("COCOA PROMISE|^CCP$|CARGILL", x)){
+    y <- "COCOA HORIZONS"
+  }
   if(grepl("HORIZON", x)){
     y <- "COCOA HORIZONS"
   }
   if(grepl("COCOA PLAN", x)){
     y <- "COCOA HORIZONS"
   }
-  if(grepl("COCOALIF|COCOA LIF|CACAOLIF|CACAO LIF", x)){
+  if(grepl("COCOALIF|COCOA LIF|CACAOLIF|CACAO LIF|COCO LIF", x)){
     y <- "COCOA LIFE"
+  }
+  if(grepl("SUCDEN|FUCHS", x)){
+    y <- "SUCDEN PROGRAMMES"
   }
   if(grepl("FAIR FOR LIFE", x)){
     y <- "FAIR FOR LIFE"
@@ -1287,8 +1239,8 @@ fn_standard_certification_names <- function(x) {
   if(grepl("BIOLOGIQUE|^BIO$|^AB$", x)){
     y <- "AGRICULTURE BIOLOGIQUE"
   }
-  if(grepl("4C|^ASA$|PROGRAMME DE L'UNION ECOOKIM|^CACAO$|^CARE$|CE 834|CENTRE D'INNOVATION VERTE|^CLMRS$|^CMS$|^COCOA ACTION$|^COH$|COOPACADEMY2|PILOT|^GAL$|^GIZ$|^ICI$|^LANTEUR$|^MICRO$|^MOCA$|^NEW$|^NA$|^NEANT$|^OLD$|^PP$|PRODUCTIVITY PACKAGE|^PRO$|^PROPLANTEUR$|^RCCP$|RESPONSIBLY SOURCED COCOA|^SASSANDRA$|^SOCIAL$|^STARBUCK$", x)){
-    y <- "OTHER PROGAM"
+  if(grepl("4C|4 C|^ASA$|PROGRAMME DE L'UNION ECOOKIM|^AVEC$|^CACAO$|CACAO AMI DES FORETS|CAIR INTERNATIONAL|^CARE$|CE 834|CIV [(]GIZ[)]|COCOA PRACTICISE|COH SACO|EQUITE 2|NOVATION VERTE|^CLMRS$|^CMS$|^COCOA ACTION$|COCOACTION|^COH$|COOPACADEMY2|GROUPEMENT|ICRAFT|^ICS$|^INO$|^N0$|^OILP$|SASSANDRA|CHILD LABOUR|PILOT|^ECOCERT$|IMPACTUM|CHILDREN|AGROFORESTRY|AGROMAP|ASCA|^GAL$|^GIZ$|^ICI$|^LANTEUR$|^MICRO$|^MOCA$|^NEW$|^NA$|^NEANT$|^OLD$|^PP$|PRODUCTIVITY PACKAGE|^PRO$|^PROPLANTEUR$|^RCCP$|^STB$|COACHING|SOLIDARIDAD|RESPONSIBLY SOURCED COCOA|^SOCIAL$|^STARBUCK$", x)){
+    y <- "OTHER PROGRAMMES"
   }
   if(grepl("DECERTIFIED", x)){y <- "9999"}
   if(grepl("NOT GRANTED", x)){y <- "9999"}
@@ -2047,12 +1999,12 @@ civ_coopyear <-
   select(-COMPANY, -TRADER_NAME, -DISCL_TRADER_NAME,
          -LOCALITY_NAME, 
          -starts_with("CERT_"),
-         -DISCL_NUMBER_FARMERS, -CAM_BUYERS, -BUYER, -NOT_RFA,
+         -DISCL_NUMBER_FARMERS, -CAM_BUYERS, -BUYER, -NOT_RFA, -NOT_FT,
          -NUM_FARMERS, -NUM_FARMERS_EXTRAPOLATED, -NON_TRADER,-TRADER, -unique_company_link, -unique_trader_link) %>%
   select(COOP_ID, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
          DISTRICT_NAME, DISTRICT_GEOCODE,
          DISCLOSURE_SOURCES, TRADER_NAMES, CERTIFIED, CERTIFICATIONS, 
-         TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS, 
+         TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS_FT, TOTAL_FARMERS, 
          everything()) %>% 
   rename(YEAR = DISCL_YEAR)
 
@@ -2082,14 +2034,14 @@ civ_seipcs <-
          -LOCALITY_NAME, # + these ones that never made sense, it's empty.
          -starts_with("CERT_"), # we remove cert_ vars (and make certifications var above) because those are at the link level, not the
          # flow, and there might be small differences (if two companies don't disclose the same info on certification about the same flow).
-         -CAM_BUYERS, -NOT_RFA,
+         -CAM_BUYERS, -NOT_RFA, -NOT_FT,
          -unique_company_link, -unique_trader_link) %>% # -NON_TRADER,-TRADER, 
   select(FLOW_ID, COOP_ID, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE,
          DISTRICT_NAME, DISTRICT_GEOCODE,
          BUYER, COMPANY, TRADER_NAME, # KEEP TRACK OF TRADER_NAME, for SEI-PCS
          CERTIFICATIONS,
          NUM_FARMERS, NUM_FARMERS_EXTRAPOLATED,
-         TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS,
+         TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS_FT, TOTAL_FARMERS,
          everything()) %>%
   rename(YEAR = DISCL_YEAR,
          DISCLOSURE_SOURCE = COMPANY, # note that this is not the same variable as DISCLOSURE_SOURCE*S* in civ_coopyear above. This one is always length 1.
@@ -2106,3 +2058,23 @@ civ_seipcs %>%
 
 
 # EXPORT ---------------------
+dir.create(here("temp_data/private_IC2B"))
+
+write_csv(civ_coopyear,
+          file = here("temp_data/private_IC2B/IC2B_coop.csv"),
+          na = "NA", 
+          append = FALSE, 
+          col_names = TRUE)
+
+write_csv(civ_seipcs,
+          file = here("temp_data/private_IC2B/IC2B_link.csv"),
+          na = "NA", 
+          append = FALSE, 
+          col_names = TRUE)
+
+
+
+
+
+
+

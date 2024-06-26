@@ -1,0 +1,1596 @@
+---
+title: "analyze_private_IC2B"
+author: "Valentin"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+      self_contained: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(aws.s3)
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
+
+library(tidyverse)
+library(sf)
+library(readxl)
+library(xlsx)
+library(stringr)
+library(DescTools)
+library(rnaturalearth)
+library(ggpubr)
+library(units)
+library(scales)
+library(kableExtra)
+library(here)
+library(pals)
+
+## Functions
+# Trase palettes etc. for plots
+source(here("code", "theme_trase.R"))
+
+# load in particular the function fn_trader_to_group_names, str_trans, ... 
+source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+
+## Assets
+camcy = read.csv(
+  file = here("temp_data/private_IC2B/IC2B_coop.csv"))
+# keep it named like this for consistency with earlier script version. 
+# Elsewhere, this object is called cam_long.  
+camlink = read.csv(
+  file = here("temp_data/private_IC2B/IC2B_link.csv"))
+
+camlink = 
+  camlink %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"))
+
+camcy20 <- 
+  camcy %>% 
+  filter(YEAR==2020)
+
+camlink20 <- 
+  camlink %>% 
+  filter(YEAR==2020) 
+
+departements <- s3read_using(
+  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson", 
+  bucket = "trase-storage",
+  FUN = read_sf,
+  #sheet = "Cacao", 
+  #skip = 3,
+  opts = c("check_region" = T)
+)
+
+# to plot coordinate axis labels in (with geom_sf) correctly 
+xlabs = seq(-8, -4, 2)
+ylabs = seq(5, 11, 2)
+```
+
+
+# How does CAM V4 compare to previous CAM? 
+
+```{r reproduce the figures in Renier et al. 2023, include = FALSE} 
+# Running 'Step 1' code chunk in cote_divoire/cocoa/sei-pcs/v1_0_0/CAM_to_traders_volumes_FOB_capped_2019.Rmd
+# indeed yields an object with 1164 rows
+camv2 <-read_delim(
+  get_object("cote_divoire/cocoa/logistics/originals/mighty/accountability_map_v2/cam_2021-03-02_geocoded.csv", 
+             bucket = "trase-storage",
+             FUN = read_excel,
+             opts = c("check_region" = TRUE)), 
+  delim = ";")
+
+camv3 <-read_delim(
+  get_object("cote_divoire/cocoa/logistics/originals/mighty/accountability_map_v3/cam_2023-10-31_geocoded.csv", 
+             bucket = "trase-storage",
+             FUN = read_excel,
+             opts = c("check_region" = TRUE)), 
+  delim = ";")
+
+
+# The data used in Renier et al. 2023 is called v2 in s3, but it is actually identical to the most recent data shared by Jackson on 16-10-2023, at a moment when the Mighty Earth online page indicates v3 (and now stored in s3 as v3 for coherence).    
+cam <- camv3
+
+# distinct cooperatives 
+cam$COOP_ID <- 
+  cam %>% 
+  group_by(coopacronym, coopname, longitude, latitude) %>% 
+  group_indices()
+
+nb_dst_coops_cam <- cam$COOP_ID %>% 
+  unique() %>% 
+  length() %>% print() # (equals nrow(cam) )
+
+# 4292 can be linked to a district, 
+cam %>% 
+  filter(!(is.na(geocode))) %>% 
+  pull(COOP_ID) %>% 
+  unique %>% 
+  length() %>% print()
+
+# 4273 have coordinates... 
+nb_dst_geocoops <- 
+  cam %>% 
+  filter(!(is.na(longitude))) %>% 
+  pull(COOP_ID) %>% 
+  unique %>% 
+  length() %>% print()
+
+# coop-company links
+cam_buyers_long <- 
+  cam %>%
+  mutate(
+    BUYER_LIST = str_split(buyers, pattern = ";"),
+    BUYER_LIST = map(BUYER_LIST, str_squish)
+  ) %>%
+  unnest(cols = c(BUYER_LIST)) %>%
+  drop_na(BUYER_LIST) 
+
+nb_coop_comp_links_cam <- 
+  nrow(cam_buyers_long) %>% print()
+
+# Distinct coops linked with a company
+nb_dst_linked_coops_cam <- 
+  cam_buyers_long %>% 
+  pull(COOP_ID) %>% 
+  unique %>% 
+  length() %>% print()
+
+# Note that among those, 20 cannot be linked to a district. 
+nb_dst_linked_geocoops_cam <- 
+  cam_buyers_long %>% 
+  filter(!(is.na(geocode))) %>% 
+  pull(COOP_ID) %>% 
+  unique %>% 
+  length() %>% print()
+
+# coops with some farm size information
+cam_farmers_long <- 
+  cam %>% 
+  mutate(COOP_SIZE = str_split(coopmembers, pattern = ";"),
+         COOP_SIZE = map(COOP_SIZE, str_squish)) %>%
+  unnest(cols = c(COOP_SIZE)) %>%
+  drop_na(COOP_SIZE) 
+
+# the # of cooperatives which have number of farmer information from at least one company (disclosure), stated in Renier et al.
+nb_dst_coops_farmers_cam <- 
+  cam_farmers_long %>% 
+  nrow() %>% print()
+
+# Note that this is inaccurate, since the true number of distinct coops is
+true_nb_dst_coops_farmers_cam <- 
+  cam_farmers_long %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length()
+
+# Number of coops with at least one certification program disclosed
+nb_dst_coops_certi_cam <- 
+  cam_buyers_long %>% 
+  filter(!(is.na(certification) | certification == "" | certification == " ") ) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() %>% print()
+
+```
+
+```{r same stats but from latest CAM, include = FALSE} 
+
+
+
+# V3 coop identification method, but in latest CAM
+camlink20$ALT_COOP_ID <- 
+  camlink20 %>% 
+  group_by(DISCL_SUPPLIER_ABRVNAME, DISCL_SUPPLIER_FULLNAME, DISCL_LONGITUDE, DISCL_LATITUDE) %>% 
+  group_indices()
+
+# distinct coops identified
+nb_dst_coops_civ20 <- 
+  nrow(camcy20)
+
+nb_dst_coops_civ20_altid <-
+  camlink20$ALT_COOP_ID %>% 
+  unique() %>% 
+  length()
+
+# with a district info
+nb_dst_geocoops_civ20 <- 
+  camlink20 %>% 
+  filter(!(is.na(DISTRICT_GEOCODE))) %>% 
+  nrow()
+
+# coop-company links identified
+nb_coop_comp_links_civ20 <- 
+  camlink20 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  nrow()
+
+nb_coop_comp_links_civ20_altid <- nb_coop_comp_links_civ20 # this is the same no matter the coop identification method
+
+# distinct coops linked with a company
+nb_dst_linked_coops_civ20 <-
+  camlink20 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  select(COOP_ID) %>% 
+  unique() %>% 
+  nrow() 
+
+nb_dst_linked_coops_civ20_altid <-
+  camlink20 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  select(ALT_COOP_ID) %>% 
+  unique() %>% 
+  nrow() 
+
+# Coops with info on number of farmers
+nb_dst_coops_farmers_civ20 <-
+  camlink20 %>% 
+  filter(!all(is.na(DISCL_NUMBER_FARMERS)), .by = COOP_ID) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() 
+# identical to: 
+camcy20 %>% 
+  filter(!is.na(TOTAL_FARMERS)) %>% 
+  nrow()
+# NO, not anymore, because this includes cooperatives for which there is info only from RFA now. 
+
+nb_dst_coops_farmers_civ20_altid <-
+  camlink20 %>% 
+  filter(!all(is.na(DISCL_NUMBER_FARMERS)), .by = COOP_ID) %>% 
+  pull(ALT_COOP_ID) %>% 
+  unique() %>% 
+  length() 
+
+# Number of coops with at least one certification program disclosed
+nb_dst_coops_certi_civ20 <-
+camlink20 %>% 
+  filter(CERTIFIED) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() 
+# This yields slightly different number - investigate why one day...
+# nb_dst_coops_certi_civ20 <-
+#   camcy20$CERTIFIED %>% 
+#   sum()
+
+nb_dst_coops_certi_civ20_altid <-
+  camlink20 %>% 
+  filter(CERTIFIED) %>% 
+  pull(ALT_COOP_ID) %>% 
+  unique() %>% 
+  length() 
+
+# Store everything in a table 
+colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops with some certification")
+rowna <- c("V3", "V4", "V4 with 'V3 method'") 
+
+compar_tbl <- 
+  data.frame("A" = c(nb_dst_coops_cam, nb_dst_coops_civ20, nb_dst_coops_civ20_altid), 
+             "B" = c(nb_coop_comp_links_cam, nb_coop_comp_links_civ20, nb_coop_comp_links_civ20_altid),
+             "C" = c(nb_dst_linked_coops_cam, nb_dst_linked_coops_civ20, nb_dst_linked_coops_civ20_altid),
+             "D" = c(true_nb_dst_coops_farmers_cam, nb_dst_coops_farmers_civ20, nb_dst_coops_farmers_civ20_altid),
+             "E" = c(nb_dst_coops_certi_cam, nb_dst_coops_certi_civ20, nb_dst_coops_certi_civ20_altid),
+             row.names = rowna)
+
+
+```
+
+Renier et al. 2023, describe the Cocoa Accountability Map they use (**CAM V3**) as follows:
+"*This map includes information on 4451 cooperatives across the country (...) from self-disclosures in 2019 and 2020.*" Among which they identify "*1164 cooperative-company links*" and that "*710 of the cooperatives in the Cocoa Accountability Map could be identified as providing some of the sourcing of one or more companies.*".
+In addition, in CAM V3 there are `r true_nb_dst_coops_farmers_cam`  distinct cooperatives where at least one company discloses how many farmers it sources from.    
+Finally, one can count `r true_nb_dst_coops_farmers_cam` distinct cooperatives where at least one sustainable sourcing initiative (SSI) is reported (incl. by Rainforest Alliance or Fairtrade). 
+
+In **CAM V4**, in 2020, **`r nb_dst_coops_civ20 - nb_dst_coops_cam`** additional distinct cooperatives are identified.
+CAM V4 lists **`r nb_coop_comp_links_civ20 - nb_coop_comp_links_cam`** more cooperative-company links than the V3. 
+**`r nb_dst_linked_coops_civ20 - nb_dst_linked_coops_cam`** additional cooperatives are found to have a link with a company in the V4.
+This yields **`r nb_dst_coops_farmers_civ20 - true_nb_dst_coops_farmers_cam`** more cooperatives with some information on the number of farmers. 
+Finally, the V4 has **`r nb_dst_coops_certi_civ20 - nb_dst_coops_certi_cam`** more cooperatives where at least one SSI is reported than the V3.  
+
+
+```{r comparing_versions, echo = FALSE}
+compar_tbl[1:3,] %>% 
+  kable(format = "html", 
+      col.names = colna, 
+      row.names = TRUE, 
+      caption = "**Table 1: Comparison of Cocoa Accountability Map versions for Ivory Coast 2020**"
+      ) %>% 
+  row_spec(row = 2, bold = TRUE) %>% 
+  kable_minimal() %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+
+### The main sources of differences
+**1. The identification of distinct cooperatives **
+In Renier et al. (2023), cooperatives are identified according to unique combinations of their disclosed abbreviated names, full names and spatial coordinates ("V3 method").    
+As shown in Table 1 above, applying the same cooperative identification approach to CAM V4 data yields substantially different results.
+The method applied for CAM V4 does not systematically distinguish cooperatives because of differences in reported names or even coordinates. 
+
+```{r, include = TRUE}
+camlink %>% filter(grepl("COPACOL", SUPPLIER_ABRVNAME, ignore.case = T)) %>% 
+  arrange(DISCLOSURE_SOURCE) %>% 
+  # filter(is.na(DISCL_LONGITUDE & !is.na(LONGITUDE))) %>% 
+  # filter(SUPPLIER_ABRVNAME=="SOCEADAHS") %>% 
+  select(DISCLOSURE_SOURCE, TRADER_NAME, DISCL_SUPPLIER_ABRVNAME, DISCL_SUPPLIER_FULLNAME, DISCL_LONGITUDE, DISCL_LATITUDE, 
+        # SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, 
+         COOP_ID) %>% print()
+```
+
+
+**2. The addition of disclosure data (see consolidated_disclosures.R)**
+NOTE code below would need to be re-written because CAM V3 is now deemed valid for 2019 and so there has been extrapolation from 2019 to 2020. 
+
+```{r, include = FALSE}
+tmp_list <- list()
+for(CMPNY in unique(camlink$DISCLOSURE_SOURCE)[!is.na(unique(camlink$DISCLOSURE_SOURCE))]){
+compar_tbl_bycomp <- data.frame(V3 = NA, V4 = NA)
+if(CMPNY %in% c("RAINFOREST ALLIANCE", "FAIRTRADE") ){ #
+  compar_tbl_bycomp[1, "V3"] <- cam_buyers_long %>% filter(grepl("(RA)|(FT)", coopmembers)) %>% select(COOP_ID) %>% unique() %>% nrow()
+} else{
+  compar_tbl_bycomp[1, "V3"] <- cam_buyers_long %>% filter(BUYER_LIST==CMPNY) %>% select(COOP_ID) %>% unique() %>% nrow()
+}
+compar_tbl_bycomp[1, "V4"] <- camlink20 %>% filter(DISCLOSURE_SOURCE==CMPNY) %>% select(COOP_ID) %>% unique() %>% nrow()
+
+tmp_list[[CMPNY]] <- compar_tbl_bycomp[1, ]
+}
+# reuse same obj
+compar_tbl_bycomp <- bind_rows(tmp_list)
+row.names(compar_tbl_bycomp) <- names(tmp_list)
+compar_tbl_bycomp <- 
+  compar_tbl_bycomp %>% 
+  mutate(`V4 - V3` = V4 - V3) %>% 
+  arrange(desc(`V4 - V3`))
+```
+
+```{r}
+compar_tbl_bycomp %>% 
+  # filter(`V4 - V3` != 0) %>% 
+  kable(format = "html", 
+        row.names = TRUE,
+        caption = "**Number of cooperatives disclosed in 2020, by source, in both CAM versions**"
+  ) %>% 
+  kable_minimal() %>% 
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+
+```
+
+# Number of coops and links in 2022 
+```{r}
+camcy22 <- 
+  camcy %>% 
+  filter(YEAR==2022)
+
+camlink22 <- 
+  camlink %>% 
+  filter(YEAR==2022) 
+
+# distinct coops identified
+nb_dst_coops_civ22 <- 
+  nrow(camcy22)
+
+# distinct disclosing companies 
+camlink$DISCLOSURE_SOURCE %>% unique() 
+  
+
+# with a district info
+nb_dst_geocoops_civ22 <- 
+  camlink22 %>% 
+  filter(!(is.na(DISTRICT_GEOCODE))) %>% 
+  nrow()
+
+# coop-company links identified
+nb_coop_comp_links_civ22 <- 
+  camlink22 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  nrow()
+
+
+# distinct coops linked with a company
+nb_dst_linked_coops_civ22 <-
+  camlink22 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  select(COOP_ID) %>% 
+  unique() %>% 
+  nrow() 
+
+
+# Coops with info on number of farmers
+nb_dst_coops_farmers_civ22 <-
+  camlink22 %>% 
+  filter(!all(is.na(DISCL_NUMBER_FARMERS)), .by = COOP_ID) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() 
+# identical to: 
+camcy22 %>% 
+  filter(!is.na(TOTAL_FARMERS)) %>% 
+  nrow()
+# NO, not anymore, because this includes cooperatives for which there is info only from RFA now. 
+
+# Number of coops with at least one SSI program disclosed
+nb_dst_coops_SSI_civ22 <-
+camlink22 %>% 
+  filter(CERTIFIED) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() 
+# This yields slightly different number - investigate why one day...
+nb_dst_coops_certi_civ22 <-
+  camcy22$CERTIFIED %>%
+  sum()
+
+# distinct coops disclosed by FAIRTRADE
+nb_dst_coops_fairtrade <-
+  camlink22 %>% 
+  filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% 
+  select(COOP_ID) %>% 
+  unique() %>% 
+  nrow() 
+
+
+# Store everything in a table 
+colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops with some certification")
+rowna <- c("In 2022") 
+
+compar_tbl <- 
+  data.frame("A" = c(nb_dst_coops_civ22), 
+             "B" = c(nb_coop_comp_links_civ22),
+             "C" = c(nb_dst_linked_coops_civ22),
+             "D" = c(nb_dst_coops_farmers_civ22),
+             "E" = c(nb_dst_coops_certi_civ22),
+             row.names = rowna)
+
+nb_dst_coops_fairtrade
+compar_tbl
+```
+
+
+
+# Size and variability of direct supply chains
+Size in number of distinct coops and in number of farmers. For both metrics, we can show those strictly disclosed, and those extrapolated from other disclosures (from the same company or not). 
+We can track not only disclosures made by traders, but also companies. 
+
+Variability can be measured by a proper metric for stickiness (Reis et al. 2020) and it can be visualized by looking at coops added and removed from one disclosure to the other. 
+
+## Size 
+
+```{r}
+# camlink %>% filter(TRADER_NAME != DISCLOSURE_SOURCE)
+# camlink %>% filter(TRADER_NAME %in% c("KRUGER", "COCOASOURCE")) %>% View()
+# SIZE - NB COOPS 
+
+df_plot_trdr <- 
+  camlink %>% 
+  filter(YEAR >= 2019 & !is.na(TRADER_NAME)) %>% 
+  # handle the special case of cocoasource showing up in 2019, because we left it there, but as of 2k20 we treat it as not disclosing
+# we need a balanced panel
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  # Cargill has two sources for 2019 (this is the only company for which it's the case): the CAM v3 and Cargill's "direct" disclosure. 
+  # We know now that this leads to overestimating the number of distinct coops. 
+  # Thus, for the sake of comparing the size of the supply base across years, we discard coops disclosed to supply Cargill by the CAM V3 only. 
+  filter(!(DISCLOSURE_SOURCE == "CARGILL" & IS_ALL_CAM_V3)) %>% 
+  mutate(IS_GEO = !is.na(DISTRICT_GEOCODE)) %>% 
+  summarise(ANNUAL_COOPS = list(unique(COOP_ID)), 
+            NB_ANNUAL_COOPS = length(unlist(ANNUAL_COOPS)),
+            NB_DISCL_FARMERS = sum(NB_FARMERS_COMPANY_YEAR, na.rm = TRUE),
+            NB_DISCL_FARMERS = if_else(NB_DISCL_FARMERS==0, NA, NB_DISCL_FARMERS),
+            NB_EXTRAP_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE),
+            NB_EXTRAP_FARMERS = if_else(NB_EXTRAP_FARMERS==0, NA, NB_EXTRAP_FARMERS),
+            NB_EXTRAP_GEO_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED*IS_GEO, na.rm = TRUE),
+            NB_EXTRAP_GEO_FARMERS = if_else(NB_EXTRAP_GEO_FARMERS==0, NA, NB_EXTRAP_GEO_FARMERS),
+            # include REPEATED_FROM_PAST_YEAR in the grouping var to keep it in the data. It doesn't change the grouping. 
+            .by = c(TRADER_NAME, YEAR, REPEATED_FROM_PAST_YEAR)) %>% 
+  arrange(TRADER_NAME, YEAR) 
+
+
+# df_plot_trdr <- 
+#   rbind(
+#     df_plot_trdr,
+#     camlink %>% 
+#       filter(YEAR >= 2019 & !is.na(TRADER_NAME)) %>% 
+#       filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+#       filter(!(DISCLOSURE_SOURCE == "CARGILL" & IS_ALL_CAM_V3)) %>% 
+#       summarise(.by = YEAR, 
+#                 ANNUAL_COOPS = list(unique(COOP_ID)), 
+#                 NB_ANNUAL_COOPS = length(unlist(ANNUAL_COOPS)),
+#                 NB_DISCL_FARMERS = sum(NB_FARMERS_COMPANY_YEAR, na.rm = TRUE),
+#                 NB_DISCL_FARMERS = if_else(NB_DISCL_FARMERS==0, NA, NB_DISCL_FARMERS),
+#                 NB_EXTRAP_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE),
+#                 NB_EXTRAP_FARMERS = if_else(NB_EXTRAP_FARMERS==0, NA, NB_EXTRAP_FARMERS)
+#                 ) %>% 
+#     mutate(TRADER_NAME = " ALL", 
+#            REPEATED_FROM_PAST_YEAR = FALSE) %>% 
+#       select(names(df_plot_trdr))
+#   )
+
+
+common_theme <- theme(title = element_text(size = 10),
+                      legend.text = element_text(size = 12), 
+                      legend.title = element_text(size = 10), 
+                      legend.key.size = unit(1, 'cm'))
+ggarrange(
+  
+  ggplot(df_plot_trdr, aes(x = YEAR, y = NB_ANNUAL_COOPS, group = TRADER_NAME, color = TRADER_NAME)) +
+      scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
+      geom_line(linewidth = 1) +
+      geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+      labs(title = "Number of disclosed cooperatives",
+      x = "",
+      y = "", 
+      size = "Made a disclosure this year") +
+      theme_minimal() + 
+      common_theme, 
+
+  ggplot(df_plot_trdr, aes(x = YEAR, y = NB_DISCL_FARMERS, group = TRADER_NAME, color = TRADER_NAME)) +
+    scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
+    geom_line(linewidth = 1) +
+    geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+    labs(title = "Number of disclosed farmers",
+    x = "",
+    y = "", 
+    size = "Made a disclosure this year") +
+    theme_minimal() +
+    common_theme, 
+  
+  ggplot(df_plot_trdr, aes(x = YEAR, y = NB_EXTRAP_FARMERS, group = TRADER_NAME, color = TRADER_NAME)) +
+    scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
+    geom_line(linewidth = 1) +
+    geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+    labs(title = "Extrapolated number of farmers",
+    x = "",
+    y = "", 
+    size = "Made a disclosure this year") +
+    theme_minimal() +
+    common_theme, 
+  
+  ggplot(df_plot_trdr, aes(x = YEAR, y = NB_EXTRAP_GEO_FARMERS, group = TRADER_NAME, color = TRADER_NAME)) +
+    scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
+    geom_line(linewidth = 1) +
+    geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+    labs(title = "Extrapolated number of farmers in geolocalized cooperative",
+    x = "",
+    y = "", 
+    size = "Made a disclosure this year") +
+    theme_minimal() +
+    common_theme, 
+  
+common.legend = TRUE, nrow = 2, ncol = 2, legend = "right"#, widths = c(5, 5, 5)
+) %>% 
+  annotate_figure(top = text_grob("", face = "bold", size = 18))
+  
+  #Evolution of traders' disclosed supply base sizes \n
+
+
+
+```
+
+Companies
+```{r}
+
+df_plot_cpny <- 
+  camlink %>% 
+  filter(YEAR >= 2019 & (DISCLOSURE_SOURCE != TRADER_NAME | is.na(TRADER_NAME))) %>% 
+# we need a balanced panel
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  # Cargill has two sources for 2019 (this is the only company for which it's the case): the CAM v3 and Cargill's "direct" disclosure. 
+  # We know now that this leads to overestimating the number of distinct coops. 
+  # Thus, for the sake of comparing the size of the supply base across years, we discard coops disclosed to supply Cargill by the CAM V3 only. 
+  filter(!(DISCLOSURE_SOURCE == "CARGILL" & IS_ALL_CAM_V3)) %>% 
+  mutate(IS_GEO = !is.na(DISTRICT_GEOCODE)) %>% 
+  summarise(ANNUAL_COOPS = list(unique(COOP_ID)), 
+            NB_ANNUAL_COOPS = length(unlist(ANNUAL_COOPS)),
+            NB_DISCL_FARMERS = sum(NB_FARMERS_COMPANY_YEAR, na.rm = TRUE),
+            NB_DISCL_FARMERS = if_else(NB_DISCL_FARMERS==0, NA, NB_DISCL_FARMERS),
+            NB_EXTRAP_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE),
+            NB_EXTRAP_FARMERS = if_else(NB_EXTRAP_FARMERS==0, NA, NB_EXTRAP_FARMERS),
+            NB_EXTRAP_GEO_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED*IS_GEO, na.rm = TRUE), 
+            NB_EXTRAP_GEO_FARMERS = if_else(NB_EXTRAP_GEO_FARMERS==0, NA, NB_EXTRAP_GEO_FARMERS),
+            # include REPEATED_FROM_PAST_YEAR in the grouping var to keep it in the data. It doesn't change the grouping. 
+            .by = c(DISCLOSURE_SOURCE, YEAR, REPEATED_FROM_PAST_YEAR)) %>% 
+  arrange(DISCLOSURE_SOURCE, YEAR) 
+
+# df_plot_cpny <- 
+#   rbind(
+#     df_plot_cpny,
+#     camlink %>% 
+#       filter(YEAR >= 2019 & DISCLOSURE_SOURCE != TRADER_NAME) %>% 
+#       filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+#       filter(!(DISCLOSURE_SOURCE == "CARGILL" & IS_ALL_CAM_V3)) %>% 
+#       summarise(.by = YEAR, 
+#                 ANNUAL_COOPS = list(unique(COOP_ID)), 
+#                 NB_ANNUAL_COOPS = length(unlist(ANNUAL_COOPS)),
+#                 NB_DISCL_FARMERS = sum(NB_FARMERS_COMPANY_YEAR, na.rm = TRUE),
+#                 NB_DISCL_FARMERS = if_else(NB_DISCL_FARMERS==0, NA, NB_DISCL_FARMERS),
+#                 NB_EXTRAP_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE),
+#                 NB_EXTRAP_FARMERS = if_else(NB_EXTRAP_FARMERS==0, NA, NB_EXTRAP_FARMERS)
+#                 ) %>% 
+#     mutate(DISCLOSURE_SOURCE = " ALL", 
+#            REPEATED_FROM_PAST_YEAR = FALSE) %>% 
+#       select(names(df_plot_cpny))
+#   )
+
+
+ggarrange(
+  ggplot(df_plot_cpny, aes(x = YEAR, y = NB_ANNUAL_COOPS, group = DISCLOSURE_SOURCE, color = DISCLOSURE_SOURCE)) +
+      scale_color_manual(name = "Manufacturers", values = trase_palettes[["categorical"]]) +
+      geom_line(linewidth = 0.7) +
+      geom_point(data = df_plot_cpny, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+      labs(title = "Number of disclosed cooperatives",
+      x = "",
+      y = "", 
+      size = "Made a disclosure this year") + 
+    common_theme +
+      theme_minimal(), 
+
+  ggplot(df_plot_cpny, aes(x = YEAR, y = NB_DISCL_FARMERS, group = DISCLOSURE_SOURCE, color = DISCLOSURE_SOURCE)) +
+    scale_color_manual(name = "Manufacturers", values = trase_palettes[["categorical"]]) +
+    geom_line(linewidth = 0.7) +
+    geom_point(data = df_plot_cpny, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+    labs(title = "Number of DISCLOSED farmers",
+    x = "",
+    y = "", 
+    size = "Made a disclosure this year") +
+    common_theme +
+    theme_minimal(), 
+  
+  ggplot(df_plot_cpny, aes(x = YEAR, y = NB_EXTRAP_FARMERS, group = DISCLOSURE_SOURCE, color = DISCLOSURE_SOURCE)) +
+    scale_color_manual(name = "Manufacturers", values = trase_palettes[["categorical"]]) +
+    geom_line(linewidth = 0.7) +
+    geom_point(data = df_plot_cpny, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+    labs(title = "Number of EXTRAPOLATED farmers",
+    x = "",
+    y = "", 
+    size = "Made a disclosure this year") +
+    common_theme +
+    theme_minimal(), 
+  
+   ggplot(df_plot_cpny, aes(x = YEAR, y = NB_EXTRAP_GEO_FARMERS, group = DISCLOSURE_SOURCE, color = DISCLOSURE_SOURCE)) +
+    scale_color_manual(name = "Manufacturers", values = trase_palettes[["categorical"]]) +
+    geom_line(linewidth = 0.7) +
+    geom_point(data = df_plot_cpny, aes(size = !REPEATED_FROM_PAST_YEAR)) +
+    labs(title = "Number of EXTRAPOLATED and LOCALIZED farmers",
+    x = "",
+    y = "", 
+    size = "Made a disclosure this year") +
+    common_theme +
+    theme_minimal(), 
+  
+  common.legend = TRUE,  nrow = 2, ncol = 2, legend = "right"#, widths = c(5, 5, 5)
+) %>% 
+  annotate_figure(top = text_grob("Evolution of manufacturers' disclosed supply base sizes \n", face = "bold", size = 18))
+
+
+```
+
+
+## Variability 
+Here, we show as long as it is the second disclosure (not counting coops disclosed by cam v3 as the first disclosure), and absolute sizes are shown the previous graphs. 
+So we would have only Cargill in 2020. 
+To achieve this, we need to remove disclosures made in 2019, except if it's by Cargill (by Cargill directly, not through CAM only). 
+AND to remove info from the CAM that got repeated. 
+
+```{r}
+camlink %>% filter(DISCLOSURE_SOURCE=="CARGILL" & YEAR == 2020) %>% pull(COOP_ID) %>% unique() %>% length()
+camlink %>% filter(DISCLOSURE_SOURCE=="BARRY CALLEBAUT" & YEAR == 2020) %>% pull(COOP_ID) %>% unique() %>% length()
+
+# removing links that are also, but not only, disclosed by CAM v3 is spurious, because then one compares  
+
+cpny_panel <- 
+  camlink %>% 
+  filter((YEAR > 2019 | (YEAR == 2019 & DISCLOSURE_SOURCE == "CARGILL" & !IS_ALL_CAM_V3)) & !is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+   # and discard coops disclosed only by the CAM v3. If we discarded ANY & repeated, we would also remove from previously disclosed coops, those in common with the cam, disclosed after it and then repeated.  
+  filter(!(REPEATED_FROM_PAST_YEAR)) %>% 
+  
+  summarise(ANNUAL_COOPS = list(unique(COOP_ID)), 
+            NB_ANNUAL_COOPS = length(unlist(ANNUAL_COOPS)), # for informative purpose
+            # include REPEATED_FROM_PAST_YEAR in the grouping var to keep it in the data. It doesn't change the grouping. 
+            .by = c(DISCLOSURE_SOURCE, YEAR, REPEATED_FROM_PAST_YEAR)) %>% 
+  arrange(DISCLOSURE_SOURCE, YEAR) 
+
+cpny_panel <- 
+  cpny_panel %>% 
+  mutate(ADDED_COOPS = list(NA), 
+         REMOVED_COOPS = list(NA), 
+         NB_ADDED_COOPS = NA, 
+         NB_REMOVED_COOPS = NA) %>% 
+  group_by(DISCLOSURE_SOURCE) %>% 
+  mutate(ALL_COOPS = list(unique(unlist(ANNUAL_COOPS)))) %>% 
+  ungroup()
+
+# Start in 2020. previous coops will be NULL for all companies except Cargill.
+for(cpny in unique(cpny_panel$DISCLOSURE_SOURCE)){
+  for(y in 2020:max(cpny_panel$YEAR)){
+     # These can be coops repeated from older disclosures than the one in the year y-1. We handle this below.  
+    prev_coops <- 
+      cpny_panel %>% 
+      filter(DISCLOSURE_SOURCE==cpny & cpny_panel$YEAR==y-1) %>% 
+      pull(ANNUAL_COOPS) %>% 
+      unlist()
+    
+    cont_coops <- 
+      cpny_panel %>% 
+      filter(DISCLOSURE_SOURCE==cpny & cpny_panel$YEAR==y) %>% 
+      pull(ANNUAL_COOPS) %>% 
+      unlist()
+    
+    # ADDED coops
+    added_coops <- cont_coops[!(cont_coops %in% prev_coops)]
+    added_nb <- length(added_coops)
+    # added_nb <- length(cont_coops) - length(prev_coops)
+  
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+               cpny_panel$YEAR==y,]$ADDED_COOPS <- list(added_coops)
+      
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+               cpny_panel$YEAR==y,]$NB_ADDED_COOPS <- added_nb    
+    
+    # REMOVED COOPS
+    removed_coops <- prev_coops[!(prev_coops %in% cont_coops)]
+    removed_nb <- length(removed_coops)
+    # removed_nb <- length(prev_coops) - length(cont_coops)
+    
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+               cpny_panel$YEAR==y,]$REMOVED_COOPS <- list(removed_coops)
+    
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+                   cpny_panel$YEAR==y,]$NB_REMOVED_COOPS <- removed_nb
+    
+  }
+}
+
+# Wouldn't change anything anymore anyway
+# cpny_panel <- 
+#   cpny_panel %>% 
+#   # But, we want to compare really disclosures between them, not links including extrapolated ones. 
+#   mutate(
+#     ADDED_COOPS = case_when(
+#       REPEATED_FROM_PAST_YEAR ~ list(NA), 
+#       TRUE ~ ADDED_COOPS
+#     ),
+#     REMOVED_COOPS = case_when(
+#       REPEATED_FROM_PAST_YEAR ~ list(NA), 
+#       TRUE ~ REMOVED_COOPS
+#     ),
+#     NB_ADDED_COOPS = case_when(
+#       REPEATED_FROM_PAST_YEAR ~ NA, 
+#       TRUE ~ NB_ADDED_COOPS
+#     ),
+#     NB_REMOVED_COOPS = case_when(
+#       REPEATED_FROM_PAST_YEAR ~ NA, 
+#       TRUE ~ NB_REMOVED_COOPS
+#     ),
+#   ) 
+
+
+# In 2019, all coops were disclosed for the first time, so the change is the number of coops
+# cpny_panel[cpny_panel$YEAR==2019,"ADDED_NB_COOP"] <- lengths(cpny_panel[cpny_panel$YEAR==2019,]$ANNUAL_COOPS)
+# cpny_panel$NB_NEW_COOP <- lengths(cpny_panel$NEW_COOPS)
+
+# cpny_panel$DISCLOSURE_SOURCE <- 
+#   reorder(cpny_panel$DISCLOSURE_SOURCE, cpny_panel$NB_NEW_COOP, FUN = function(x) +mean(x))
+
+# Display 2020 or not 
+cpny_panel <- cpny_panel %>% filter(YEAR >= 2020)
+
+# just for the display 
+cpny_panel <- 
+  cpny_panel %>% 
+  mutate(NB_REMOVED_COOPS = -NB_REMOVED_COOPS)
+
+df_plot <-
+  rbind(
+  cpny_panel %>% select(COMPANY = DISCLOSURE_SOURCE, YEAR, NB_COOPS = NB_ADDED_COOPS) %>% mutate(ADDED = T),
+  cpny_panel %>% select(COMPANY = DISCLOSURE_SOURCE, YEAR, NB_COOPS = NB_REMOVED_COOPS) %>% mutate(ADDED = F)
+)
+
+df_plot_trdr <- df_plot %>% filter(COMPANY %in% camlink$TRADER_NAME)
+df_plot_cpny <- df_plot %>% filter(! COMPANY %in% camlink$TRADER_NAME)
+
+ggarrange(
+  ggplot(df_plot_trdr, aes(x = as.factor(YEAR), y = NB_COOPS, fill = COMPANY)) +
+    geom_bar(stat = "identity", position = position_dodge(width = NULL)) +
+      scale_fill_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
+  
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    labs(subtitle = "Earliest occurrence reflects first known disclosure (other than through Cocoa Accountability Map 2019), except for Cargill which discloses back to 2009",
+         x = "",
+         y = "") +
+    theme_minimal(), 
+  
+  ggplot(df_plot_cpny, aes(x = as.factor(YEAR), y = NB_COOPS, fill = COMPANY)) +
+    geom_bar(stat = "identity", position = position_dodge(width = NULL)) +
+      scale_fill_manual(name = "Manufacturers", values = trase_palettes[["categorical"]]) +
+  
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    labs(title = "",
+         x = "",
+         y = "") +
+    theme_minimal(), 
+  
+  common.legend = FALSE, nrow = 2, ncol = 1, legend = "right"#, widths = c(5, 5, 5)
+) %>% 
+  annotate_figure(top = text_grob("Number of cooperatives added and removed, from a disclosure (excluding through CAM 2019) to the next one \n", face = "bold", size = 14))
+
+```
+
+
+Repeat, but including the CAM v3, hence showing changes due to strong mis-identification of coops between this source and the other disclosures. 
+
+```{r}
+# VARIABILITY 
+cpny_panel <- 
+  camlink %>% 
+# we need a balanced panel
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  summarise(ANNUAL_COOPS = list(unique(COOP_ID)), 
+            # include REPEATED_FROM_PAST_YEAR in the grouping var to keep it in the data. It doesn't change the grouping. 
+            .by = c(DISCLOSURE_SOURCE, YEAR, REPEATED_FROM_PAST_YEAR)) %>% 
+  arrange(DISCLOSURE_SOURCE, YEAR) 
+
+cpny_panel <- 
+  cpny_panel %>% 
+  mutate(ADDED_COOPS = list(NA), 
+         REMOVED_COOPS = list(NA), 
+         NB_ADDED_COOPS = NA, 
+         NB_REMOVED_COOPS = NA) %>% 
+  group_by(DISCLOSURE_SOURCE) %>% 
+  mutate(ALL_COOPS = list(unique(unlist(ANNUAL_COOPS)))) %>% 
+  ungroup()
+
+for(cpny in unique(cpny_panel$DISCLOSURE_SOURCE)){
+  for(y in min(cpny_panel$YEAR):max(cpny_panel$YEAR)){
+     # These can be coops repeated from older disclosures than the one in the year y-1. We handle this below.  
+    prev_coops <- 
+      cpny_panel %>% 
+      filter(DISCLOSURE_SOURCE==cpny & cpny_panel$YEAR==y-1) %>% 
+      pull(ANNUAL_COOPS) %>% 
+      unlist()
+    
+    cont_coops <- 
+      cpny_panel %>% 
+      filter(DISCLOSURE_SOURCE==cpny & cpny_panel$YEAR==y) %>% 
+      pull(ANNUAL_COOPS) %>% 
+      unlist()
+    
+    # ADDED coops
+    added_coops <- cont_coops[!(cont_coops %in% prev_coops)]
+    added_nb <- length(added_coops)
+    # added_nb <- length(cont_coops) - length(prev_coops)
+  
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+               cpny_panel$YEAR==y,]$ADDED_COOPS <- list(added_coops)
+      
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+               cpny_panel$YEAR==y,]$NB_ADDED_COOPS <- added_nb    
+    
+    # REMOVED COOPS
+    removed_coops <- prev_coops[!(prev_coops %in% cont_coops)]
+    removed_nb <- length(removed_coops)
+    # removed_nb <- length(prev_coops) - length(cont_coops)
+    
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+               cpny_panel$YEAR==y,]$REMOVED_COOPS <- list(removed_coops)
+    
+    cpny_panel[cpny_panel$DISCLOSURE_SOURCE==cpny & 
+                   cpny_panel$YEAR==y,]$NB_REMOVED_COOPS <- removed_nb
+    
+  }
+}
+
+cpny_panel <- 
+  cpny_panel %>% 
+  # But, we want to compare really disclosures between them, not links including extrapolated ones. 
+  mutate(
+    ADDED_COOPS = case_when(
+      REPEATED_FROM_PAST_YEAR ~ list(NA), 
+      TRUE ~ ADDED_COOPS
+    ),
+    REMOVED_COOPS = case_when(
+      REPEATED_FROM_PAST_YEAR ~ list(NA), 
+      TRUE ~ REMOVED_COOPS
+    ),
+    NB_ADDED_COOPS = case_when(
+      REPEATED_FROM_PAST_YEAR ~ NA, 
+      TRUE ~ NB_ADDED_COOPS
+    ),
+    NB_REMOVED_COOPS = case_when(
+      REPEATED_FROM_PAST_YEAR ~ NA, 
+      TRUE ~ NB_REMOVED_COOPS
+    ),
+  ) 
+
+
+# In 2019, all coops were disclosed for the first time, so the change is the number of coops
+# cpny_panel[cpny_panel$YEAR==2019,"ADDED_NB_COOP"] <- lengths(cpny_panel[cpny_panel$YEAR==2019,]$ANNUAL_COOPS)
+# cpny_panel$NB_NEW_COOP <- lengths(cpny_panel$NEW_COOPS)
+
+# cpny_panel$DISCLOSURE_SOURCE <- 
+#   reorder(cpny_panel$DISCLOSURE_SOURCE, cpny_panel$NB_NEW_COOP, FUN = function(x) +mean(x))
+
+# Display 2020 or not - Yes display it, and 2019 too, to show the whole story 
+cpny_panel <- cpny_panel %>% filter(YEAR >= 2019)
+
+cpny_panel <- 
+  cpny_panel %>% 
+  mutate(NB_REMOVED_COOPS = -NB_REMOVED_COOPS)
+
+df_plot <-
+  rbind(
+  cpny_panel %>% select(COMPANY = DISCLOSURE_SOURCE, YEAR, NB_COOPS = NB_ADDED_COOPS) %>% mutate(ADDED = T),
+  cpny_panel %>% select(COMPANY = DISCLOSURE_SOURCE, YEAR, NB_COOPS = NB_REMOVED_COOPS) %>% mutate(ADDED = F)
+)
+
+df_plot_trdr <- df_plot %>% filter(COMPANY %in% camlink$TRADER_NAME)
+df_plot_cpny <- df_plot %>% filter(! COMPANY %in% camlink$TRADER_NAME)
+
+ggplot(df_plot_trdr, aes(x = as.factor(YEAR), y = NB_COOPS, fill = COMPANY)) +
+  geom_bar(stat = "identity", position = position_dodge(width = NULL)) +
+    scale_fill_manual(name = "Trader", values = trase_palettes[["categorical"]]) +
+
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(title = "Number of cooperatives added and removed, from one disclosures to the next one",
+       subtitle = "Counting CAM V3 as additional source of disclosures",
+       x = "",
+       y = "Number of cooperatives") +
+  theme_minimal()
+
+
+
+```
+
+
+
+Old code:
+
+```{r}
+# --> SUPPLIER VARIABILITY: number of coops disclosed a given year but not the previous one
+
+# It matters bc there's a difference between a company that disclosed coops at least twice, and we observe 
+# stickiness so we confidently infer its suppliers in the missing year 
+# and a company that disclosed coops only once and we have no idea whether it changed a lot in 
+# other years or not. 
+
+# One way to represent this is to have the same figure as above, but stop displaying lines (NA) in years with no disclosure made. 
+
+
+trader_panel <- 
+  camlink %>% 
+  # Here, we are not interested in coops disclosed by another company than the trader, thus filter that
+  filter(YEAR >= 2020 & !is.na(TRADER_NAME) & TRADER_NAME == DISCLOSURE_SOURCE) %>% 
+  summarise(ANNUAL_COOPS = list(unique(COOP_ID)), 
+            .by = c(TRADER_NAME, YEAR)) %>% 
+  arrange(TRADER_NAME, YEAR) 
+
+trader_panel <- 
+  trader_panel %>% 
+  mutate(NEW_COOPS = list(NA), 
+         CHANGE_NB_COOP = NA) %>% 
+  group_by(TRADER_NAME) %>% 
+  mutate(ALL_COOPS = list(unique(unlist(ANNUAL_COOPS)))) %>% 
+  ungroup()
+
+for(trd in unique(trader_panel$TRADER_NAME)){
+  for(y in 2021:max(trader_panel$YEAR)){
+    prev_coops <- 
+      trader_panel %>% 
+      filter(TRADER_NAME==trd & trader_panel$YEAR==y-1) %>% 
+      pull(ANNUAL_COOPS) %>% 
+      unlist()
+    
+    cont_coops <- 
+      trader_panel %>% 
+      filter(TRADER_NAME==trd & trader_panel$YEAR==y) %>% 
+      pull(ANNUAL_COOPS) %>% 
+      unlist()
+    
+    new_coops <- cont_coops[!(cont_coops %in% prev_coops)]
+    
+    change_nb <- length(cont_coops) - length(prev_coops)
+    
+    trader_panel[trader_panel$TRADER_NAME==trd & 
+                   trader_panel$YEAR==y,]$NEW_COOPS <- list(new_coops)
+    
+    trader_panel[trader_panel$TRADER_NAME==trd & 
+                   trader_panel$YEAR==y,]$CHANGE_NB_COOP <- change_nb
+    
+  }
+}
+# In 2020, all coops were disclosed for the first time, so the change is the number of coops
+trader_panel[trader_panel$YEAR==2020,"CHANGE_NB_COOP"] <- lengths(trader_panel[trader_panel$YEAR==2020,]$ANNUAL_COOPS)
+
+trader_panel$NB_NEW_COOP <- lengths(trader_panel$NEW_COOPS)
+
+trader_panel$TRADER_NAME <- 
+  reorder(trader_panel$TRADER_NAME, trader_panel$NB_NEW_COOP, FUN = function(x) +mean(x))
+
+# Display 2020 or not
+trader_panel <- trader_panel %>% filter(YEAR > 2020)
+
+ggplot() +
+  geom_histogram(data = trader_panel, 
+                 binwidth = 1, 
+                 aes(x = YEAR, fill = TRADER_NAME, weight = CHANGE_NB_COOP)) +
+  scale_fill_manual(name = "Exporters", values = rev(trase_palettes[["categorical"]])) +
+  # geom_line(data = year_df1, aes(x = YEAR, y = Value), col = "black") +
+  labs(x = "Year", y = "Number of coops disclosed from one year to the next") +
+  theme_minimal()
+
+
+```
+
+
+# What CAM V4 reveals about transparency practices in Ivorian cocoa supply chains
+
+## Which companies disclosed how many times? 
+
+```{r, fig.width = 8, fig.height = 5}
+n_discl_times_bycomp <- 
+  camlink %>% 
+  filter(!REPEATED_FROM_PAST_YEAR) %>% # removes rows with repeated == TRUE and rows with repeated == NA (coops disclosed once, or just present in CAM v3, that don't have a link with any company in a given year, and are thus NA on all vars.).
+  group_by(DISCLOSURE_SOURCE) %>% 
+  summarise(N_DISCLOSURE_TIMES = length(unique(YEAR))) %>% 
+  arrange(desc(N_DISCLOSURE_TIMES)) %>% 
+  filter(!DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  filter(!is.na(DISCLOSURE_SOURCE))
+
+ggplot(n_discl_times_bycomp) + 
+  geom_col(aes(N_DISCLOSURE_TIMES, reorder(DISCLOSURE_SOURCE, N_DISCLOSURE_TIMES)), 
+           fill = trase_palettes[["linear"]][4], 
+           width = 0.6, 
+           show.legend = FALSE) + 
+  scale_x_continuous(
+    limits = c(0, max(n_discl_times_bycomp$N_DISCLOSURE_TIMES)),
+    breaks = seq(0, 10, by = 2), 
+    expand = c(0, 0), # The horizontal axis does not extend to either side
+    # position = "top"  # Labels are located on the top
+  ) + 
+  labs(
+    title = "Number of cocoa seasons for which companies disclosed their supply chains in Ivory Coast"
+  ) + 
+  xlab("") + ylab("") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 10
+    ))
+
+```
+
+## Who disclosed when? 
+
+```{r}
+
+trader_panel <- 
+  camlink %>% 
+  # Look only at disclosures made by traders themselves; thus no need to filter out REPEATED_FROM_PAST_YEAR, because these   have missing trader name 
+  filter(YEAR >= 2020 & TRADER_NAME == DISCLOSURE_SOURCE) %>% 
+  group_by(TRADER_NAME, YEAR) %>% 
+  summarize(DID_DISCLOSE = if_else(any(!REPEATED_FROM_PAST_YEAR), 1, 0) ) %>% 
+  # mutate(DID_DISCLOSE = )
+  arrange(TRADER_NAME, YEAR)
+
+ggplot() +
+  geom_histogram(data = trader_panel, 
+                 binwidth = 0.5,
+                 aes(x = YEAR, fill = TRADER_NAME, weight = DID_DISCLOSE)
+  ) +
+  scale_fill_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
+  scale_y_continuous(
+    limits = c(0, max(n_discl_times_bycomp$N_DISCLOSURE_TIMES)),
+    breaks = seq(0, 10, by = 2), 
+  ) + 
+  # geom_line(data = year_df1, aes(x = YEAR, y = Value), col = "black") +
+  labs(x = "", y = "", 
+       title = "Supply chain disclosures, by traders and year"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 12
+    ))
+
+```
+
+## Consistency in transparency and its content 
+```{r}
+# Number of disclosures by year, since 2020 in vert. bar chart, with number among them that come with coordinates and number that come with size info in line. 
+
+# Include companies here
+comp_panel <- 
+  camlink %>% 
+  filter(!REPEATED_FROM_PAST_YEAR) %>% # removes rows with repeated == TRUE and rows with repeated == NA (coops disclosed    once, or just present      in CAM v3, that don't have a link with any company in a given year, and are thus NA on all      vars.).
+  # Remove missing disclosure source, so NA is not counted as one unique value.  
+  filter(YEAR >= 2020 & !is.na(DISCLOSURE_SOURCE)) %>% 
+  arrange(YEAR)
+
+# just some other code, to do the same thing and test. 
+# discl_panel <-
+# comp_panel %>% 
+#   summarize(.by = c(YEAR, DISCLOSURE_SOURCE),
+#             HAS_COORDS = any(!is.na(DISCL_LATITUDE)),
+#             HAS_SIZE = any(!is.na(DISCL_NUMBER_FARMERS) | !is.na(DISCL_VOLUMES))) 
+# 
+# discl_panel %>% filter(HAS_SIZE)
+# 
+# year_summaries <-
+#   discl_panel %>% 
+#   summarize(.by = YEAR,
+#             N_DISCLOSURES_COORDS = sum(HAS_COORDS),
+#             N_DISCLOSURES_SIZE = sum(HAS_SIZE))
+
+
+
+year_summaries <- 
+  inner_join(
+    x = comp_panel %>% 
+        group_by(YEAR) %>% 
+        summarize(N_DISCLOSURES = length(unique(DISCLOSURE_SOURCE))), 
+    y = comp_panel %>% 
+        filter(!is.na(DISCL_LONGITUDE) & !is.na(DISCL_LATITUDE)) %>% 
+        group_by(YEAR) %>% 
+        summarize(N_DISCLOSURES_COORDS = length(unique(DISCLOSURE_SOURCE))), 
+    by = "YEAR"
+  ) %>% 
+  inner_join(
+    y = comp_panel %>% 
+        filter(!is.na(DISCL_NUMBER_FARMERS) | !is.na(DISCL_VOLUMES)) %>% 
+        group_by(YEAR) %>% 
+        summarize(N_DISCLOSURES_SIZE = length(unique(DISCLOSURE_SOURCE))), 
+    by = "YEAR"
+  )
+ 
+ggplot(data = year_summaries, 
+       aes(x = YEAR)) +
+  geom_histogram(binwidth = 0.5,
+                 aes(weight = N_DISCLOSURES), 
+                 fill = trase_palettes[["linear"]][4], 
+                 alpha = 0.6
+  ) +
+  geom_line(aes(y = N_DISCLOSURES_COORDS, col = trase_palettes[["grey"]][4]),
+            linewidth = 1.5) +
+  
+  geom_line(aes(y = N_DISCLOSURES_SIZE, col = trase_palettes[["green"]][4]),
+            linewidth = 1.5) +
+  
+  scale_color_manual(name = "Contain information on", 
+                     values = c(trase_palettes[["green"]][4], trase_palettes[["grey"]][4]), 
+                     labels = c("coordinates","size")) + 
+  
+  scale_y_continuous(
+    limits = c(0, max(year_summaries$N_DISCLOSURES)),
+    breaks = seq(0, max(year_summaries$N_DISCLOSURES), by = 5), 
+  ) + 
+  labs(x = "", y = "", 
+       title = "Number and content of cocoa company disclosures on their Ivorian supply chains"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 10
+    ))
+
+```
+
+## The spatial distribution of transparency
+```{r, fig.width = 15, fig.height = 5}
+# Map the share of cooperatives ever linked to a company, by district (using camcy)
+depts_2020 <- 
+  inner_join(
+    x = camcy20 %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS_2020 = length(unique(COOP_ID))), 
+    y = camcy20 %>% 
+        filter(DISCLOSURE_SOURCES != "") %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_LINKED_COOPS_2020 = length(unique(COOP_ID))), 
+    by = "DISTRICT_GEOCODE"
+  ) %>% 
+  mutate(PCT_LINKED_2020 = round(100*N_LINKED_COOPS_2020/N_COOPS_2020, 2)) %>% 
+  filter(!is.na(DISTRICT_GEOCODE))
+
+
+depts_ever <- 
+  left_join(
+    x = camcy %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS_EVER = length(unique(COOP_ID))), 
+    y = camcy %>% 
+        filter(DISCLOSURE_SOURCES != "") %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_LINKED_COOPS_EVER = length(unique(COOP_ID))), 
+    by = "DISTRICT_GEOCODE"
+  ) %>% 
+  mutate(PCT_LINKED_EVER = round(100*N_LINKED_COOPS_EVER/N_COOPS_EVER, 2)) %>% 
+  filter(!is.na(DISTRICT_GEOCODE)) %>% 
+  left_join(
+    y = depts_2020, by = "DISTRICT_GEOCODE"
+  ) %>% 
+  # Map the evolution of this share: the share that was linked in 2020 versus the share ever linked (remain in level for interpretability) 
+  mutate(CHANGE_PCT_LINKED = PCT_LINKED_EVER - PCT_LINKED_2020) %>% 
+  arrange(desc(PCT_LINKED_EVER)) %>% 
+  left_join(departements[,"LVL_4_CODE"], by = join_by(DISTRICT_GEOCODE == LVL_4_CODE)) %>% 
+  st_sf(crs = st_crs(departements))
+
+
+ggarrange(
+ggplot(depts_ever) +
+  geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+  geom_sf(aes(fill = N_COOPS_EVER), col = trase_map_border, linewidth = 0.01) + 
+  labs(fill =  "") +
+  scale_size_identity() +
+  scale_fill_continuous(low = trase_palettes[["green"]][1], 
+                        high = trase_palettes[["green"]][5]) +
+  labs(title = "Number of known cooperatives", fill = "") +
+  theme_minimal() +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  theme(plot.title.position = "panel", 
+        plot.title = element_text(
+      size = 15
+    )),
+
+ggplot(depts_ever) +
+  geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+  geom_sf(aes(fill = PCT_LINKED_EVER), col = trase_map_border) + 
+  labs(fill =  "") +
+  scale_size_identity() +
+  scale_fill_continuous(low = trase_palettes[["linear"]][1], 
+                        high = trase_palettes[["linear"]][5], 
+                        labels=unit_format(unit = "%", sep = "")) + 
+                       # breaks = c(10, 50, 100)) + 
+  labs(title = "Pct. ever disclosed in companies' supply chains", fill = "") +
+  theme_minimal() +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+   theme(plot.title.position = "panel", 
+          plot.title = element_text(
+        size = 15
+      )),
+
+# ggplot(depts_ever) +
+#   geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+#   geom_sf(aes(fill = CHANGE_PCT_LINKED), col = trase_map_border) + 
+#   labs(fill =  "") +
+#   scale_size_identity() +
+#   scale_fill_continuous(low = trase_palettes[["linear"]][1], 
+#                         high = trase_palettes[["linear"]][5], 
+#                         labels=unit_format(unit = "%", sep = "")) + 
+#                        # breaks = c(10, 50, 100)) + 
+#   labs(title = "Change in this pct., 2020-2023", fill = "") +
+#   theme_minimal() +
+#   scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+#   scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+#  theme(plot.title.position = "panel", 
+#         plot.title = element_text(
+#       size = 15
+#     )),
+
+common.legend = FALSE, nrow = 1, ncol = 2, legend = "right"
+) %>% 
+  annotate_figure(top = text_grob("The spatial distribution of transparency \n", face = "bold", size = 18))
+
+```
+
+
+# The state of sustainability initiatives in the Ivorian cocoa supply chains
+In this section, we can make the assumption that what companies disclose gives a complete picture of reality, because there is little (less) motivation for a company to conceal its sustainability initiatives. 
+
+## The different SSIs and their sizes
+```{r, fig.width = 12, fig.height = 5}
+# Plot the number of coops certified by certification program
+ssi_2023 <- 
+  camcy %>% 
+  mutate(CERT1 = str_split(CERTIFICATIONS, " [+] ")) %>% 
+  unnest(cols = c(CERT1)) %>%
+  filter(!is.na(CERT1) & CERT1 != "" & CERT1 != "NA" & CERT1 != "9999") %>% 
+  # filter out certification programs
+  # filter(!(CERT1 %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "UTZ"))) %>% 
+  
+  mutate(CERT1 = case_when(
+    # Don't group UTZ and RFA (if not removed)
+    # CERT1 == "UTZ" ~ "UTZ / RAINFOREST ALLIANCE",
+    # CERT1 == "RAINFOREST ALLIANCE" ~ "UTZ / RAINFOREST ALLIANCE",
+    CERT1 == "COCOA HORIZONS" ~ "COCOA HORIZONS (Barry Callebaut)",
+    CERT1 == "COCOA LIFE" ~ "COCOA LIFE (Mondelez)",
+    CERT1 == "COCOA PLAN" ~ "COCOA PLAN (Neslté)",
+    CERT1 == "SUSTAINABLE ORIGINS" ~ "SUSTAINABLE ORIGINS (Blommer)",
+    CERT1 == "CARGILL COCOA PROMISE" ~ "COCOA PROMISE (Cargill)",
+    CERT1 == "CACAO-TRACE" ~ "CACAO-TRACE (Puratos)",
+    CERT1 == "TRANSPARENCE CACAO" ~ "TRANSPARENCE CACAO (Cemoi)",
+    CERT1 == "COCOA FOR GOOD" ~ "COCOA FOR GOOD (Hershey)",
+
+    TRUE ~ CERT1
+  )) %>%
+  filter(YEAR == 2023) %>% # 2023 has info from the past, if a coop was not disclosed anymore, or most recent info 
+  summarise(NB_COOP = length(unique(COOP_ID)),
+            NB_FARMER = sum(TOTAL_FARMERS, na.rm = TRUE),
+            .by = c(CERT1)) 
+
+ssi_2023$CERT1 <- 
+  reorder(ssi_2023$CERT1, ssi_2023$NB_COOP, FUN = function(x) -mean(x))
+
+ssi_2023$CERT1 
+
+ggarrange(
+  ggplot() +
+    geom_col(data = ssi_2023, 
+             width = 0.9, 
+             aes(x = as.factor(CERT1), fill = CERT1, y = NB_COOP)) +
+    scale_fill_manual(name = "", values = as.vector(alphabet())) +
+    scale_x_discrete(labels = "", breaks = NULL) +
+    labs(title = "Number of cooperatives",
+      x = "", y = "") +
+    theme_minimal(),
+  
+  ggplot() +
+    geom_col(data = ssi_2023, 
+             width = 0.9, 
+             aes(x = as.factor(CERT1), fill = CERT1, y = NB_FARMER)) +
+    scale_fill_manual(name = "", values = as.vector(alphabet())) +
+    scale_x_discrete(labels = "", breaks = NULL) +
+    scale_y_continuous(labels = unit_format(scale = 0.001, unit = "")) + 
+    # geom_line(data = year_df1, aes(x = YEAR, y = Value), col = "black") +
+    labs(title = "Thousand of farmers",
+      x = "", y = "") +
+    # guides(fill = guide_legend(nrow = 1, label.theme = element_text(angle = 30), label.position = "bottom", direction = "horizontal", label.vjust = -1, keywidth = 0.1)) +
+  theme_minimal(),
+  common.legend = TRUE, nrow = 1, ncol = 2, legend = "bottom"
+) %>% 
+  annotate_figure(top = text_grob("Minimum coverages of sustainable cocoa sourcing initiatives, Ivory Coast 2023 (not showing overlaps) \n", face = "bold", size = 15)) 
+                  # fig.lab = "(not showing overlaps", fig.lab.pos = "top.left", fig.lab.size = 7)
+
+```
+
+
+## How much do SSIs and certification overlap? 
+
+```{r, message = FALSE, fig.width = 12, fig.height = 8}
+# Make categories of coops
+# helper function that distinguishes SSIs from certification programs
+fn_is_ssi <- function(x){
+  !grepl("FAIRTRADE|RAINFOREST ALLIANCE|UTZ|OTHER PROGRAMMES", x) & x != ""
+}
+
+unique(ssi_2023$CERT1)[fn_is_ssi(unique(ssi_2023$CERT1))]
+
+camcy23_ssidumm <- 
+ camcy %>% 
+  filter(YEAR == 2023) %>% 
+  mutate(CERT1 = str_split(CERTIFICATIONS, " [+] ")) %>% 
+  unnest(cols = c(CERT1)) %>%
+  group_by(COOP_ID) %>% 
+  summarize(ANY_CERT_PROG = any(grepl("FAIRTRADE|RAINFOREST|UTZ", CERT1)),
+             ANY_SSI = any(fn_is_ssi(CERT1)), 
+             N_DIST_SSI = length(unique(CERT1[fn_is_ssi(CERT1)])), 
+             SINGLE_SSI = N_DIST_SSI == 1,
+             SVL_SSI = N_DIST_SSI > 1
+    ) %>% 
+  mutate(NOTHING = !ANY_CERT_PROG & !ANY_SSI,
+         ONLY_CERT_PROG = ANY_CERT_PROG & !ANY_SSI,
+         ANY_CERT_1_SSI = ANY_CERT_PROG & SINGLE_SSI, 
+         ANY_CERT_SVL_SSI = ANY_CERT_PROG & SVL_SSI, 
+         ONLY_1_SSI = !ANY_CERT_PROG & SINGLE_SSI, 
+         ONLY_SVL_SSI = !ANY_CERT_PROG & SVL_SSI
+        ) 
+
+# data in adhoc format
+combinations_cert_ssi <- 
+  rbind(
+    count(camcy23_ssidumm, ONLY_CERT_PROG) %>% 
+      filter(ONLY_CERT_PROG) %>% mutate(ONLY_CERT_PROG = "Certification but no SSI") %>% rename(GROUP = ONLY_CERT_PROG),
+    count(camcy23_ssidumm, ANY_CERT_1_SSI) %>% 
+      filter(ANY_CERT_1_SSI) %>% mutate(ANY_CERT_1_SSI = "Certification & a single SSI") %>% rename(GROUP = ANY_CERT_1_SSI),
+    count(camcy23_ssidumm, ANY_CERT_SVL_SSI) %>% 
+      filter(ANY_CERT_SVL_SSI) %>% mutate(ANY_CERT_SVL_SSI = "Certification & several SSIS") %>% rename(GROUP = ANY_CERT_SVL_SSI),
+    count(camcy23_ssidumm, ONLY_1_SSI) %>% 
+      filter(ONLY_1_SSI) %>% mutate(ONLY_1_SSI = "No Certification & a single SSI") %>% rename(GROUP = ONLY_1_SSI),
+    count(camcy23_ssidumm, ONLY_SVL_SSI) %>% 
+      filter(ONLY_SVL_SSI) %>% mutate(ONLY_SVL_SSI = "No certification & several SSIs") %>% rename(GROUP = ONLY_SVL_SSI)
+  ) %>% 
+  # fix order of appearance
+  mutate(GROUP = as.factor(GROUP))
+
+# check mutual exclusivity
+# combinations_cert_ssi$n %>% sum() + sum(camcy23_ssidumm$NOTHING) == nrow(camcy23_ssidumm)
+
+combinations_cert_ssi$GROUP <- 
+  reorder(combinations_cert_ssi$GROUP, c(5,4,3,2,1)*-1)
+
+
+ggplot(data = combinations_cert_ssi, 
+         aes(x = "", y = n, fill = GROUP)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  geom_text(aes(label = n), size = 7,
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_manual(name = "", values = trase_palettes[["categorical"]]) +
+  labs(title = "Number of cooperatives by combinations of SSI and certification programs", subtitle = "Certification = Fairtrade or Rainforest Alliance/UTZ",
+        x = "", y = "") +
+  theme_void() +
+  theme(
+    legend.key.size = unit(1.5, "cm"),
+    legend.text = element_text(size = 15),
+    plot.title = element_text(
+      face = "bold",
+      size = 20
+    ))
+
+
+```
+
+```{r}
+# Most frequent combinations
+
+```
+
+
+## The spatial distribution of SSIs
+Given the relatively low number of cooperatives where several SSIs are implemented, we map SSI coverage irrespective of intensity (i.e., whether a cooperative has at least one SSI being implemented, irrespective of how many there may be). 
+
+```{r, fig.width = 10, fig.height = 8}
+# Map the share of cooperatives covered by SSIs and/or certification, by district. 
+# Make two categories: 1) certification; 2) SSI(s);
+
+# Before 31/10/2023, we were doing these categories (see github) 
+# Make three categories: 1) only certification; 2) certification and SSI(s); 3) only SSI(s)
+
+# merge back the cert and ssi dummies with camcy 2023
+camcy23 <- 
+  camcy %>% 
+  filter(YEAR == 2023) %>% 
+  left_join(camcy23_ssidumm, by = "COOP_ID")
+
+depts_23 <- 
+  left_join(
+    # the total number of coops by departement
+    x = camcy23 %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS = length(unique(COOP_ID))), 
+    # the number covered by some certification
+    y = camcy23 %>% 
+        filter(ANY_CERT_PROG) %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS_ANY_CERT = length(unique(COOP_ID))), 
+    by = "DISTRICT_GEOCODE"
+  ) %>% 
+  mutate(PCT_CERT = round(100*N_COOPS_ANY_CERT/N_COOPS, 2)) %>% 
+  
+  left_join(
+    y = camcy23 %>% 
+        filter(ANY_SSI) %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS_ANY_SSI = length(unique(COOP_ID))), 
+    by = "DISTRICT_GEOCODE"
+  ) %>% 
+  mutate(PCT_SSI = round(100*N_COOPS_ANY_SSI/N_COOPS, 2)) %>% 
+  
+   left_join(
+    y = camcy23 %>% 
+        filter(ONLY_CERT_PROG) %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS_ONLY_CERT = length(unique(COOP_ID))), 
+    by = "DISTRICT_GEOCODE"
+  ) %>% 
+  mutate(PCT_ONLY_CERT = round(100*N_COOPS_ONLY_CERT/N_COOPS, 2)) %>% 
+  
+    left_join(
+    y = camcy23 %>% 
+        filter(ONLY_1_SSI | ONLY_SVL_SSI) %>% 
+        group_by(DISTRICT_GEOCODE) %>% 
+        summarize(N_COOPS_ONLY_SSI = length(unique(COOP_ID))), 
+    by = "DISTRICT_GEOCODE"
+  ) %>% 
+  mutate(PCT_ONLY_SSI = round(100*N_COOPS_ONLY_SSI/N_COOPS, 2)) %>% 
+  
+  filter(!is.na(DISTRICT_GEOCODE)) %>% 
+  left_join(departements[,"LVL_4_CODE"], by = join_by(DISTRICT_GEOCODE == LVL_4_CODE)) %>% 
+  st_sf(crs = st_crs(departements))
+
+# sf::sf_use_s2(FALSE)
+
+ggarrange(
+# ggplot(depts_23) +
+#   geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+#   geom_sf(aes(fill = N_COOPS), col = trase_map_border, linewidth = 0.01) + 
+#   labs(fill =  "") +
+#   scale_size_identity() +
+#   scale_fill_continuous(low = trase_palettes[["green"]][1], 
+#                         high = trase_palettes[["green"]][5]) +
+#   labs(title = "Known cooperatives", fill = "") +
+#   theme_minimal() +
+#   scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+#   scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+#  theme(plot.title.position = "panel", 
+#         plot.title = element_text(
+#       size = 15
+#     )),
+
+ggplot(depts_23) +
+  geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+  geom_sf(aes(fill = N_COOPS_ANY_CERT), col = trase_map_border) + 
+  labs(fill =  "") +
+  scale_size_identity() +
+  scale_fill_continuous(low = trase_palettes[["linear"]][1], 
+                        high = trase_palettes[["linear"]][5] ) + 
+                        # labels=unit_format(unit = "%", sep = "")
+                       
+                       # breaks = c(10, 50, 100)) + 
+  labs(title = "Cooperatives under certification", fill = "") +
+  theme_minimal() +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+ theme(plot.title.position = "panel", 
+        plot.title = element_text(
+      size = 15
+    )),
+
+ggplot(depts_23) +
+  geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+  geom_sf(aes(fill = N_COOPS_ANY_SSI), col = trase_map_border) +
+  labs(fill =  "") +
+  scale_size_identity() +
+  scale_fill_continuous(low = trase_palettes[["linear"]][1],
+                        high = trase_palettes[["linear"]][5] ) +
+                       # breaks = c(10, 50, 100)) +
+  labs(title = "Cooperatives under SSI", fill = "") +
+  theme_minimal() +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+ theme(plot.title.position = "panel",
+        plot.title = element_text(
+      size = 15
+    )),
+
+ggplot(depts_23) +
+  geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+  geom_sf(aes(fill = N_COOPS_ONLY_CERT), col = trase_map_border) +
+  labs(fill =  "") +
+  scale_size_identity() +
+  scale_fill_continuous(low = trase_palettes[["linear"]][1],
+                        high = trase_palettes[["linear"]][5] ) +
+                       # breaks = c(10, 50, 100)) +
+  labs(title = "Cooperatives under certification only", fill = "") +
+  theme_minimal() +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+ theme(plot.title.position = "panel",
+        plot.title = element_text(
+      size = 15
+    )),
+
+ggplot(depts_23) +
+  geom_sf(data = st_geometry(departements), fill = trase_country_background, col = trase_map_border) +
+  geom_sf(aes(fill = N_COOPS_ONLY_SSI), col = trase_map_border) + 
+  labs(fill =  "") +
+  scale_size_identity() +
+  scale_fill_continuous(low = trase_palettes[["linear"]][1], 
+                        high = trase_palettes[["linear"]][5] ) + 
+                       # breaks = c(10, 50, 100)) + 
+  labs(title = "Cooperatives under SSI only", fill = "") +
+  theme_minimal() +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+ theme(plot.title.position = "panel", 
+        plot.title = element_text(
+      size = 15
+    )),
+
+
+common.legend = FALSE, nrow = 2, ncol = 2, legend = "right"
+
+) %>% 
+  annotate_figure(top = text_grob("The spatial distribution of sustainable cocoa sourcing inititatives, Ivory Coast 2023 \n", face = "bold", size = 15)) 
+  
+
+```
+
+
+
+
