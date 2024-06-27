@@ -1,0 +1,366 @@
+---
+title: "analyses_nitidae_private_IC2B"
+author: "Valentin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set up and inputs
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(aws.s3)
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
+
+library(tidyverse)
+library(sf)
+library(readxl)
+library(xlsx)
+library(stringr)
+library(DescTools)
+library(rnaturalearth)
+library(ggpubr)
+library(units)
+library(scales)
+library(kableExtra)
+library(here)
+library(pals)
+
+## Functions
+# Trase palettes etc. for plots
+source(here("code", "theme_trase.R"))
+
+# load in particular the function fn_trader_to_group_names, str_trans, ... 
+source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+
+## Assets
+camcy = read.csv(
+  file = here("temp_data/private_IC2B/IC2B_coop.csv"))
+# keep it named like this for consistency with earlier script version. 
+# Elsewhere, this object is called cam_long.  
+camlink = read.csv(
+  file = here("temp_data/private_IC2B/IC2B_link.csv"))
+
+departements <- s3read_using(
+  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson", 
+  bucket = "trase-storage",
+  FUN = read_sf,
+  #sheet = "Cacao", 
+  #skip = 3,
+  opts = c("check_region" = T)
+)
+
+# to plot coordinate axis labels in (with geom_sf) correctly 
+xlabs = seq(-8, -4, 2)
+ylabs = seq(5, 11, 2)
+```
+
+## Pre-processing
+```{r}
+
+# At LINK LEVEL
+camlink = 
+  camlink %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+
+# At COOP YEAR LEVEL
+camcy = 
+  camcy %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCES %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+```
+
+
+# Private IC2B descriptives 
+```{r}
+camcy22 <- 
+  camcy %>% 
+  filter(YEAR==2022)
+
+camlink22 <- 
+  camlink %>% 
+  filter(YEAR==2022) 
+
+# distinct coops identified
+nb_dst_coops_civ22 <- 
+  nrow(camcy22)
+
+# distinct disclosing companies 
+# camlink$DISCLOSURE_SOURCE %>% unique() 
+
+
+# coop-company links identified
+nb_coop_comp_links_civ22 <- 
+  camlink22 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  nrow()
+
+
+# distinct coops linked with a company
+nb_dst_linked_coops_civ22 <-
+  camlink22 %>% 
+  filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")) %>% 
+  select(COOP_ID) %>% 
+  unique() %>% 
+  nrow() 
+
+# Coops with info on number of farmers
+nb_dst_coops_farmers_civ22 <-
+  camlink22 %>% 
+  filter(!all(is.na(DISCL_NUMBER_FARMERS)), .by = COOP_ID) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() 
+# identical to: 
+camcy22 %>% 
+  filter(!is.na(TOTAL_FARMERS)) %>% 
+  nrow()
+# NO, not anymore, because this includes cooperatives for which there is info only from RFA or FT now. 
+
+# Number of coops with at least one SSI program disclosed
+nb_dst_coops_SSI_civ22 <-
+camlink22 %>% 
+  filter(HAS_SSI) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length() 
+
+# distinct coops disclosed by FAIRTRADE
+nb_dst_coops_fairtrade <-
+  camlink22 %>% 
+  filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% 
+  select(COOP_ID) %>% 
+  unique() %>% 
+  nrow() 
+
+
+# Store everything in a table 
+colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops with a SSI")
+rowna <- c("In 2022") 
+
+compar_tbl <- 
+  data.frame("A" = c(nb_dst_coops_civ22), 
+             "B" = c(nb_coop_comp_links_civ22),
+             "C" = c(nb_dst_linked_coops_civ22),
+             "D" = c(nb_dst_coops_farmers_civ22),
+             "E" = c(nb_dst_coops_SSI_civ22),
+             row.names = rowna)
+names(compar_tbl) <- colna
+# nb_dst_coops_fairtrade
+# compar_tbl
+
+```
+# Certification descriptives
+```{r}
+# The problem is that RFA does not disclose the number of certified farmers per coop (this is only available in CAM v3)
+# And FT does disclose it, but only for 2022 (supposedly). 
+
+# Total number of farmers 
+
+# Total minimum number of farmers supplying a coop in 2022 and 2023
+
+camcy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+camcy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% summary()
+camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% summary()
+
+camcy22 %>% filter(is.na(TOTAL_FARMERS)) %>% View()
+
+camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
+camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
+camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
+camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
+
+camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
+camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
+camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% summary()
+camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% summary()
+
+# camlink %>% filter(YEAR == 2022) %>% distinct(COOP_ID, .keep_all = T) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+
+# Number of farmers with at least one certification 
+## At least RFA
+camlink22 %>% filter(DISCLOSURE_SOURCE == "RAINFOREST ALLIANCE") %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+camcy22$TOTAL_FARMERS_RFA %>% sum(na.rm = T)
+
+## At least UTZ
+
+## At least FT
+
+camlink22 %>% filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+
+# They all supply a cooperative, i.e. the direct supply chain.  
+
+# Number of certified farmers, without overlaps
+
+
+
+# The minimum number of farmers (after extrapolation) supplying known cooperatives is  
+
+```
+
+
+## The different SSIs and their sizes
+```{r, fig.width = 12, fig.height = 5}
+# Plot the number of coops certified by certification program
+ssi_2023 <- 
+  camcy %>% 
+  mutate(CERT1 = str_split(CERTIFICATIONS, " [+] ")) %>% 
+  unnest(cols = c(CERT1)) %>%
+  filter(!is.na(CERT1) & CERT1 != "" & CERT1 != "NA" & CERT1 != "9999") %>% 
+  # filter out certification programs
+  # filter(!(CERT1 %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "UTZ"))) %>% 
+  
+  # mutate(CERT1 = case_when(
+  #   # Don't group UTZ and RFA (if not removed)
+  #   # CERT1 == "UTZ" ~ "UTZ / RAINFOREST ALLIANCE",
+  #   # CERT1 == "RAINFOREST ALLIANCE" ~ "UTZ / RAINFOREST ALLIANCE",
+  #   CERT1 == "COCOA HORIZONS" ~ "COCOA HORIZONS (Barry Callebaut)",
+  #   CERT1 == "COCOA LIFE" ~ "COCOA LIFE (Mondelez)",
+  #   CERT1 == "COCOA PLAN" ~ "COCOA PLAN (Neslté)",
+  #   CERT1 == "SUSTAINABLE ORIGINS" ~ "SUSTAINABLE ORIGINS (Blommer)",
+  #   CERT1 == "CARGILL COCOA PROMISE" ~ "COCOA PROMISE (Cargill)",
+  #   CERT1 == "CACAO-TRACE" ~ "CACAO-TRACE (Puratos)",
+  #   CERT1 == "TRANSPARENCE CACAO" ~ "TRANSPARENCE CACAO (Cemoi)",
+  #   CERT1 == "COCOA FOR GOOD" ~ "COCOA FOR GOOD (Hershey)",
+  # 
+  #   TRUE ~ CERT1
+  # )) %>%
+  filter(YEAR == 2023) %>% # 2023 has info from the past, if a coop was not disclosed anymore, or most recent info 
+  summarise(NB_COOP = length(unique(COOP_ID)),
+            NB_FARMER = sum(TOTAL_FARMERS, na.rm = TRUE),
+            .by = c(CERT1)) 
+
+ssi_2023$CERT1 <- 
+  reorder(ssi_2023$CERT1, ssi_2023$NB_COOP, FUN = function(x) -mean(x))
+
+ssi_2023$CERT1 
+
+ggarrange(
+  ggplot() +
+    geom_col(data = ssi_2023, 
+             width = 0.9, 
+             aes(x = as.factor(CERT1), fill = CERT1, y = NB_COOP)) +
+    scale_fill_manual(name = "", values = as.vector(alphabet())) +
+    scale_x_discrete(labels = "", breaks = NULL) +
+    labs(title = "Number of cooperatives",
+      x = "", y = "") +
+    theme_minimal(),
+  
+  ggplot() +
+    geom_col(data = ssi_2023, 
+             width = 0.9, 
+             aes(x = as.factor(CERT1), fill = CERT1, y = NB_FARMER)) +
+    scale_fill_manual(name = "", values = as.vector(alphabet())) +
+    scale_x_discrete(labels = "", breaks = NULL) +
+    scale_y_continuous(labels = unit_format(scale = 0.001, unit = "")) + 
+    # geom_line(data = year_df1, aes(x = YEAR, y = Value), col = "black") +
+    labs(title = "Thousand of farmers",
+      x = "", y = "") +
+    # guides(fill = guide_legend(nrow = 1, label.theme = element_text(angle = 30), label.position = "bottom", direction = "horizontal", label.vjust = -1, keywidth = 0.1)) +
+  theme_minimal(),
+  common.legend = TRUE, nrow = 1, ncol = 2, legend = "bottom"
+) %>% 
+  annotate_figure(top = text_grob("Minimum coverages of sustainable cocoa sourcing initiatives, Ivory Coast 2023 (not showing overlaps) \n", face = "bold", size = 15)) 
+                  # fig.lab = "(not showing overlaps", fig.lab.pos = "top.left", fig.lab.size = 7)
+
+```
+
+
+## How much do SSIs and certification overlap? 
+
+```{r, message = FALSE, fig.width = 12, fig.height = 8}
+# Make categories of coops
+# helper function that distinguishes SSIs from certification programs
+fn_is_ssi <- function(x){
+  !grepl("FAIRTRADE|RAINFOREST ALLIANCE|UTZ|OTHER PROGRAMMES OR CERTIFICATIONS", x) & x != ""
+}
+
+fn_is_certif <- function(x){
+  grepl("FAIRTRADE|RAINFOREST ALLIANCE|UTZ|", x) 
+}
+
+
+unique(ssi_2023$CERT1)[fn_is_ssi(unique(ssi_2023$CERT1))]
+
+camcy23_ssidumm <- 
+ camcy %>% 
+  filter(YEAR == 2023) %>% 
+  mutate(CERT1 = str_split(CERTIFICATIONS, " [+] ")) %>% 
+  unnest(cols = c(CERT1)) %>%
+  group_by(COOP_ID) %>% 
+  summarize(ANY_CERT_PROG = any(grepl("FAIRTRADE|RAINFOREST|UTZ", CERT1)),
+             ANY_SSI = any(fn_is_ssi(CERT1)), 
+             N_DIST_SSI = length(unique(CERT1[fn_is_ssi(CERT1)])), 
+             SINGLE_SSI = N_DIST_SSI == 1,
+             SVL_SSI = N_DIST_SSI > 1
+    ) %>% 
+  mutate(NOTHING = !ANY_CERT_PROG & !ANY_SSI,
+         ONLY_CERT_PROG = ANY_CERT_PROG & !ANY_SSI,
+         ANY_CERT_1_SSI = ANY_CERT_PROG & SINGLE_SSI, 
+         ANY_CERT_SVL_SSI = ANY_CERT_PROG & SVL_SSI, 
+         ONLY_1_SSI = !ANY_CERT_PROG & SINGLE_SSI, 
+         ONLY_SVL_SSI = !ANY_CERT_PROG & SVL_SSI
+        ) 
+
+# data in adhoc format
+combinations_cert_ssi <- 
+  rbind(
+    count(camcy23_ssidumm, ONLY_CERT_PROG) %>% 
+      filter(ONLY_CERT_PROG) %>% mutate(ONLY_CERT_PROG = "Certification but no SSI") %>% rename(GROUP = ONLY_CERT_PROG),
+    count(camcy23_ssidumm, ANY_CERT_1_SSI) %>% 
+      filter(ANY_CERT_1_SSI) %>% mutate(ANY_CERT_1_SSI = "Certification & a single SSI") %>% rename(GROUP = ANY_CERT_1_SSI),
+    count(camcy23_ssidumm, ANY_CERT_SVL_SSI) %>% 
+      filter(ANY_CERT_SVL_SSI) %>% mutate(ANY_CERT_SVL_SSI = "Certification & several SSIS") %>% rename(GROUP = ANY_CERT_SVL_SSI),
+    count(camcy23_ssidumm, ONLY_1_SSI) %>% 
+      filter(ONLY_1_SSI) %>% mutate(ONLY_1_SSI = "No Certification & a single SSI") %>% rename(GROUP = ONLY_1_SSI),
+    count(camcy23_ssidumm, ONLY_SVL_SSI) %>% 
+      filter(ONLY_SVL_SSI) %>% mutate(ONLY_SVL_SSI = "No certification & several SSIs") %>% rename(GROUP = ONLY_SVL_SSI)
+  ) %>% 
+  # fix order of appearance
+  mutate(GROUP = as.factor(GROUP))
+
+# check mutual exclusivity
+# combinations_cert_ssi$n %>% sum() + sum(camcy23_ssidumm$NOTHING) == nrow(camcy23_ssidumm)
+
+combinations_cert_ssi$GROUP <- 
+  reorder(combinations_cert_ssi$GROUP, c(5,4,3,2,1)*-1)
+
+
+ggplot(data = combinations_cert_ssi, 
+         aes(x = "", y = n, fill = GROUP)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) +
+  geom_text(aes(label = n), size = 7,
+            position = position_stack(vjust = 0.5)) +
+  coord_polar(theta = "y") +
+  scale_fill_manual(name = "", values = trase_palettes[["categorical"]]) +
+  labs(title = "Number of cooperatives by combinations of SSI and certification programs", subtitle = "Certification = Fairtrade or Rainforest Alliance/UTZ",
+        x = "", y = "") +
+  theme_void() +
+  theme(
+    legend.key.size = unit(1.5, "cm"),
+    legend.text = element_text(size = 15),
+    plot.title = element_text(
+      face = "bold",
+      size = 20
+    ))
+
+
+```
+
+```{r}
+# Most frequent combinations
+
+```
+
+

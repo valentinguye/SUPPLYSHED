@@ -42,17 +42,6 @@ camcy = read.csv(
 camlink = read.csv(
   file = here("temp_data/private_IC2B/IC2B_link.csv"))
 
-camlink = 
-  camlink %>% 
-  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"))
-
-camcy20 <- 
-  camcy %>% 
-  filter(YEAR==2020)
-
-camlink20 <- 
-  camlink %>% 
-  filter(YEAR==2020) 
 
 departements <- s3read_using(
   object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson", 
@@ -68,6 +57,30 @@ xlabs = seq(-8, -4, 2)
 ylabs = seq(5, 11, 2)
 ```
 
+
+## Pre-processing
+```{r}
+
+# At LINK LEVEL
+camlink = 
+  camlink %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+
+# At COOP YEAR LEVEL
+camcy = 
+  camcy %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCES %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+```
 
 # How does CAM V4 compare to previous CAM? 
 
@@ -176,7 +189,13 @@ nb_dst_coops_certi_cam <-
 ```
 
 ```{r same stats but from latest CAM, include = FALSE} 
+camcy20 <- 
+  camcy %>% 
+  filter(YEAR==2020)
 
+camlink20 <- 
+  camlink %>% 
+  filter(YEAR==2020) 
 
 
 # V3 coop identification method, but in latest CAM
@@ -246,18 +265,14 @@ nb_dst_coops_farmers_civ20_altid <-
 # Number of coops with at least one certification program disclosed
 nb_dst_coops_certi_civ20 <-
 camlink20 %>% 
-  filter(CERTIFIED) %>% 
+  filter(CERTIFIED_OR_SSI) %>% 
   pull(COOP_ID) %>% 
   unique() %>% 
   length() 
-# This yields slightly different number - investigate why one day...
-# nb_dst_coops_certi_civ20 <-
-#   camcy20$CERTIFIED %>% 
-#   sum()
 
 nb_dst_coops_certi_civ20_altid <-
   camlink20 %>% 
-  filter(CERTIFIED) %>% 
+  filter(CERTIFIED_OR_SSI) %>% 
   pull(ALT_COOP_ID) %>% 
   unique() %>% 
   length() 
@@ -357,7 +372,7 @@ compar_tbl_bycomp %>%
 
 ```
 
-# Number of coops and links in 2022 
+# Private IC2B descriptives 
 ```{r}
 camcy22 <- 
   camcy %>% 
@@ -372,14 +387,8 @@ nb_dst_coops_civ22 <-
   nrow(camcy22)
 
 # distinct disclosing companies 
-camlink$DISCLOSURE_SOURCE %>% unique() 
-  
+# camlink$DISCLOSURE_SOURCE %>% unique() 
 
-# with a district info
-nb_dst_geocoops_civ22 <- 
-  camlink22 %>% 
-  filter(!(is.na(DISTRICT_GEOCODE))) %>% 
-  nrow()
 
 # coop-company links identified
 nb_coop_comp_links_civ22 <- 
@@ -396,7 +405,6 @@ nb_dst_linked_coops_civ22 <-
   unique() %>% 
   nrow() 
 
-
 # Coops with info on number of farmers
 nb_dst_coops_farmers_civ22 <-
   camlink22 %>% 
@@ -408,19 +416,15 @@ nb_dst_coops_farmers_civ22 <-
 camcy22 %>% 
   filter(!is.na(TOTAL_FARMERS)) %>% 
   nrow()
-# NO, not anymore, because this includes cooperatives for which there is info only from RFA now. 
+# NO, not anymore, because this includes cooperatives for which there is info only from RFA or FT now. 
 
 # Number of coops with at least one SSI program disclosed
 nb_dst_coops_SSI_civ22 <-
 camlink22 %>% 
-  filter(CERTIFIED) %>% 
+  filter(HAS_SSI) %>% 
   pull(COOP_ID) %>% 
   unique() %>% 
   length() 
-# This yields slightly different number - investigate why one day...
-nb_dst_coops_certi_civ22 <-
-  camcy22$CERTIFIED %>%
-  sum()
 
 # distinct coops disclosed by FAIRTRADE
 nb_dst_coops_fairtrade <-
@@ -432,7 +436,7 @@ nb_dst_coops_fairtrade <-
 
 
 # Store everything in a table 
-colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops with some certification")
+colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops with a SSI")
 rowna <- c("In 2022") 
 
 compar_tbl <- 
@@ -440,12 +444,13 @@ compar_tbl <-
              "B" = c(nb_coop_comp_links_civ22),
              "C" = c(nb_dst_linked_coops_civ22),
              "D" = c(nb_dst_coops_farmers_civ22),
-             "E" = c(nb_dst_coops_certi_civ22),
+             "E" = c(nb_dst_coops_SSI_civ22),
              row.names = rowna)
-
-nb_dst_coops_fairtrade
+names(compar_tbl) <- colna
 compar_tbl
+
 ```
+
 
 
 
@@ -517,7 +522,7 @@ ggarrange(
       scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
       geom_line(linewidth = 1) +
       geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
-      labs(title = "Number of disclosed cooperatives",
+      labs(title = "# disclosed cooperatives",
       x = "",
       y = "", 
       size = "Made a disclosure this year") +
@@ -528,7 +533,7 @@ ggarrange(
     scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
     geom_line(linewidth = 1) +
     geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
-    labs(title = "Number of disclosed farmers",
+    labs(title = "# disclosed farmers",
     x = "",
     y = "", 
     size = "Made a disclosure this year") +
@@ -539,7 +544,7 @@ ggarrange(
     scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
     geom_line(linewidth = 1) +
     geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
-    labs(title = "Extrapolated number of farmers",
+    labs(title = "# farmers, disclosed or extrapolated",
     x = "",
     y = "", 
     size = "Made a disclosure this year") +
@@ -550,7 +555,7 @@ ggarrange(
     scale_color_manual(name = "Traders", values = rev(trase_palettes[["categorical"]])) +
     geom_line(linewidth = 1) +
     geom_point(data = df_plot_trdr, aes(size = !REPEATED_FROM_PAST_YEAR)) +
-    labs(title = "Extrapolated number of farmers in geolocalized cooperative",
+    labs(title = "# farmers, disclosed or extrapolated, in geolocalized cooperative",
     x = "",
     y = "", 
     size = "Made a disclosure this year") +
@@ -1292,21 +1297,21 @@ ssi_2023 <-
   # filter out certification programs
   # filter(!(CERT1 %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "UTZ"))) %>% 
   
-  mutate(CERT1 = case_when(
-    # Don't group UTZ and RFA (if not removed)
-    # CERT1 == "UTZ" ~ "UTZ / RAINFOREST ALLIANCE",
-    # CERT1 == "RAINFOREST ALLIANCE" ~ "UTZ / RAINFOREST ALLIANCE",
-    CERT1 == "COCOA HORIZONS" ~ "COCOA HORIZONS (Barry Callebaut)",
-    CERT1 == "COCOA LIFE" ~ "COCOA LIFE (Mondelez)",
-    CERT1 == "COCOA PLAN" ~ "COCOA PLAN (Neslté)",
-    CERT1 == "SUSTAINABLE ORIGINS" ~ "SUSTAINABLE ORIGINS (Blommer)",
-    CERT1 == "CARGILL COCOA PROMISE" ~ "COCOA PROMISE (Cargill)",
-    CERT1 == "CACAO-TRACE" ~ "CACAO-TRACE (Puratos)",
-    CERT1 == "TRANSPARENCE CACAO" ~ "TRANSPARENCE CACAO (Cemoi)",
-    CERT1 == "COCOA FOR GOOD" ~ "COCOA FOR GOOD (Hershey)",
-
-    TRUE ~ CERT1
-  )) %>%
+  # mutate(CERT1 = case_when(
+  #   # Don't group UTZ and RFA (if not removed)
+  #   # CERT1 == "UTZ" ~ "UTZ / RAINFOREST ALLIANCE",
+  #   # CERT1 == "RAINFOREST ALLIANCE" ~ "UTZ / RAINFOREST ALLIANCE",
+  #   CERT1 == "COCOA HORIZONS" ~ "COCOA HORIZONS (Barry Callebaut)",
+  #   CERT1 == "COCOA LIFE" ~ "COCOA LIFE (Mondelez)",
+  #   CERT1 == "COCOA PLAN" ~ "COCOA PLAN (Neslté)",
+  #   CERT1 == "SUSTAINABLE ORIGINS" ~ "SUSTAINABLE ORIGINS (Blommer)",
+  #   CERT1 == "CARGILL COCOA PROMISE" ~ "COCOA PROMISE (Cargill)",
+  #   CERT1 == "CACAO-TRACE" ~ "CACAO-TRACE (Puratos)",
+  #   CERT1 == "TRANSPARENCE CACAO" ~ "TRANSPARENCE CACAO (Cemoi)",
+  #   CERT1 == "COCOA FOR GOOD" ~ "COCOA FOR GOOD (Hershey)",
+  # 
+  #   TRUE ~ CERT1
+  # )) %>%
   filter(YEAR == 2023) %>% # 2023 has info from the past, if a coop was not disclosed anymore, or most recent info 
   summarise(NB_COOP = length(unique(COOP_ID)),
             NB_FARMER = sum(TOTAL_FARMERS, na.rm = TRUE),
@@ -1354,7 +1359,7 @@ ggarrange(
 # Make categories of coops
 # helper function that distinguishes SSIs from certification programs
 fn_is_ssi <- function(x){
-  !grepl("FAIRTRADE|RAINFOREST ALLIANCE|UTZ|OTHER PROGRAMMES", x) & x != ""
+  !grepl("FAIRTRADE|RAINFOREST ALLIANCE|UTZ|OTHER PROGRAMMES OR CERTIFICATIONS", x) & x != ""
 }
 
 unique(ssi_2023$CERT1)[fn_is_ssi(unique(ssi_2023$CERT1))]

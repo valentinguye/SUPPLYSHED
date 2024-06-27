@@ -1152,590 +1152,6 @@ civ <- select(civ, -missing_full, -missing_coords, -missing_abrv,
 # civ %>% filter(grepl("ECSP", SUPPLIER_ABRVNAME, ignore.case = T)) %>% View()
 
 
-
-# CLEAN CERTIFICATION -------------------------
-# temp_fun <- function(s){s[!grepl(pattern = "_CO1", s)] %>% sort()}
-# unique(civ$DISCL_CERTIFICATION_NAME)
-
-# check_if_utz <- function(x){grepl("UTZ", x) & !grepl("DECERTIFIED", x)}
-# check_if_ra <- function(x){grepl("RAINFOREST ALLIANCE|RFA|; RA|RA;", x) & !grepl("NOT GRANTED|SUSPEND", x)}
-# check_if_ft <- function(x){grepl("FAIRTRIDE|FAIRTRADE|FAITRIDE|FAIR TRADE", x) & !grepl("SUSPENDED", x)}
-# check_if_cocoalife <- function(x){grepl("COCOALIF|COCOA LIF|CACAOLIF|CACAO LIF", x)}
-
-civ_save <- civ
-
-# Make separate columns for the certification types
-civ <-
-  civ %>%
-  mutate(
-    CERT_LIST = str_squish(str_trans(DISCL_CERTIFICATION_NAME)),
-    
-    # add "," where only a space separates distinct certifications
-    CERT_LIST = gsub(pattern = "HORIZONS FAIRTR", "HORIZONS, FAIRTR", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "HORIZONS RAINFO", "HORIZONS, RAINFO", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "HORIZONS FERMIC", "HORIZONS, FERMIC", x = CERT_LIST),
-    
-    CERT_LIST = gsub(pattern = "LIFE FAIRTR", "LIFE, FAIRTR", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "LIFE RAINFO", "LIFE, RAINFO", x = CERT_LIST),
-    
-    CERT_LIST = gsub(pattern = "UTZ FAIRTR", "UTZ, FAIRTR", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "UTZ RAINFO", "UTZ, RAINFO", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "UTZ COCOA LIFE", "UTZ, COCOA LIFE", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "UTZ FERMICOA", "UTZ, FERMICOA", x = CERT_LIST),
-    
-    CERT_LIST = gsub(pattern = "FAIRTRADE UTZ", "FAIRTRADE, UTZ", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "FAIRTRADE RAINFO", "FAIRTRADE, RAINFO", x = CERT_LIST),
-    
-    CERT_LIST = gsub(pattern = "ALLIANCE UTZ", "ALLIANCE, UTZ", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "ALLIANCE FAIRTR", "ALLIANCE, FAIRTR", x = CERT_LIST),
-    
-    CERT_LIST = gsub(pattern = "COCOA HORIZONS COCOA LIFE", "COCOA HORIZONS, COCOA LIFE", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "COCOA HORIZONS UTZ", "COCOA HORIZONS, UTZ", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "COCOA HORIZONS UTZ FERMICOA COCOA LIFE", "COCOA HORIZON, UTZ, FERMICOA, COCOA LIFE", x = CERT_LIST),
-    CERT_LIST = gsub(pattern = "FERMICOA COCOA LIFE", "FERMICOA, COCOA LIFE", x = CERT_LIST),
-    
-    CERT_LIST = gsub(pattern = "RAAGRICULTURE BIOLOGIQUE", "RAINFOREST ALLIANCE, AGRICULTURE BIOLOGIQUE", x = CERT_LIST),
-    
-    CERT_LIST = str_split(CERT_LIST, pattern = ";|,|\\/|\\&|-| AND | OR | ET "),
-    CERT_LIST = map(CERT_LIST, str_squish),
-    CERT_LIST = map(CERT_LIST, ~ gsub("UTZ_.*", "UTZ", .x)) # handles the many "UTZ_CO1000009236" style instances
-  ) 
-
-unique(unlist(civ$CERT_LIST)) %>% sort()
-
-# this function should take as input a character vector of length > 1. 
-fn_standard_certification_names <- function(x) {
-  y <- x
-  if(grepl("RAINFOREST ALLIANCE|RFA|OLD-RA|NEW-RA|^RA$", x) & !grepl("NOT GRANTED|SUSPEND", x)){
-    y <- "RAINFOREST ALLIANCE"
-  } 
-  if(grepl("FAIRTRADE|FAIR TRADE|FAITRADE|FAIRTRIDE|FAITRIDE|FT USA|^FT$", x) & !grepl("SUSPENDED", x)){
-    y <- "FAIRTRADE"
-  }
-  if(grepl("UTZ|UTS", x) & !grepl("DECERTIFIED", x)){
-    y <- "UTZ"
-  } 
-  if(grepl("COCOA PROMISE|^CCP$|CARGILL", x)){
-    y <- "COCOA HORIZONS"
-  }
-  if(grepl("HORIZON", x)){
-    y <- "COCOA HORIZONS"
-  }
-  if(grepl("COCOA PLAN", x)){
-    y <- "COCOA HORIZONS"
-  }
-  if(grepl("COCOALIF|COCOA LIF|CACAOLIF|CACAO LIF|COCO LIF", x)){
-    y <- "COCOA LIFE"
-  }
-  if(grepl("SUCDEN|FUCHS", x)){
-    y <- "SUCDEN PROGRAMMES"
-  }
-  if(grepl("FAIR FOR LIFE", x)){
-    y <- "FAIR FOR LIFE"
-  }
-  if(grepl("^TRACE$|CACAO TRACE|CACAOTRACE|CACAO-TRACE", x)){
-    y <- "CACAO-TRACE"
-  }
-  if(grepl("BIOLOGIQUE|^BIO$|^AB$", x)){
-    y <- "AGRICULTURE BIOLOGIQUE"
-  }
-  if(grepl("4C|4 C|^ASA$|PROGRAMME DE L'UNION ECOOKIM|^AVEC$|^CACAO$|CACAO AMI DES FORETS|CAIR INTERNATIONAL|^CARE$|CE 834|CIV [(]GIZ[)]|COCOA PRACTICISE|COH SACO|EQUITE 2|NOVATION VERTE|^CLMRS$|^CMS$|^COCOA ACTION$|COCOACTION|^COH$|COOPACADEMY2|GROUPEMENT|ICRAFT|^ICS$|^INO$|^N0$|^OILP$|SASSANDRA|CHILD LABOUR|PILOT|^ECOCERT$|IMPACTUM|CHILDREN|AGROFORESTRY|AGROMAP|ASCA|^GAL$|^GIZ$|^ICI$|^LANTEUR$|^MICRO$|^MOCA$|^NEW$|^NA$|^NEANT$|^OLD$|^PP$|PRODUCTIVITY PACKAGE|^PRO$|^PROPLANTEUR$|^RCCP$|^STB$|COACHING|SOLIDARIDAD|RESPONSIBLY SOURCED COCOA|^SOCIAL$|^STARBUCK$", x)){
-    y <- "OTHER PROGRAMMES"
-  }
-  if(grepl("DECERTIFIED", x)){y <- "9999"}
-  if(grepl("NOT GRANTED", x)){y <- "9999"}
-  if(grepl("SUSPEND", x)){y <- "9999"}
-  if(grepl("NOT CERTIFIED", x)){y <- "9999"}
-  if(grepl("SUPPLIER STANDARD", x)){y <- "9999"}
-  if(grepl("2007", x)){y <- "9999"}
-  if(grepl("NOP )", x)){y <- "9999"}
-  if(!is.na(x) & nchar(x)==0){y <- "9999"}
-  # if(is.na(x)){y <- NULL}
-  
-  return(y)
-}
-# civ %>% filter(grepl("2007", DISCL_CERTIFICATION_NAME)) %>% View()
-# civ %>% filter(grepl("NOP )", DISCL_CERTIFICATION_NAME, ignore.case = T)) %>% View()
-# civ %>% filter(grepl("trace", DISCL_CERTIFICATION_NAME, ignore.case = T)) %>% View()
-civ <- 
-  civ %>% 
-  mutate(CERT_LIST = map(CERT_LIST, ~modify(.x, fn_standard_certification_names)))
-
-unique(unlist(civ$CERT_LIST)) %>% sort()
-
-# Note: certification is (already) at the link level, i.e. specific to the value in every row in the COMPANY column. 
-# Indeed, this was inputed as such in disclosure scraping, and this seems to be the case in the CAM as well. 
-
-# The right way to do it is to clean certification from CAM, (and to have it in a separate column in the first place)
-# because for other sources than the CAM, certif information has already been inputed per link. 
-# left_join(civ, 
-#           civ %>% 
-#             filter(grepl(";", DISCL_CERTIFICATION_NAME)) %>% 
-#             summarise(n_sets_certif = length(unique(unlist(CERT_LIST))), 
-#                       .by = COOP_ID), 
-#           by = "COOP_ID") %>% 
-#   arrange(COOP_ID) %>%
-#   select(COOP_ID, n_sets_certif, everything()) %>% View()
-
-
-# BINARIZE
-civ <- 
-  civ %>% 
-  mutate(
-    CERT_UTZ = map_lgl(CERT_LIST, ~ any(grepl("UTZ", .x))),
-    CERT_RAINFOREST_ALLIANCE = map_lgl(CERT_LIST, ~ any(grepl("RAINFOREST ALLIANCE", .x))),
-    CERT_FAIRTRADE = map_lgl(CERT_LIST, ~ any(grepl("FAIRTRADE", .x))),
-    CERT_OLAM = map_lgl(CERT_LIST, ~ any(grepl("OLAM PROGRAMMES", .x))),
-    CERT_BARRY_CALLEBAUT = map_lgl(CERT_LIST, ~ any(grepl("COCOA HORIZONS", .x))),
-    CERT_CARGILL = map_lgl(CERT_LIST, ~ any(grepl("CARGILL COCOA PROMISE", .x))),
-    CERT_CEMOI = map_lgl(CERT_LIST, ~ any(grepl("TRANSPARENCE CACAO", .x))),
-    CERT_HERSHEY = map_lgl(CERT_LIST, ~ any(grepl("COCOA FOR GOOD", .x))),
-    CERT_MARS = map_lgl(CERT_LIST, ~ any(grepl("RESPONSIBLY SOURCED COCOA", .x))),
-    CERT_MONDELEZ = map_lgl(CERT_LIST, ~ any(grepl("COCOA LIFE", .x))),
-    CERT_FAIR_FOR_LIFE = map_lgl(CERT_LIST, ~ any(grepl("FAIR FOR LIFE", .x))),
-    CERT_OLAM = map_lgl(CERT_LIST, ~ any(grepl("SUSTAINABLE ORIGINS", .x))),
-    CERT_NESTLE = map_lgl(CERT_LIST, ~ any(grepl("COCOA PLAN", .x))),
-    CERT_FERMICOA = map_lgl(CERT_LIST, ~ any(grepl("FERMICOA", .x))),
-    CERT_PURATOS = map_lgl(CERT_LIST, ~ any(grepl("CACAO-TRACE", .x))),
-    
-    
-    CERTIFIED = ifelse(CERT_UTZ |
-                         CERT_RAINFOREST_ALLIANCE |
-                         CERT_FAIRTRADE |
-                         CERT_BARRY_CALLEBAUT |
-                         CERT_CARGILL |
-                         CERT_CEMOI |
-                         CERT_FAIR_FOR_LIFE |
-                         CERT_FERMICOA |
-                         CERT_HERSHEY |
-                         CERT_MONDELEZ |
-                         CERT_NESTLE |
-                         CERT_OLAM |
-                         CERT_PURATOS, T, F)
-  )
-
-# NUMBER FARMERS -------------------------
-
-#### Extract CAM info (incl. from RFA) ----------------------------
-# First step is to extract information from the CAM, stored in CAM_BUYERS column. 
-
-# Convert CAM to long format based on coop size, one row per disclosed coop size
-# (The difference with what is done in CAM_to_traders_volumes_FOB_capped_2019_CLEAN.Rmd 
-# ... is that we keep all rows, we do not remove rows with missing farm size info)
-
-civ <- 
-  civ %>% 
-  mutate(COOP_SIZE = str_split(CAM_BUYERS, pattern = ";"),
-         COOP_SIZE = map(COOP_SIZE, str_squish)) %>%
-  unnest(cols = c(COOP_SIZE)) %>%
-  # drop_na(COOP_SIZE) %>%
-  mutate(
-    DISCL_NUMBER_FARMERS = case_when(
-      !is.na(COOP_SIZE) ~ as.double(gsub(" \\(.*", "", COOP_SIZE)),
-      TRUE ~ DISCL_NUMBER_FARMERS), 
-    BUYER = gsub(".*\\(", "", COOP_SIZE),
-    BUYER = str_squish(gsub("\\)","", BUYER)),
-    BUYER = gsub("BC", "BARRY CALLEBAUT", BUYER),
-    BUYER = gsub("RA", "RAINFOREST ALLIANCE", BUYER),
-    BUYER = gsub("CARGILL UTZ", "CARGILL", BUYER)
-  ) %>% select(-COOP_SIZE)
-# This spuriously attributed a number of farmers to some company-coop links (i.e. rows): Remove them
-
-civ0 <- civ # (store for later check)
-
-# A note on info from the CAM on the number of farmers and their buyers. 
-# The BUYER variables is the company disclosing (according to the CAM) to buy to the corresponding number of farmers in DISCL_NUMBER_FARMERS
-# Buyers can be
-# - exporters (here Cargill, BC, Touton), 
-# - manufacturers (Blommer, Mars, Tony's)
-# - Rainforest alliance. 
-
-# RAINFOREST ALLIANCE disclosures of number of farmers: 
-# The problem with RFA is that several companies may disclose having a link with a coop, 
-# but not the size of these links, and we only know the number of RFA farmers, 
-# such that it's spurious to attribute this size to every company's link with this coop. 
-# Rather, we want to have companies' link sizes missing, and an extra row that representing the 
-# link between the coop and RFA. 
-
-# Separately store coop-level numbers of farmers disclosed by Rainforest Alliance as per the CAM 
-# this does not include other RFA disclosures added in addition to the CAM. 
-# Don't keep duplicates (there when several companies are linked to a coop that has RFA farmers info in the CAM)
-# The first row taken by distinct() is one of these companies, arbitrarily. Switch it to RFA.  
-temp_rfa <- 
-  civ %>% 
-  filter(BUYER == "RAINFOREST ALLIANCE") %>% 
-  distinct(COOP_ID, DISCL_NUMBER_FARMERS, 
-           .keep_all = TRUE) %>% 
-  mutate(COMPANY = "RAINFOREST ALLIANCE", 
-         # and turn down the trader name variable, not to count this flow twice (same rational as in CLEAN TRADER NAME section above)
-         TRADER_NAME = case_when(
-           TRADER_NAME %in% c(civ$COMPANY, non_disclosing_companies) ~ NA, 
-           TRUE ~ TRADER_NAME
-         )
-  ) 
-
-# In the main data, switch the spurious RFA number of farmers to NA, 
-# (but keep the rows, as they inform on the link with companies)
-# and stack the RFA info
-civ <- 
-  civ %>% 
-  mutate(DISCL_NUMBER_FARMERS = case_when(
-    BUYER == "RAINFOREST ALLIANCE" ~ NA, 
-    TRUE ~ DISCL_NUMBER_FARMERS
-  )) %>% 
-  rbind(temp_rfa)
-rm(temp_rfa)
-
-
-# Now for non-RFA buyers: 
-# Spot company-coop links (rows) for which farmer info is disclosed in CAM, but not by this company
-# Store them separately, switch their farmers to NA, and keep only one non-duplicate (but there are no duplicates anyway)
-
-# In the main data, among rows with some CAM_BUYERS info, remove rows where there is no info on the number of farmers sourced from by this company. 
-# Stack back the separately stored data from above. 
-
-temp_spur <- 
-  civ %>% 
-  group_by(COOP_ID, DISCL_YEAR) %>%
-  mutate(
-    buyerz = list(BUYER),
-    buyerz = map(buyerz, unique)) %>% 
-  ungroup() %>% 
-  filter(
-    !is.na(CAM_BUYERS) & !(COMPANY %in% buyerz), 
-  ) %>% 
-  # In order not to lose the information from the CAM V3 about connections between traders and manufacturers, 
-  # we store in the trader name variable: either the name of the disclosing company, if it's not identified as a non-trading company (see above), 
-  # or the name of the buying company, if it's not identified as non-trading company... 
-  # NOPE, because actually the CAM V3 does not give such info: 
-  # Nestlé can be the company and only one trader has the number of farmers, this doesn't mean it's the trader for Nestlé. 
-  # And a trader can be the company and only one Nestlé has the number of farmers, this doesn't mean that it's the trader for Nestlé either.  
-  # So, let the trader name be NA. 
-  
-  # mutate(DISCL_TRADER_NAME = case_when(
-  #   !(COMPANY %in% non_trading_companies) ~ COMPANY, 
-  #   !(BUYER %in% non_trading_companies) ~ BUYER, 
-  #   TRUE ~ NA
-  # )) %>% 
-  mutate(DISCL_NUMBER_FARMERS = NA) %>% 
-  distinct(COOP_ID, DISCL_YEAR, COMPANY, 
-           .keep_all = TRUE) %>% 
-  select(-buyerz)
-
-# Do not keep missing company rows that don't satisfy the other conditions, 
-# i.e. don't add | is.na(COMPANY) in the filter condition
-# Those are all and only RFA disclosures which full information is already comprised 
-# in rows that have been given RAINFOREST ALLIANCE instead of NA as per the COMPANY var. 
-civ <- 
-  civ %>% 
-  filter(
-    (is.na(CAM_BUYERS) | COMPANY == BUYER) # | is.na(COMPANY)
-  ) %>% 
-  rbind(temp_spur) %>% 
-  arrange(COOP_ID, DISCL_YEAR, COMPANY, TRADER_NAME)
-
-rm(temp_spur)
-
-# civ0 %>%
-#   filter(COOP_ID %in% c(403, 406, 5584)) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-# 
-# civ %>%
-#   filter(COOP_ID %in% c(403, 406, 5584)) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-# 
-# na_comp_not_buyers <- 
-#   civ0 %>% 
-#   filter(is.na(COMPANY) & !is.na(CAM_BUYERS)) %>% 
-#   pull(COOP_ID)
-# 
-# civ0 %>%
-#   filter(COOP_ID %in% na_comp_not_buyers) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-# 
-# 
-# civ0 %>%
-#   filter(COOP_ID %in% c(582, 5653, 448)) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-# 
-# civ %>%
-#   filter(COOP_ID %in% c(582, 5653, 448)) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-
-
-if(nrow(civ0[civ0$DISCL_YEAR != 2019,]) != nrow(civ[civ$DISCL_YEAR != 2019,])){
-  stop("Some rows post 2019 were mistakenly removed while handling 2019 CAM data on number of farmers.")
-}
-rm(civ0)
-
-#### Flow size extrapol. (sei-pcs) ------------------------ 
-# Here, we impute the number of farmers, where missing. 
-
-# Rationale: 
-# Number of farmer  at the disclosure level is NOT representative of the coop, 
-# ... but only of the disclosing company's sourcing volume.
-
-# So we want to distinguish two things: 
-# - the number of farmers that a company source from (for Trase)
-# - the total number of farmers in a cooperative. 
-# In Renier et al./ sei-pcs 2019, the assumption is that companies disclose farmers that supply them only, 
-# ... and thus 2- is the sum of 1-. 
-
-# First, impute missing cases where info is available from the same disclosing company the same year, but from a different source 
-# (mostly, this is where the CAM has no info but additionally scraped data has it, 
-# but we also change non-equal values to their average, to account for discrepancies btw. sources, eg. the CAM and new disclosures). 
-
-# Note that we have chekced that there are no over-use of zeros in the disclosed number of 
-# farmers, which would lead to under-estimating direct supply of traders not disclosing their number of farmers.
-# That's only 2 coops from Cargill (and is consistent across the sources of info) 
-# civ %>% filter(DISCL_NUMBER_FARMERS==0)
-
-# # Imputed values are stored in THREE variables
-# 1 - NB_FARMERS_COMPANY_YEAR has just the first kind of imputations (within the same company and coop)
-
-# 2 - NUM_FARMERS is the variable for SEIPCS. It has the first kind of imputations PLUS the second kind of 
-#     imputations (within the same coop, by averaging flow sizes disclosed by other companies with the same coop. In 2019 model, this was done in model script.
-#     The rationale of doing this hezre is that we can use information within coop but across years, to get 
-#     more conservative imputations before the third, more imprecise, step.   
-#     The third kind of imputation is still made in SEIPCS models, by Monte Carlo. 
-
-# 3 - NUM_FARMERS_EXTRAPOLATED has all three kinds of imputations; it is not meant for SEIPCS but for analyses that 
-#     would use the output of this script directly (i.e. not after running the SEIPCS model). 
-
-
-##### 1st kind of imputations #####
-
-civ <- 
-  civ %>%
-  group_by(COOP_ID, DISCL_YEAR, COMPANY, TRADER_NAME) %>% 
-  mutate(
-    NB_FARMERS_COMPANY_YEAR = round(mean(DISCL_NUMBER_FARMERS, na.rm=TRUE), 0) # this yields NaN for coops with only missing info
-  ) %>% 
-  ungroup()
-
-# Then impute missing number of farmers for the same link, in another year when 
-# the same link has been disclosed but the farmer info hasn't. 
-# (extension of links to years when they have not been disclosed *at all* occurs later in this script)
-
-# we group by coop ID, company AND TRADER_NAME, to avoid using info on coop-manufacturer flows 
-# (which could otherwise aggregate flows through several traders) to impute size of coop-trader flow. 
-civ <- 
-  civ %>%
-  group_by(COOP_ID, COMPANY, TRADER_NAME) %>% 
-  mutate(
-    NB_FARMERS_COMPANY_YEAR = case_when(
-      is.na(NB_FARMERS_COMPANY_YEAR) ~ round(mean(NB_FARMERS_COMPANY_YEAR, na.rm=TRUE), 0), # this yields NaN for coops with only missing info
-      TRUE ~ NB_FARMERS_COMPANY_YEAR
-    )) %>% 
-  ungroup()
-
-##### 2nd kind of imputations #####
-
-# Then impute within COOP_ID, in order to impute missings from values potentially disclosed by other companies 
-# this is the equivalent to: "Where a company did not report the number of farmers 
-# they purchased from for a given cooperative, but the number was reported by other 
-# companies, the sourcing from that cooperative was assigned the mean value of 
-# the sizes disclosed by these other companies." in Renier et al. 
-
-# Do not count RFA or FT farmers in the average, to impute the missing number of farmers as supply flows (as recommended in CAM_to_traders_volumes_FOB_capped_2019_CLEAN.Rmd)
-civ <- mutate(civ, 
-              NOT_RFA = COMPANY != "RAINFOREST ALLIANCE",
-              NOT_FT = COMPANY != "FAIRTRADE")
-
-# # what is the average number of farmers per coop every year 
-# civ %>% summarise(.by = DISCL_YEAR, 
-#                   AVG_NUM_FARM_PER_COOP = mean(NUM_FARMERS, na.rm = TRUE) ) %>% 
-#   arrange(DISCL_YEAR)
-
-civ_save <- civ
-
-# the same year first
-civ <- 
-  civ %>%
-  group_by(COOP_ID, DISCL_YEAR, NOT_RFA, NOT_FT) %>% 
-  mutate(
-    NUM_FARMERS = case_when(
-      is.na(NB_FARMERS_COMPANY_YEAR) ~ round(mean(NB_FARMERS_COMPANY_YEAR, na.rm=TRUE), 0),# this yields NaN for coops with only missing info
-      TRUE ~ NB_FARMERS_COMPANY_YEAR
-    )) %>% 
-  ungroup()
-
-
-# Then, if still not imputed, impute from different years 
-civ <- 
-  civ %>%
-  group_by(COOP_ID, NOT_RFA, NOT_FT) %>% 
-  mutate(
-    NUM_FARMERS = case_when(
-      is.na(NUM_FARMERS) ~ round(mean(NUM_FARMERS, na.rm=TRUE), 0), 
-      TRUE ~ NUM_FARMERS
-    )) %>% 
-  ungroup()
-
-# this illustrates different kinds of imputations.
-# civ %>%
-#   filter(COOP_ID %in% c(1079, 1407, 2782, 2857, 4674, 4512, 710, 2856, 2857)) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS, NUM_FARMERS, NUM_FARMERS_EXTRAPOLATED) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-
-##### 3rd kind of imputations #####
-
-# AND THEN, if still not imputed, give the number of farmers for flows with other coops, within the same year
-# This is similar to what is done in Step 5 of the SEIPCS model, but without the 1000 draws. 
-# Use mean to match the method in SEIPCS and ease comparisons 
-# There is quite a difference: median is ~600 while mean is ~800 farmers per flow
-
-civ <- 
-  civ %>%
-  # still group by year, to have it equivalent to what seipcs does (drawing in NUM_FARMERS values in the model's year)
-  group_by(DISCL_YEAR, NOT_RFA, NOT_FT) %>% 
-  # Necessary to name it differently, for SEIPCS to pick up NUM_FARMERS variable untouched by this step; 
-  mutate(
-    NUM_FARMERS_EXTRAPOLATED = case_when(
-      is.na(NUM_FARMERS) ~ round(mean(NUM_FARMERS, na.rm=TRUE), 0), 
-      TRUE ~ NUM_FARMERS
-    )) %>% 
-  ungroup()
-
-# Those remaining with NA NUM_FARMERS_EXTRAPOLATED are rainforest alliance links in 2023, 2021 and 2019
-civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
-civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% pull(COMPANY) %>% unique()
-
-# civ %>% summarise(.by = DISCL_YEAR, 
-#                   AVG_NUM_FARM_PER_COOP = mean(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE)) %>% 
-#   arrange(DISCL_YEAR)
-
-# civ %>% filter(COMPANY %in% c("FAIRTRADE", "RAINFOREST ALLIANCE")) %>% View()
-
-### Coop minimum size #### 
-# Use the most imputed version throughout
-# The goal is to know a minimum number of farmers supplying a cooperative. 
-# This is the max number of farmers between the sum of disclosed links with traders and 
-# the sum of disclosed links with non-traders, number of farmers disclosed by Fairtrade, and the sum of number of farmers disclosed by Rainforest Alliance (RFA).  
-# in computing either, we don't want to double-count across years or disclosures of the same purchase disclosed by different companies or different sources 
-# Hence the unique_* variables
-civ0_minsize <- civ
-
-civ <- 
-  civ %>% 
-  # exclude from the trader category, companies that are not in the cleaned trader list, as well 
-  # as companies that are different from the trader, to count only once farmer bases of flows where we left multi-tier info (because the trader did not disclose itself)    
-  # (this is what the & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME) does). 
-  mutate(NON_TRADER = !is.na(COMPANY) & !(COMPANY %in% exper_cln) & NOT_RFA & NOT_FT & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME)  , 
-         TRADER     = !is.na(COMPANY) & ((COMPANY %in% exper_cln) | (TRADER_NAME %in% exper_cln)) & NOT_RFA & NOT_FT) %>% 
-  # NON_TRADER
-  group_by(COOP_ID, DISCL_YEAR, NON_TRADER) %>% 
-  mutate(unique_company_link = (NON_TRADER & !duplicated(COMPANY)),
-         TOTAL_FARMERS_NONTRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_company_link)) %>% # leave na.rm = F such that coops with only missing info get NA and not 0
-  
-  # Populate other cells in the column
-  group_by(COOP_ID, DISCL_YEAR) %>% 
-  mutate(TOTAL_FARMERS_NONTRADER = max(TOTAL_FARMERS_NONTRADER, na.rm = T), 
-         TOTAL_FARMERS_NONTRADER = na_if(TOTAL_FARMERS_NONTRADER, -Inf)) %>% 
-  
-  # TRADER
-  group_by(COOP_ID, DISCL_YEAR, TRADER) %>% 
-  mutate(unique_trader_link = (TRADER & !duplicated(TRADER_NAME)),
-         TOTAL_FARMERS_TRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_trader_link)) %>% 
-  
-  # Populate other cells in the column
-  group_by(COOP_ID, DISCL_YEAR) %>% 
-  mutate(TOTAL_FARMERS_TRADER = max(TOTAL_FARMERS_TRADER, na.rm = T), 
-         TOTAL_FARMERS_TRADER = na_if(TOTAL_FARMERS_TRADER, -Inf)) %>% 
-  
-  # Rainforest Alliance (RFA)
-  group_by(COOP_ID, DISCL_YEAR, !NOT_RFA) %>% 
-  mutate(unique_rfa_link = (!NOT_RFA & !duplicated(COMPANY)),
-         TOTAL_FARMERS_RFA = sum(NUM_FARMERS_EXTRAPOLATED*unique_rfa_link)) %>% 
-  # Populate other cells in the column
-  group_by(COOP_ID, DISCL_YEAR) %>% 
-  mutate(TOTAL_FARMERS_RFA = max(TOTAL_FARMERS_RFA, na.rm = T), 
-         TOTAL_FARMERS_RFA = na_if(TOTAL_FARMERS_RFA, -Inf)) %>% 
-  
-  # Fairtrade
-  group_by(COOP_ID, DISCL_YEAR, !NOT_FT) %>% 
-  mutate(unique_ft_link = (!NOT_FT & !duplicated(COMPANY)),
-         TOTAL_FARMERS_FT = sum(NUM_FARMERS_EXTRAPOLATED*unique_ft_link)) %>% 
-  # Populate other cells in the column
-  group_by(COOP_ID, DISCL_YEAR) %>% 
-  mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T), 
-         TOTAL_FARMERS_FT = na_if(TOTAL_FARMERS_FT, -Inf)) %>% 
-  
-  # select(-unique_trader_link) %>%NB_FARMERS_COOP_YEAR2
-  ungroup() %>% 
-  rowwise() %>% 
-  mutate(TOTAL_FARMERS = max(
-    c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT"))),
-    na.rm = TRUE), 
-    TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf)
-  ) %>% 
-  ungroup()
-print("The warnings that 'no non-missing arguments to max; returning -Inf' are not problematic.")
-
-# civ$TOTAL_FARMERS %>% summary()
-# civ %>% filter(TOTAL_FARMERS > 3000) %>% View()
-
-rm(civ0_minsize)
-
-# For coops with total farmers known from non-trading companies only, (or vice-versa)
-# ... we could distribute uniformly the total to traders (non-traders)
-# but we don't, because this implies one additional assumption that the sum is the total, 
-# while in many cases the coop may source from much more farmers than those disclosed. 
-
-# civ %>%
-#   filter(COOP_ID %in% c(259, 140, 1145, 1079, 1407, 2782, 2857, 4674, 4512, 710, 2856, 2857)) %>%
-#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
-#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS, NUM_FARMERS, NUM_FARMERS_EXTRAPOLATED,
-#          TRADER, NON_TRADER,
-#          #unique_company_link, unique_trader_link,
-#          TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER,
-#          TOTAL_FARMERS) %>%
-#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
-#   View()
-
-
-# This is equivalent to the 591 cooperatives for which "the trading companies or
-# certification bodies themselves reported the number of farmers per cooperative"
-# in Renier et al. 
-# It does not change between the raw DISCL_* var and the imputed NUM_FARMERS, 
-# since imputations for NUM_FARMERS are always *within* coop ID, to more links. 
-
-civ %>% 
-  filter(!is.na(DISCL_NUMBER_FARMERS)) %>% 
-  pull(COOP_ID) %>% 
-  unique() %>% 
-  length()
-
-civ %>% 
-  filter(!is.na(NUM_FARMERS)) %>% 
-  pull(COOP_ID) %>% 
-  unique() %>% 
-  length()
-
-# it changes for NUM_FARMERS_EXTRAPOLATED. Makes sense since this is extrapolated from across coops
-civ %>% 
-  filter(!is.na(NUM_FARMERS_EXTRAPOLATED)) %>% 
-  pull(COOP_ID) %>% 
-  unique() %>% 
-  length()
-
 # ATTRIBUTE DISTRICT (departement) GEOCODE -----------------------------------------
 
 civ0 <- civ
@@ -1835,8 +1251,6 @@ civ %>% filter(!is.na(LONGITUDE) & is.na(DISTRICT_GEOCODE))
 civ$DISCL_AREA_NAME <- toupper(civ$DISCL_AREA_NAME)
 unique(civ$DISCL_AREA_NAME)
 
-civ0 <- civ 
-
 lvl4 <- departements %>% st_drop_geometry() %>% select(LVL_4_NAME, LVL_4_CODE)
 
 # join the LVL_4_CODE column, based on equality of disclosed area name and LVL_4_NAME
@@ -1863,6 +1277,606 @@ civ <-
   left_join(lvl4, 
             by = c("DISTRICT_GEOCODE" = "LVL_4_CODE")) %>% 
   mutate(DISTRICT_NAME = LVL_4_NAME) 
+
+
+
+# CLEAN CERTIFICATION -------------------------
+# temp_fun <- function(s){s[!grepl(pattern = "_CO1", s)] %>% sort()}
+# unique(civ$DISCL_CERTIFICATION_NAME)
+
+# check_if_utz <- function(x){grepl("UTZ", x) & !grepl("DECERTIFIED", x)}
+# check_if_ra <- function(x){grepl("RAINFOREST ALLIANCE|RFA|; RA|RA;", x) & !grepl("NOT GRANTED|SUSPEND", x)}
+# check_if_ft <- function(x){grepl("FAIRTRIDE|FAIRTRADE|FAITRIDE|FAIR TRADE", x) & !grepl("SUSPENDED", x)}
+# check_if_cocoalife <- function(x){grepl("COCOALIF|COCOA LIF|CACAOLIF|CACAO LIF", x)}
+
+civ_save <- civ
+
+# Make separate columns for the certification types
+civ <-
+  civ %>%
+  mutate(
+    CERT_LIST = str_squish(str_trans(DISCL_CERTIFICATION_NAME)),
+    
+    # add "," where only a space separates distinct certifications
+    CERT_LIST = gsub(pattern = "HORIZONS FAIRTR", "HORIZONS, FAIRTR", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "HORIZONS RAINFO", "HORIZONS, RAINFO", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "HORIZONS FERMIC", "HORIZONS, FERMIC", x = CERT_LIST),
+    
+    CERT_LIST = gsub(pattern = "LIFE FAIRTR", "LIFE, FAIRTR", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "LIFE RAINFO", "LIFE, RAINFO", x = CERT_LIST),
+    
+    CERT_LIST = gsub(pattern = "UTZ FAIRTR", "UTZ, FAIRTR", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "UTZ RAINFO", "UTZ, RAINFO", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "UTZ COCOA LIFE", "UTZ, COCOA LIFE", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "UTZ FERMICOA", "UTZ, FERMICOA", x = CERT_LIST),
+    
+    CERT_LIST = gsub(pattern = "FAIRTRADE UTZ", "FAIRTRADE, UTZ", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "FAIRTRADE RAINFO", "FAIRTRADE, RAINFO", x = CERT_LIST),
+    
+    CERT_LIST = gsub(pattern = "ALLIANCE UTZ", "ALLIANCE, UTZ", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "ALLIANCE FAIRTR", "ALLIANCE, FAIRTR", x = CERT_LIST),
+    
+    CERT_LIST = gsub(pattern = "COCOA HORIZONS COCOA LIFE", "COCOA HORIZONS, COCOA LIFE", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "COCOA HORIZONS UTZ", "COCOA HORIZONS, UTZ", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "COCOA HORIZONS UTZ FERMICOA COCOA LIFE", "COCOA HORIZON, UTZ, FERMICOA, COCOA LIFE", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "FERMICOA COCOA LIFE", "FERMICOA, COCOA LIFE", x = CERT_LIST),
+    
+    CERT_LIST = gsub(pattern = "RAAGRICULTURE BIOLOGIQUE", "RAINFOREST ALLIANCE, AGRICULTURE BIOLOGIQUE", x = CERT_LIST),
+    
+    CERT_LIST = str_split(CERT_LIST, pattern = ";|,|\\/|\\&|-| AND | OR | ET "),
+    CERT_LIST = map(CERT_LIST, str_squish),
+    CERT_LIST = map(CERT_LIST, ~ gsub("UTZ_.*", "UTZ", .x)) # handles the many "UTZ_CO1000009236" style instances
+  ) 
+
+unique(unlist(civ$CERT_LIST)) %>% sort()
+
+# PUT COMPANY NAMES IN PARENTHESES AS A WAY TO DIFFERENTIATE SSIs FROM CERTIFICATION
+
+# this function should take as input a character vector of length > 1. 
+fn_standard_certification_names <- function(x) {
+  y <- x
+  if(grepl("RAINFOREST ALLIANCE|RFA|OLD-RA|NEW-RA|^RA$", x) & !grepl("NOT GRANTED|SUSPEND", x)){
+    y <- "RAINFOREST ALLIANCE"
+  } 
+  if(grepl("FAIRTRADE|FAIR TRADE|FAITRADE|FAIRTRIDE|FAITRIDE|FT USA|^FT$", x) & !grepl("SUSPENDED", x)){
+    y <- "FAIRTRADE"
+  }
+  if(grepl("FAIR FOR LIFE", x)){
+    y <- "FAIR FOR LIFE"
+  }
+  if(grepl("UTZ|UTS", x) & !grepl("DECERTIFIED", x)){
+    y <- "UTZ"
+  } 
+  if(grepl("BIOLOGIQUE|^BIO$|^AB$", x)){
+    y <- "AGRICULTURE BIOLOGIQUE"
+  }
+  if(grepl("COCOA PROMISE|^CCP$|CARGILL", x)){
+    y <- "CARGILL COCOA PROMISE (CARGILL)"
+  }
+  if(grepl("HORIZON", x)){
+    y <- "COCOA HORIZONS (BARRY CALLEBAUT)"
+  }
+  if(grepl("OLAM PROGRAMMES", x)){
+    y <- "OLAM PROGRAMMES (OLAM)"
+  }
+  if(grepl("COCOA PLAN", x)){
+    y <- "COCOA PLAN (NESTLE)"
+  }
+  if(grepl("COCOALIF|COCOA LIF|CACAOLIF|CACAO LIF|COCO LIF", x)){
+    y <- "COCOA LIFE (MONDELEZ)"
+  }
+  if(grepl("SUSTAINABLE ORIGINS", x)){
+    y <- "SUSTAINABLE ORIGINS (BLOMMER)"
+  }
+  if(grepl("TRANSPARENCE CACAO", x)){
+    y <- "TRANSPARENCE CACAO (CEMOI)"
+  }
+  if(grepl("COCOA FOR GOOD", x)){
+    y <- "COCOA FOR GOOD (HERSHEY)"
+  }
+  if(grepl("RESPONSIBLY SOURCED COCOA", x)){
+    y <- "RESPONSIBLY SOURCED COCOA (MARS)"
+  }
+  if(grepl("SUCDEN|FUCHS", x)){
+    y <- "SUCDEN PROGRAMMES (SUCDEN)"
+  }
+  if(grepl("^TRACE$|CACAO TRACE|CACAOTRACE|CACAO-TRACE", x)){
+    y <- "CACAO-TRACE (PURATOS)"
+  }
+  if(grepl("FERMICOA|4C|4 C|^ASA$|PROGRAMME DE L'UNION ECOOKIM|^AVEC$|^CACAO$|CACAO AMI DES FORETS|CAIR INTERNATIONAL|^CARE$|CE 834|CIV [(]GIZ[)]|COCOA PRACTICISE|COH SACO|EQUITE 2|NOVATION VERTE|^CLMRS$|^CMS$|^COCOA ACTION$|COCOACTION|^COH$|COOPACADEMY2|GROUPEMENT|ICRAFT|^ICS$|^INO$|^N0$|^OILP$|SASSANDRA|CHILD LABOUR|PILOT|^ECOCERT$|IMPACTUM|CHILDREN|AGROFORESTRY|AGROMAP|ASCA|^GAL$|^GIZ$|^ICI$|^LANTEUR$|^MICRO$|^MOCA$|^NEW$|^NA$|^NEANT$|^OLD$|^PP$|PRODUCTIVITY PACKAGE|^PRO$|^PROPLANTEUR$|^RCCP$|^STB$|COACHING|SOLIDARIDAD|RESPONSIBLY SOURCED COCOA|^SOCIAL$|^STARBUCK$", x)){
+    y <- "OTHER PROGRAMMES OR CERTIFICATIONS"
+  }
+  if(grepl("DECERTIFIED", x)){y <- NA}
+  if(grepl("NOT GRANTED", x)){y <- NA}
+  if(grepl("SUSPEND", x)){y <- NA}
+  if(grepl("NOT CERTIFIED", x)){y <- NA}
+  if(grepl("SUPPLIER STANDARD", x)){y <- NA}
+  if(grepl("2007", x)){y <- NA}
+  if(grepl("NOP )", x)){y <- NA}
+  if(grepl("9999", x)){y <- NA}
+  if(!is.na(x) & nchar(x)==0){y <- NA}
+  # if(is.na(x)){y <- "9999"}
+  
+  return(y)
+}
+# civ %>% filter(grepl("2007", DISCL_CERTIFICATION_NAME)) %>% View()
+# civ %>% filter(grepl("NOP )", DISCL_CERTIFICATION_NAME, ignore.case = T)) %>% View()
+# civ %>% filter(grepl("trace", DISCL_CERTIFICATION_NAME, ignore.case = T)) %>% View()
+civ <- 
+  civ %>% 
+  mutate(CERT_LIST = map(CERT_LIST, ~modify(.x, fn_standard_certification_names)))
+
+unique(civ$CERT_LIST) 
+unique(unlist(civ$CERT_LIST)) %>% sort()
+anyNA(civ$CERT_LIST)
+
+# Note: certification is (already) at the link level, i.e. specific to the value in every row in the COMPANY column. 
+# Indeed, this was inputed as such in disclosure scraping, and this seems to be the case in the CAM as well. 
+
+# CERT_LIST is turned into a more workable variable CERTIFICATIONS below. 
+# We don't produce CERTIFIED variable anymore. 
+
+
+# NUMBER FARMERS -------------------------
+
+#### Extract CAM info (incl. from RFA) ----------------------------
+# First step is to extract information from the CAM, stored in CAM_BUYERS column. 
+
+# Convert CAM to long format based on coop size, one row per disclosed coop size
+# (The difference with what is done in CAM_to_traders_volumes_FOB_capped_2019_CLEAN.Rmd 
+# ... is that we keep all rows, we do not remove rows with missing farm size info)
+
+civ <- 
+  civ %>% 
+  mutate(COOP_SIZE = str_split(CAM_BUYERS, pattern = ";"),
+         COOP_SIZE = map(COOP_SIZE, str_squish)) %>%
+  unnest(cols = c(COOP_SIZE)) %>%
+  # drop_na(COOP_SIZE) %>%
+  mutate(
+    DISCL_NUMBER_FARMERS = case_when(
+      !is.na(COOP_SIZE) ~ as.double(gsub(" \\(.*", "", COOP_SIZE)),
+      TRUE ~ DISCL_NUMBER_FARMERS), 
+    BUYER = gsub(".*\\(", "", COOP_SIZE),
+    BUYER = str_squish(gsub("\\)","", BUYER)),
+    BUYER = gsub("BC", "BARRY CALLEBAUT", BUYER),
+    BUYER = gsub("RA", "RAINFOREST ALLIANCE", BUYER),
+    BUYER = gsub("CARGILL UTZ", "CARGILL", BUYER)
+  ) %>% select(-COOP_SIZE)
+# This spuriously attributed a number of farmers to some company-coop links (i.e. rows): Remove them
+
+civ0 <- civ # (store for later check)
+
+# A note on info from the CAM on the number of farmers and their buyers. 
+# The BUYER variables is the company disclosing (according to the CAM) to buy to the corresponding number of farmers in DISCL_NUMBER_FARMERS
+# Buyers can be
+# - exporters (here Cargill, BC, Touton), 
+# - manufacturers (Blommer, Mars, Tony's)
+# - Rainforest alliance. 
+
+# RAINFOREST ALLIANCE disclosures of number of farmers: 
+# The problem with RFA is that several companies may disclose having a link with a coop, 
+# but not the size of these links, and we only know the number of RFA farmers, 
+# such that it's spurious to attribute this size to every company's link with this coop. 
+# Rather, we want to have companies' link sizes missing, and an extra row that representing the 
+# link between the coop and RFA. 
+
+# Separately store coop-level numbers of farmers disclosed by Rainforest Alliance as per the CAM 
+# this does not include other RFA disclosures added in addition to the CAM. 
+# Don't keep duplicates (there when several companies are linked to a coop that has RFA farmers info in the CAM)
+# The first row taken by distinct() is one of these companies, arbitrarily. Switch it to RFA.  
+temp_rfa <- 
+  civ %>% 
+  filter(BUYER == "RAINFOREST ALLIANCE") %>% 
+  distinct(COOP_ID, DISCL_NUMBER_FARMERS, 
+           .keep_all = TRUE) %>% 
+  mutate(COMPANY = "RAINFOREST ALLIANCE", 
+         # and turn down the trader name variable, not to count this flow twice (same rational as in CLEAN TRADER NAME section above)
+         TRADER_NAME = case_when(
+           TRADER_NAME %in% c(civ$COMPANY, non_disclosing_companies) ~ NA, 
+           TRUE ~ TRADER_NAME
+         )
+  ) 
+
+# In the main data, switch the spurious RFA number of farmers to NA, 
+# (but keep the rows, as they inform on the link with companies)
+# and stack the RFA info
+civ <- 
+  civ %>% 
+  mutate(DISCL_NUMBER_FARMERS = case_when(
+    BUYER == "RAINFOREST ALLIANCE" ~ NA, 
+    TRUE ~ DISCL_NUMBER_FARMERS
+  )) %>% 
+  rbind(temp_rfa)
+rm(temp_rfa)
+
+# Now for non-RFA buyers: 
+# Spot company-coop links (rows) for which farmer info is disclosed in CAM, but not by this company
+# Store them separately, switch their farmers to NA, and keep only one non-duplicate (but there are no duplicates anyway)
+
+# In the main data, among rows with some CAM_BUYERS info, remove rows where there is no info on the number of farmers sourced from by this company. 
+# Stack back the separately stored data from above. 
+
+temp_spur <- 
+  civ %>% 
+  group_by(COOP_ID, DISCL_YEAR) %>%
+  mutate(
+    buyerz = list(BUYER),
+    buyerz = map(buyerz, unique)) %>% 
+  ungroup() %>% 
+  filter(
+    !is.na(CAM_BUYERS) & !(COMPANY %in% buyerz), 
+  ) %>% 
+  # In order not to lose the information from the CAM V3 about connections between traders and manufacturers, 
+  # we store in the trader name variable: either the name of the disclosing company, if it's not identified as a non-trading company (see above), 
+  # or the name of the buying company, if it's not identified as non-trading company... 
+  # NOPE, because actually the CAM V3 does not give such info: 
+  # Nestlé can be the company and only one trader has the number of farmers, this doesn't mean it's the trader for Nestlé. 
+  # And a trader can be the company and only one Nestlé has the number of farmers, this doesn't mean that it's the trader for Nestlé either.  
+  # So, let the trader name be NA. 
+  
+  # mutate(DISCL_TRADER_NAME = case_when(
+  #   !(COMPANY %in% non_trading_companies) ~ COMPANY, 
+  #   !(BUYER %in% non_trading_companies) ~ BUYER, 
+  #   TRUE ~ NA
+  # )) %>% 
+  mutate(DISCL_NUMBER_FARMERS = NA) %>% 
+  distinct(COOP_ID, DISCL_YEAR, COMPANY, 
+           .keep_all = TRUE) %>% 
+  select(-buyerz)
+
+# Do not keep missing company rows that don't satisfy the other conditions, 
+# i.e. don't add | is.na(COMPANY) in the filter condition
+# Those are all and only RFA disclosures which full information is already comprised 
+# in rows that have been given RAINFOREST ALLIANCE instead of NA as per the COMPANY var. 
+civ <- 
+  civ %>% 
+  filter(
+    (is.na(CAM_BUYERS) | COMPANY == BUYER) # | is.na(COMPANY)
+  ) %>% 
+  rbind(temp_spur) %>% 
+  arrange(COOP_ID, DISCL_YEAR, COMPANY, TRADER_NAME)
+
+rm(temp_spur)
+
+# civ0 %>%
+#   filter(COOP_ID %in% c(403, 406, 5584)) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+# 
+# civ %>%
+#   filter(COOP_ID %in% c(403, 406, 5584)) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+# 
+# na_comp_not_buyers <- 
+#   civ0 %>% 
+#   filter(is.na(COMPANY) & !is.na(CAM_BUYERS)) %>% 
+#   pull(COOP_ID)
+# 
+# civ0 %>%
+#   filter(COOP_ID %in% na_comp_not_buyers) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+# 
+# 
+# civ0 %>%
+#   filter(COOP_ID %in% c(582, 5653, 448)) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+# 
+# civ %>%
+#   filter(COOP_ID %in% c(582, 5653, 448)) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+
+
+if(nrow(civ0[civ0$DISCL_YEAR != 2019,]) != nrow(civ[civ$DISCL_YEAR != 2019,])){
+  stop("Some rows post 2019 were mistakenly removed while handling 2019 CAM data on number of farmers.")
+}
+rm(civ0)
+
+# civ %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% View()
+
+civ_save2 <- civ
+
+#### Flow size extrapol. (sei-pcs) ------------------------ 
+# Here, we impute the number of farmers, where missing. 
+
+# Rationale: 
+# Number of farmer at the disclosure level is NOT representative of the coop, 
+# ... but only of the disclosing company's sourcing volume.
+
+# So we want to distinguish two things: 
+# - the number of farmers that a company source from (for Trase)
+# - the total number of farmers in a cooperative. 
+# In Renier et al./ sei-pcs 2019, the assumption is that companies disclose farmers that supply them only, 
+# ... and thus 2- is the sum of 1-. 
+
+# First, impute missing cases where info is available from the same disclosing company the same year, but from a different source 
+# (mostly, this is where the CAM has no info but additionally scraped data has it, 
+# but we also change non-equal values to their average, to account for discrepancies btw. sources, eg. the CAM and new disclosures). 
+
+# Note that we have chekced that there are no over-use of zeros in the disclosed number of 
+# farmers, which would lead to under-estimating direct supply of traders not disclosing their number of farmers.
+# That's only 2 coops from Cargill (and is consistent across the sources of info) 
+# civ %>% filter(DISCL_NUMBER_FARMERS==0)
+
+# # Imputed values are stored in THREE variables
+# 1 - NB_FARMERS_COMPANY_YEAR has just the first kind of imputations (within the same company and coop)
+
+# 2 - NUM_FARMERS is the variable for SEIPCS. It has the first kind of imputations PLUS the second kind of 
+#     imputations (within the same coop, by averaging flow sizes disclosed by other companies with the same coop. In 2019 model, this was done in model script.
+#     The rationale of doing this hezre is that we can use information within coop but across years, to get 
+#     more conservative imputations before the third, more imprecise, step.   
+#     The third kind of imputation is still made in SEIPCS models, by Monte Carlo. 
+
+# 3 - NUM_FARMERS_EXTRAPOLATED has all three kinds of imputations; it is not meant for SEIPCS but for analyses that 
+#     would use the output of this script directly (i.e. not after running the SEIPCS model). 
+
+
+##### 1st kind of imputations #####
+
+civ <- 
+  civ %>%
+  group_by(COOP_ID, DISCL_YEAR, COMPANY, TRADER_NAME) %>% 
+  mutate(
+    NB_FARMERS_COMPANY_YEAR = round(mean(DISCL_NUMBER_FARMERS, na.rm=TRUE), 0) # this yields NaN for coops with only missing info
+  ) %>% 
+  ungroup()
+
+# Then impute missing number of farmers for the same link, in another year when 
+# the same link has been disclosed but the farmer info hasn't. 
+# (extension of links to years when they have not been disclosed *at all* occurs later in this script)
+
+# we group by coop ID, company AND TRADER_NAME, to avoid using info on coop-manufacturer flows 
+# (which could otherwise aggregate flows through several traders) to impute size of coop-trader flow. 
+civ <- 
+  civ %>%
+  group_by(COOP_ID, COMPANY, TRADER_NAME) %>% 
+  mutate(
+    NB_FARMERS_COMPANY_YEAR = case_when(
+      is.na(NB_FARMERS_COMPANY_YEAR) ~ round(mean(NB_FARMERS_COMPANY_YEAR, na.rm=TRUE), 0), # this yields NaN for coops with only missing info
+      TRUE ~ NB_FARMERS_COMPANY_YEAR
+    )) %>% 
+  ungroup()
+
+# for certification schemes, this also imputes nb of farmers from the same scheme in another year 
+# typically, the RFA disclosures in 2019 (through the CAM) and 2022, and the FT disclosure in 2022.
+# (but there almost no common coop id linked to RFA between 2019 and 2022 disclosures...)
+
+
+##### 2nd kind of imputations #####
+
+# Then impute within COOP_ID, in order to impute missings from values potentially disclosed by other companies 
+# this is the equivalent to: "Where a company did not report the number of farmers 
+# they purchased from for a given cooperative, but the number was reported by other 
+# companies, the sourcing from that cooperative was assigned the mean value of 
+# the sizes disclosed by these other companies." in Renier et al. 
+
+# Do not count RFA or FT farmers in the average, to impute the missing number of farmers as supply flows (as recommended in CAM_to_traders_volumes_FOB_capped_2019_CLEAN.Rmd)
+civ <- mutate(civ,
+              # %in% operator makes sur that COMPANY = NA is not NA on this dummy, but TRUE  
+              NOT_RFA = !COMPANY %in% c("RAINFOREST ALLIANCE"),
+              NOT_FT = !COMPANY %in% c("FAIRTRADE"),
+              NOT_RFA_FT = !COMPANY %in% c("RAINFOREST ALLIANCE", "FAIRTRADE")# this includes disclosures by RFA as per the CAM. 
+              )
+
+# # what is the average number of farmers per coop every year 
+# civ %>% summarise(.by = DISCL_YEAR, 
+#                   AVG_NUM_FARM_PER_COOP = mean(NUM_FARMERS, na.rm = TRUE) ) %>% 
+#   arrange(DISCL_YEAR)
+
+# the same year first
+civ <- 
+  civ %>%
+  # group on NOT_RFA_FT (not on NOT_RFA, NOT_FT) to impute nb of farmers across (and not within) certification schemes. 
+  # (disclosure for the same coop by the same scheme but in another year has already been done in 1st imputation kind above
+  # this imputes disclosure for the same coop by another scheme but in the same year.) 
+  group_by(COOP_ID, DISCL_YEAR, NOT_RFA_FT) %>% 
+  mutate(
+    NUM_FARMERS = case_when(
+      is.na(NB_FARMERS_COMPANY_YEAR) ~ round(mean(NB_FARMERS_COMPANY_YEAR, na.rm=TRUE), 0),# this yields NaN for coops with only missing info
+      TRUE ~ NB_FARMERS_COMPANY_YEAR
+    )) %>% 
+  ungroup()
+
+civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+
+# Then, if still not imputed, impute from different years 
+civ <- 
+  civ %>%
+  group_by(COOP_ID, NOT_RFA_FT) %>% 
+  mutate(
+    NUM_FARMERS = case_when(
+      is.na(NUM_FARMERS) ~ round(mean(NUM_FARMERS, na.rm=TRUE), 0), 
+      TRUE ~ NUM_FARMERS
+    )) %>% 
+  ungroup()
+
+civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+
+# this illustrates different kinds of imputations.
+# civ %>%
+#   filter(COOP_ID %in% c(1079, 1407, 2782, 2857, 4674, 4512, 710, 2856, 2857)) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS, NUM_FARMERS, NUM_FARMERS_EXTRAPOLATED) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+
+##### 3rd kind of imputations #####
+
+# AND THEN, if still not imputed, give the number of farmers for flows with other coops, within the same year
+# This is similar to what is done in Step 5 of the SEIPCS model, but without the 1000 draws. 
+# Use mean to match the method in SEIPCS and ease comparisons 
+# There is quite a difference: median is ~600 while mean is ~800 farmers per flow
+
+civ <- 
+  civ %>%
+  # still group by year, to have it equivalent to what seipcs does (drawing in NUM_FARMERS values in the model's year)
+  # still treat separately the nb of farmers disclosed by certification schemes  
+  group_by(DISCL_YEAR, NOT_RFA_FT) %>% 
+  # Necessary to name it differently, for SEIPCS to pick up NUM_FARMERS variable untouched by this step; 
+  mutate(
+    NUM_FARMERS_EXTRAPOLATED = case_when(
+      is.na(NUM_FARMERS) ~ round(mean(NUM_FARMERS, na.rm=TRUE), 0), 
+      TRUE ~ NUM_FARMERS
+    )) %>% 
+  ungroup()
+
+civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
+civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
+
+# Those remaining with NA NUM_FARMERS_EXTRAPOLATED are rainforest alliance links in 2023 and 2021 
+civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
+civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% pull(COMPANY) %>% unique()
+civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% View()
+
+if(civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% pull(COMPANY) %>% unique() == "RAINFOREST ALLIANCE"){
+  civ <- 
+    civ %>%
+    group_by(NOT_RFA, NOT_FT) %>% 
+    mutate(
+      NUM_FARMERS_EXTRAPOLATED = case_when(
+        is.na(NUM_FARMERS_EXTRAPOLATED) ~ round(mean(NUM_FARMERS_EXTRAPOLATED, na.rm=TRUE), 0), 
+        TRUE ~ NUM_FARMERS_EXTRAPOLATED
+      )) %>% 
+    ungroup()
+}
+
+civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
+civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
+
+if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not complete")}
+
+# civ %>% summarise(.by = DISCL_YEAR, 
+#                   AVG_NUM_FARM_PER_COOP = mean(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE)) %>% 
+#   arrange(DISCL_YEAR)
+
+# civ %>% filter(COMPANY %in% c("FAIRTRADE", "RAINFOREST ALLIANCE")) %>% View()
+
+### Coop minimum size #### 
+# Use the most imputed version throughout
+# The goal is to know a minimum number of farmers supplying a cooperative. 
+# This is the max number of farmers between the sum of disclosed links with traders and 
+# the sum of disclosed links with non-traders, number of farmers disclosed by Fairtrade, and the sum of number of farmers disclosed by Rainforest Alliance (RFA).  
+# in computing either, we don't want to double-count across years or disclosures of the same purchase disclosed by different companies or different sources 
+# Hence the unique_* variables
+civ0_minsize <- civ
+
+civ <- 
+  civ %>% 
+  # exclude from the trader category, companies that are not in the cleaned trader list, as well 
+  # as companies that are different from the trader, to count only once farmer bases of flows where we left multi-tier info (because the trader did not disclose itself)    
+  # (this is what the & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME) does). 
+  mutate(NON_TRADER = !is.na(COMPANY) & !(COMPANY %in% exper_cln) & NOT_RFA_FT & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME)  , 
+         TRADER     = !is.na(COMPANY) & ((COMPANY %in% exper_cln) | (TRADER_NAME %in% exper_cln)) & NOT_RFA_FT) %>% 
+  # NON_TRADER
+  group_by(COOP_ID, DISCL_YEAR, NON_TRADER) %>% 
+  mutate(unique_company_link = (NON_TRADER & !duplicated(COMPANY)),
+         TOTAL_FARMERS_NONTRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_company_link)) %>% # leave na.rm = F such that coops with only missing info get NA and not 0
+  
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_NONTRADER = max(TOTAL_FARMERS_NONTRADER, na.rm = T), 
+         TOTAL_FARMERS_NONTRADER = na_if(TOTAL_FARMERS_NONTRADER, -Inf)) %>% 
+  
+  # TRADER
+  group_by(COOP_ID, DISCL_YEAR, TRADER) %>% 
+  mutate(unique_trader_link = (TRADER & !duplicated(TRADER_NAME)),
+         TOTAL_FARMERS_TRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_trader_link)) %>% 
+  
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_TRADER = max(TOTAL_FARMERS_TRADER, na.rm = T), 
+         TOTAL_FARMERS_TRADER = na_if(TOTAL_FARMERS_TRADER, -Inf)) %>% 
+  
+  # Rainforest Alliance (RFA)
+  group_by(COOP_ID, DISCL_YEAR, NOT_RFA) %>% 
+  mutate(unique_rfa_link = (!NOT_RFA & !duplicated(COMPANY)),
+         TOTAL_FARMERS_RFA = sum(NUM_FARMERS_EXTRAPOLATED*unique_rfa_link)) %>% 
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_RFA = max(TOTAL_FARMERS_RFA, na.rm = T), 
+         TOTAL_FARMERS_RFA = na_if(TOTAL_FARMERS_RFA, -Inf)) %>% 
+  
+  # Fairtrade
+  group_by(COOP_ID, DISCL_YEAR, NOT_FT) %>% 
+  mutate(unique_ft_link = (!NOT_FT & !duplicated(COMPANY)),
+         TOTAL_FARMERS_FT = sum(NUM_FARMERS_EXTRAPOLATED*unique_ft_link)) %>% 
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T), 
+         TOTAL_FARMERS_FT = na_if(TOTAL_FARMERS_FT, -Inf)) %>% 
+  
+  # select(-unique_trader_link) %>%NB_FARMERS_COOP_YEAR2
+  ungroup() %>% 
+  rowwise() %>% 
+  mutate(TOTAL_FARMERS = max(
+    c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT"))),
+    na.rm = TRUE), 
+    TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf)
+  ) %>% 
+  ungroup()
+print("The warnings that 'no non-missing arguments to max; returning -Inf' are not problematic.")
+
+# civ$TOTAL_FARMERS %>% summary()
+# civ %>% filter(TOTAL_FARMERS > 3000) %>% View()
+
+rm(civ0_minsize)
+
+# For coops with total farmers known from non-trading companies only, (or vice-versa)
+# ... we could distribute uniformly the total to traders (non-traders)
+# but we don't, because this implies one additional assumption that the sum is the total, 
+# while in many cases the coop may source from much more farmers than those disclosed. 
+
+# civ %>%
+#   filter(COOP_ID %in% c(259, 140, 1145, 1079, 1407, 2782, 2857, 4674, 4512, 710, 2856, 2857)) %>%
+#   select(COOP_ID, DISCL_YEAR, COMPANY, DISCL_TRADER_NAME, TRADER_NAME,
+#          DISCL_NUMBER_FARMERS, BUYER, CAM_BUYERS, NUM_FARMERS, NUM_FARMERS_EXTRAPOLATED,
+#          TRADER, NON_TRADER,
+#          #unique_company_link, unique_trader_link,
+#          TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER,
+#          TOTAL_FARMERS) %>%
+#   arrange(COOP_ID, DISCL_YEAR, COMPANY) %>%
+#   View()
+
+
+# This is equivalent to the 591 cooperatives for which "the trading companies or
+# certification bodies themselves reported the number of farmers per cooperative"
+# in Renier et al. 
+# It does not change between the raw DISCL_* var and the imputed NUM_FARMERS, 
+# since imputations for NUM_FARMERS are always *within* coop ID, to more links. 
+
+civ %>% 
+  filter(!is.na(DISCL_NUMBER_FARMERS)) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length()
+
+civ %>% 
+  filter(!is.na(NUM_FARMERS)) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length()
+
+# it changes for NUM_FARMERS_EXTRAPOLATED. Makes sense since this is extrapolated from across coops
+civ %>% 
+  filter(!is.na(NUM_FARMERS_EXTRAPOLATED)) %>% 
+  pull(COOP_ID) %>% 
+  unique() %>% 
+  length()
 
 
 
@@ -1921,6 +1935,8 @@ for(year in 2020:max(unique(civ$DISCL_YEAR))){
   rm(civ_year, civ_past_year, companies_past_year)
 }
 
+
+
 # EXTRAPOLATE COOP EXISTENCE FROM PAST TO FUTURE ####
 # This DOES NOT produce a balanced panel. 
 # But it implies that the number of coops is only growing. 
@@ -1976,6 +1992,7 @@ for(year in sort(unique(civ$DISCL_YEAR))){
   civ %>% filter(DISCL_YEAR == year) %>%  pull(COOP_ID) %>% unique() %>% length() %>% paste0(" in ", year) %>% print()
 }
 
+
 # REMOVE DUPLICATES -----------------------------
 # At this point, within a year, several rows can reflect the same coop obviously 
 # (as several companies may have disclosed to buy from the same coop), 
@@ -2003,7 +2020,7 @@ civ_coopyear <-
          -NUM_FARMERS, -NUM_FARMERS_EXTRAPOLATED, -NON_TRADER,-TRADER, -unique_company_link, -unique_trader_link) %>%
   select(COOP_ID, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
          DISTRICT_NAME, DISTRICT_GEOCODE,
-         DISCLOSURE_SOURCES, TRADER_NAMES, CERTIFIED, CERTIFICATIONS, 
+         DISCLOSURE_SOURCES, TRADER_NAMES, CERTIFICATIONS, 
          TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS_FT, TOTAL_FARMERS, 
          everything()) %>% 
   rename(YEAR = DISCL_YEAR)
