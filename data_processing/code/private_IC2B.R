@@ -23,6 +23,7 @@ library(units)
 library(scales)
 library(kableExtra)
 library(here)
+library(readstata13)
 
 # Assets and functions -----------------------------------------------------
 
@@ -38,6 +39,297 @@ library(here)
 # Anyway, it can be used to estimate the minimum total number of farmers in the coop. 
 
 ft = read_xlsx(here("input_data", "fairtrade", "SPOs_DATABASE_GH_CDI_FI_Consultants.xlsx"), sheet = 1, col_names = TRUE) 
+
+### JRC data #### 
+
+jrc = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "cocoa_UCLouvain.dta"),
+                 convert.factors = TRUE, # we want those labels. this is the default. 
+                 generate.factors=TRUE,
+                 nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
+                 
+
+jrc$company %>% unique()
+jrc$i04cq2 %>% unique()
+
+jrc_buyer_roster = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "ibuyer_roster_UCLouvain.dta"),
+                              generate.factors=TRUE,
+                              nonint.factors = TRUE) 
+
+
+
+# unfactor variables 
+jrc$country %>% class()
+
+for(VAR in names(jrc)){
+  if(is.factor(jrc[,VAR])){
+    jrc = jrc %>% mutate(
+      !!as.symbol(VAR) := as.character(!!as.symbol(VAR))
+    ) 
+  }
+}
+jrc$country %>% class()
+
+
+# Rename PRODUCER variables.
+jrc = 
+  jrc %>% 
+  rename(
+    s00q4__country = country,
+    s00q5__strate = s00q5_0,
+    s00q6__reg = Region, 
+    s00q7__dst = District,
+    s00q8__spf = s00q8,
+    s00q9__vil = s00q9,
+    s00q10__zd = Village,
+    s00q11__hh_id = s00q11,
+    s00q12__itw_latitude = s00q12__Latitude,
+    s00q12__itw_longitude = s00q12__Longitude,
+    s00q12__itw_accuracy = s00q12__Accuracy,
+    s00q12__itw_altitude = s00q12__Altitude, 
+    s02aq1__locality_type = s02aq1,
+    s02aq2__home_access_type = Home_access,
+    s02aq3__km_home_track = s02aq3,
+    s02aq4__km_home_paved = s02aq4,
+    s02aq5__plot_access_type = s02aq5,
+    s02aq6__km_nearest_cp = Salepoint_km, # this is the second s02aq4 in questionnaire pdf. 
+    s02aq301__km_home_plot = Cocoa_plot_distance,
+    s02dq30__main_buyer_type = s02dq30,
+    s02dq31__main_buyer_type_oth = s02dq31
+    )
+
+# Rename INTERMEDIARY variables.
+jrc = 
+  jrc %>% 
+  rename(
+         # INTERVIEW ATTRIBUTES
+         i00q6__itw_ctr = Country_buyer,
+         i00q7__itw_reg = Region_buyer,
+         i00q8__itw_spf = sp_buyer,
+         i00q9__itw_village = EA_buyer,
+         i00q10__ID = buyer_id,
+         i00q20__name_reported = Name_entity,
+         i00q21__itw_latitude = i00q21__Latitude,
+         i00q21__itw_longitude = i00q21__Longitude,
+         i00q21__itw_accuracy = i00q21__Accuracy,
+         i00q21__itw_altitude = i00q21__Altitude,
+         i00q21__itw_date = i00q21__Timestamp,
+         i00q22__is_cp = i00q22, # cp is for Collection Point
+         i00q23__is_possible_gps = i00q23,
+         i00q24__latitude_cp = i00q24__Latitude,
+         i00q24__longitude_cp = i00q24__Longitude,
+         i00q24__accuracy_cp = i00q24__Accuracy,
+         i00q24__altitude_cp = i00q24__Altitude,
+         i00q25__cp_type = i00q25,
+         
+         # INTERMEDIARY IDENTIFICATION
+         i01bq1__is_cocoa_buying = i01bq1,
+         i01bq3__type = i01bq3,
+         i01bq3_oth__type_oth = i01bq3_oth,
+         i01bq4__name = company,
+         i01bq5__is_indep = i01bq5, # this is important to distinguish between interviewee that works for a buyer or who buys with her own money (Annex B[3] of intermediary questionnaire). 
+         i01bq6__is_agree = i01bq6,
+         i01bq10__suppliers = i01bq10,
+         i01bq11__oth_suppliers = i01bq11,
+         i02q16__boss_time = i02q16,
+         
+         # ACTIVITY SCALE
+         i03aq1__nb_farmers = i03aq1,
+         i03aq2__nb_villages = i03aq2,
+         i03aq3__is_all_villages_uni_spf = i03aq3,
+         i03aq4__spf_name = i03aq4,
+         i03aq5__is_all_villages_uni_dpt = i03aq5,
+         i03aq6__dpt_name = i03aq6,   
+         i03aq7__is_all_villages_uni_reg = i03aq7,
+         i03aq8__reg_name = i03aq8,   
+         i03aq9__is_all_villages_uni_dst = i03aq9,
+         i03aq10__dst_name = i03aq10,   
+         i03aq15__vol_unit = i03aq15,
+         i03aq16__kg_per_bag = i03aq16,
+         i03aq17__tonne_per_charg = i03aq17,
+         i03aq18__vol_main_season = i03aq18,
+         i03aq19__vol_small_season = i03aq19,
+         i03aq20__is_vol_correct = i03aq20,
+         i03aq25__vehic_type = str_vehic,
+         i03aq25__is_vehic_velo = i03aq25__1,
+         i03aq25__is_vehic_moto = i03aq25__2,
+         i03aq25__is_vehic_3roues = i03aq25__3,
+         i03aq25__is_vehic_kya = i03aq25__4,
+         i03aq25__is_vehic_camionette = i03aq25__5,
+         i03aq25__is_vehic_camram = i03aq25__6,
+         i03aq25__is_vehic_cam10roues = i03aq25__7,
+         i03aq25__is_vehic_oth = i03aq25__9,
+         i03aq25__is_vehic_none = i03aq25__19,
+         i03aq25__vehic_type_oth = i03aq25_oth,
+         i03aq30__is_basc_used = i03aq30,
+         i03aq31__basc_type = i03aq31,
+         i03aq31__basc_type_oth = i03aq31_oth,
+         i03aq40__is_price_uni = i03aq40,
+         i03aq41__price_cfa_per_kg_2019 = i03aq41,
+         i03aq42__price_cfa_per_kg_min_2019 = i03aq42,
+         i03aq43__price_cfa_per_kg_max_2019 = i03aq43,
+         
+         # COCOA COLLECTION 
+         i03bq1__type = i03bq1,
+         i03cq1__etbm_date = i03cq1,
+         i03cq2__coop_type = i03cq2,
+         i03cq15__coop_nb_members = i03cq15,
+         i03cq16__coop_nb_members_2014 = i03cq16,
+         i03eq30__is_traced = i03eq30,
+         i03eq31__is_all_bags_labelled = i03eq31,
+         i03fq1__boss_name = i03fq1,
+         i03fq2__boss_type2 = i03fq2,
+         i03fq3__boss_type2_oth = i03fq3,
+         i03fq4__boss_city = i03fq4,
+         i03fq10__boss_ID2 = i03fq10,
+         
+         # OPERATIONS
+         i04aq1__nb_collect_points = i04aq1,
+         i04aq2__main_collect_name = i04aq2,
+         # note that these 3 variables are misnamed in input data, right name should be i04aq3
+         i04aq3__is_connaissement = i01aq3, 
+         i04aq4__is_agrement_ccc_2019 = i01aq4,
+         i04aq5__is_exp_licensed = i01aq5,
+         
+         i04aq10__out_vol_2018 = i04aq10,
+         i04aq11__out_vol_2019 = i04aq11,
+         i04aq12__vol_coop_members_2018 = i04aq12,
+         i04aq13__vol_coop_members_2019 = i04aq13,
+         
+         # MARKET STRUCTURE
+         i04cq1__is_uni_buyer = i04cq1,
+         i04cq2__nb_buyers = i04cq2,
+         i04cq3__change_buyer_ease = i04cq3,
+         i04cq4__buyer_change_ease = i04cq4)
+
+
+jrc_buyer_roster = 
+  jrc_buyer_roster %>% 
+  rename(
+    i04aq15__buyer_code = i04aq15,
+    i04aq16__tonne_supply_2018 = i04aq16,
+    i04aq17__tonne_supply_2019 = i04aq17,
+    i04aq18__buyer_city = i04aq18,
+    i04aq19__price_cfa_per_kg_2019 = i04aq19,
+    i04aq20__km_cp_city = i04aq20,
+    i04aq24__buyer_type = i04aq24,
+    i04aq24_oth__buyer_type_oth = i04aq24_oth,
+    i00q10__ID = buyer_id)
+
+
+# Preparation steps: 
+
+# dummy variables
+jrc = 
+  jrc %>% 
+  mutate(across(contains("_is_"), ~if_else(. %in% c("oui", "yes"), TRUE, FALSE)))
+
+
+
+# COOPERATIVE data
+# filter to coops only 
+jrc_coops = 
+  jrc %>% 
+  filter(grepl("coop", i01bq3__type) |
+           grepl("coop", i01bq3_oth__type_oth))
+
+jrc_coops %>% 
+  filter(i03aq1__nb_farmers > 0 | 
+         i03cq15__coop_nb_members > 0) %>%
+  nrow() == nrow(jrc_coops)
+
+# make coop name
+# this one is variable formerly called 'company' and about which Katharina writes (in JRC_surveys_variables_for_supply_shed.xlsx):
+# "I am sending you this for information. But this info was provided by manually filling in the qustionnaire. I tried to harmonize this information and identify the coop/ company. The variable is called "company"and I am also including it in the dataset."
+jrc_coops$i01bq4__name %>% unique()
+
+# check there is no more info in the other naming variables
+jrc_coops = 
+  jrc_coops %>% 
+  mutate(i01bq4__name = case_when(
+    is.na(i01bq4__name) & i01bq4 == "ECASO" ~ i01bq4,
+    TRUE ~ i01bq4__name
+  ))
+
+# let this count as a coop
+# jrc_coops %>% 
+#   filter(grepl("(project financed by Collibri Foundation, Colruyt Group)", i01bq4__name)) %>% 
+#   select(i01bq4__name, i00q20__name_reported, i03fq1__boss_name, everything()) %>% 
+#   View()
+  
+
+if(
+jrc_coops %>% 
+  filter(is.na(i01bq4__name) & 
+           (!is.na(i00q20__name_reported) | 
+            !is.na(i03fq1__boss_name))) %>% 
+  select(i01bq4__name, i00q20__name_reported, i03fq1__boss_name, everything()) %>% # View()
+  nrow() > 0
+)stop("there is more name info to take")
+
+jrc_coops = 
+  jrc_coops %>% 
+  mutate(
+    SUPPLIER_ABRVNAME = NA_character_ , 
+    SUPPLIER_FULLNAME = NA_character_ ,
+  
+    i01bq4__name = str_squish(str_trans(i01bq4__name)),
+
+    # custom edit
+    i01bq4__name = case_when(
+      i01bq4__name == "SCOPADA - SOCIETE COOPERATIVE DES PRODUCTEURS DE DAAKO" ~ "SCOPADA (SOCIETE COOPERATIVE DES PRODUCTEURS DE DAAKO)", 
+      i01bq4__name == "NOUVELLE GENERATION (PROJECT FINANCED BY COLLIBRI FOUNDATION, COLRUYT GROUP)" ~ "NOUVELLE GENERATION",
+      TRUE ~ i01bq4__name
+    ),
+    
+    # then extract what's within and outside parentheses
+    SUPPLIER_ABRVNAME = str_squish(str_trim(str_replace(i01bq4__name, "\\s*\\(.*?\\)", ""))),
+    SUPPLIER_FULLNAME = str_squish(str_extract(i01bq4__name, "(?<=\\().*?(?=\\))"))
+  )
+
+jrc_coops %>% 
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, i01bq4__name, everything()) %>% 
+  View()
+
+# make coordinates of coop
+jrc_coops =
+  jrc_coops %>% 
+    mutate(
+      LONGITUDE = case_when(
+        is.na(i00q24__longitude_cp) & !is.na(i00q21__itw_longitude) & i00q22__is_cp ~ i00q21__itw_longitude, 
+        TRUE ~ i00q24__longitude_cp
+      ),
+      LATITUDE = case_when(
+        is.na(i00q24__latitude_cp) & !is.na(i00q21__itw_latitude) & i00q22__is_cp ~ i00q21__itw_latitude, 
+        TRUE ~ i00q24__latitude_cp
+      )
+    ) 
+if(nrow(jrc_coops %>% filter(is.na(LATITUDE))) != nrow(jrc_coops %>% filter(is.na(LATITUDE)))){stop("pb in missing gps coords")}
+
+jrc_coops %>% 
+  filter(is.na(LONGITUDE)) %>% 
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, everything()) %>% 
+  View()
+
+# DEPARTEMENT AND LOCALITY NAME
+# Attribute departement geocode when available from a departement/district/sbf/village name 
+# Then attribute the ZD name to the locality name to keep this info into the private IC2B
+lvl4 <- departements %>% st_drop_geometry() %>% select(LVL_4_NAME, LVL_4_CODE)
+
+jrc_coops = 
+  jrc_coops %>% 
+  mutate(DEPARTEMENT_NAME = case_when(
+    !is.na(i03aq6__dpt_name) ~ i03aq6__dpt_name,
+    TRUE ~ i03aq10__dst_name
+  )) %>% 
+  left_join(lvl4, by = c("DEPARTEMENT_NAME" = "LVL_4_NAME")) %>% 
+  select(everything(), DISTRICT_GEOCODE = LVL_4_CODE, DEPARTEMENT_NAME) %>% 
+
+
+
+# merge with buyer data 
+# extract all informative coop-level data. 
+
+
 
 ## PUBLIC DISCLOSURES, CONSOLIDATED  #### 
 
@@ -73,25 +365,6 @@ departements <- s3read_using(
 #     bucket = "trase-storage",
 #     opts = c("check_region" = TRUE)
 #   )
-
-# necessary to load custom data to get exporter names only (trad_nam is exporter and importer names alltogether)
-cd20 <- 
-  s3read_using(object = "cote_divoire/cocoa/trade/cd/originals/2020/IVORY_EXPORT_180100_180200_180310_180320_180400_180500_YEAR2020.xlsx", 
-               bucket = "trase-storage",
-               FUN = read_excel,
-               opts = c("check_region" = TRUE))
-
-cd21 <- 
-  s3read_using(object = "cote_divoire/cocoa/trade/cd/originals/2021/IVORY_COAST_EXPORT_180100_180200_180310,_180400_180500 _YEAR2021.xlsx", 
-               bucket = "trase-storage",
-               FUN = read_excel,
-               opts = c("check_region" = TRUE))
-
-cd22 <- 
-  s3read_using(object = "cote_divoire/cocoa/trade/cd/originals/2022/IVORY_EXPORT_2022.xlsx", 
-               bucket = "trase-storage",
-               FUN = read_excel,
-               opts = c("check_region" = TRUE))
 
 # FUNCTIONS ####
 
@@ -387,6 +660,11 @@ if(ncol(civ) != initcoln | nrow(civ)==initrown){stop("something went wrong in co
 # rm(ft, ftpro, ftmerge)
 
 civ_ft <- civ 
+
+
+## JRC ####
+
+
 
 # --- CLEAN TRADER NAME ----------------------------------
 # This is necessary to eventually match with custom data (and eases inspection for now) 
@@ -1847,7 +2125,9 @@ civ <-
   # as companies that are different from the trader, to count only once farmer bases of flows where we left multi-tier info (because the trader did not disclose itself)    
   # (this is what the & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME) does). 
   mutate(NON_TRADER = !is.na(COMPANY) & !(COMPANY %in% exper_cln) & NOT_RFA_FT & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME)  , 
-         TRADER     = !is.na(COMPANY) & ((COMPANY %in% exper_cln) | (TRADER_NAME %in% exper_cln)) & NOT_RFA_FT) %>% 
+         TRADER     = !is.na(COMPANY) & ((COMPANY %in% exper_cln) | (TRADER_NAME %in% exper_cln)) & NOT_RFA_FT, 
+         NO_DISCLOSING = is.na(COMPANY)
+         ) %>% 
   
     # NON_TRADER
     group_by(COOP_ID, DISCL_YEAR, NON_TRADER) %>% 
@@ -1882,26 +2162,37 @@ civ <-
     # Populate other cells in the column
     group_by(COOP_ID, DISCL_YEAR) %>% 
     mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T)) %>% 
+  
+  # Cette partie permet d'include l'info déduite d'autres années, pour les coops qui une année n'ont aucune disclo d'aucune entreprise. 
+  # (une 20aine de cas)
+    # No disclosing company
+    group_by(COOP_ID, DISCL_YEAR, NO_DISCLOSING) %>% 
+    mutate(unique_nodiscl_link = (NO_DISCLOSING & !duplicated(COMPANY)), # this works on NAs
+           TOTAL_FARMERS_NODISCL = sum(NUM_FARMERS*unique_nodiscl_link)) %>% # NUM_FARMERS here, not extrapolated
+    # Populate other cells in the column
+    group_by(COOP_ID, DISCL_YEAR) %>% 
+    mutate(TOTAL_FARMERS_NODISCL = max(TOTAL_FARMERS_NODISCL, na.rm = T), 
+           TOTAL_FARMERS_NODISCL = na_if(TOTAL_FARMERS_NODISCL, -Inf)) %>% 
     
     # select(-unique_trader_link) %>%NB_FARMERS_COOP_YEAR2
     ungroup() %>% 
     rowwise() %>% 
     mutate(
       TOTAL_FARMERS = max(
-        c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT"))),
-        na.rm = TRUE) 
-      # TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf) not necessary anymore because NUM_FARMERS_EXTRAPOLATED has no NA
+        c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT", "TOTAL_FARMERS_NODISCL"))),
+        na.rm = TRUE),
+      TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf) 
     ) %>% 
-    ungroup() %>% 
-    
+    ungroup() #%>% 
+    # 
     # !! Very important action here !!
     # we consider that the total number of farmers for coops that have no link disclosed is NA, and not 0, as is currently attributed by the code above.
-    mutate(TOTAL_FARMERS = case_when(
-      is.na(COMPANY) &  TOTAL_FARMERS == 0 ~ NA, # ON EN EST LA ET CE N4EST PAS ENCORE SATISFAISANT, CAR CERTAINES DE CES OBSERVATIONS ONT UNE 
-      # VALEUR POSITIVE POUR NUM_FARMERS ET SE RETROUVENT QUAND MËME AVEC TOTAL_FARMERS = 0
+# this is ok now that we have done the last step above.     
+mutate(TOTAL_FARMERS = case_when(
+      is.na(COMPANY) &  TOTAL_FARMERS == 0 ~ NA, 
       TRUE ~ TOTAL_FARMERS
     )
-  )
+    )
 
 tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>% 
   mutate(ANYNA = anyNA(COMPANY)) %>% 
