@@ -657,10 +657,10 @@ civ <-
 # ... because their presence may actually distinguish cooperatives.(e.g. "ABCD COOP CA" and "ABCD SCOOPS" may truly be different cooperatives). 
 # We make simplified abrv name later, based on infered abrv names meanwhile. 
 civ %>% filter(grepl("CAFE", SUPPLIER_FULLNAME) & !grepl("STD_CAFE", SUPPLIER_FULLNAME)) %>% View()
-
 # ECOOKIM PRELIMINARY STEP FOR 
 # Manually fill in information from ECOOKIM network of 23 coops
 
+# civ %>% filter(SUPPLIER_ABRVNAME == "ECOOKIM") %>% View()
 # civ %>% filter(COMPANY == "ECOOKIM" & DISCL_YEAR == 2020) %>% View()
 # First, those with only ECOOKIM as information in abrv name, give it NA, this is no information
 civ <- 
@@ -698,6 +698,15 @@ civ <-
 # civ %>% filter(grepl("ECOOKIM", DISCL_SUPPLIER_ABRVNAME, ignore.case=T)) %>% View()
 # civ %>% filter(grepl("ECOOKIM", DISCL_SUPPLIER_FULLNAME, ignore.case=T)) %>% View()
 # civ %>% filter(grepl("KIMBE", DISCL_SUPPLIER_FULLNAME, ignore.case=T)) %>% View()
+
+# and remove these rows (currently two, from CAM and JRC) that have only the generic info for the whole union
+civ <- 
+  civ %>% 
+  filter(!(SUPPLIER_ABRVNAME == "ECOOKIM" & 
+             (SUPPLIER_FULLNAME == "UNION DES SOCIETES COOPERATIVE KIMBE" | is.na(SUPPLIER_FULLNAME))
+           )
+         )
+
 
 # TONY CHOCOLONELY PRELIMINARY STEP
 civ <- 
@@ -1641,6 +1650,8 @@ civ_save2 <- civ
 
 
 ##### 1st kind of imputations #####
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(DISCL_NUMBER_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
+# at this stage, the total number of farmers across links varies a lot from one year to another, and includes some double counting (of farmers disclosed by actors at different levels of the chain)
 
 civ <- 
   civ %>%
@@ -1670,6 +1681,7 @@ civ <-
 # typically, the RFA disclosures in 2019 (through the CAM) and 2022, and the FT disclosure in 2022.
 # (but there almost no common coop id linked to RFA between 2019 and 2022 disclosures...)
 
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NB_FARMERS_COMPANY_YEAR, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
 ##### 2nd kind of imputations #####
 
@@ -1720,8 +1732,11 @@ civ <-
     )) %>% 
   ungroup()
 
-civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
-civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+# civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+# civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
 
 # this illustrates different kinds of imputations.
 # civ %>%
@@ -1751,6 +1766,8 @@ civ <-
     )) %>% 
   ungroup()
 
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
 civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 
@@ -1774,6 +1791,8 @@ if(civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% pull(COMPANY) %>% unique(
 civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
 if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not complete")}
 
 # civ %>% summarise(.by = DISCL_YEAR, 
@@ -1783,7 +1802,7 @@ if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not co
 # civ %>% filter(COMPANY %in% c("FAIRTRADE", "RAINFOREST ALLIANCE")) %>% View()
 
 civ %>% filter(is.na(COMPANY)) %>% View()
-
+civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
 
 # EXTEND EARLIER DISCLOSURES TO SUBSEQUENT YEARS -----------------------------
 # ... when we have no disclosure at all from a company those years  
@@ -1843,8 +1862,10 @@ if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not co
 summary(civ$NUM_FARMERS_EXTRAPOLATED)
 civ %>% filter(NUM_FARMERS_EXTRAPOLATED==0) %>% nrow()
 
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
 # It is important that this repetition of whole disclosures comes before the next step, and not after, as was the case in IC2B v1.0, 
-# because then, links counted in the mim coop size process are not omitted just because a company did not disclose in a given year. 
+# because then, links counted in the min coop size process are not omitted just because a company did not disclose in a given year. 
 # However, the coop existence extrapolation must occur after the coop minimum size, to extrapolate this information over time. 
 
 
@@ -1902,7 +1923,7 @@ civ <-
     group_by(COOP_ID, DISCL_YEAR) %>% 
     mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T)) %>% 
   
-  # Cette partie permet d'include l'info déduite d'autres années, pour les coops qui une année n'ont aucune disclo d'aucune entreprise. 
+  # Cette partie permet d'inclure l'info déduite d'autres années, pour les coops qui une année n'ont aucune disclo d'aucune entreprise. 
   # (une 20aine de cas)
     # No disclosing company
     group_by(COOP_ID, DISCL_YEAR, NO_DISCLOSING) %>% 
@@ -1926,7 +1947,7 @@ civ <-
         TRUE ~ DISCL_TOTAL_FARMERS),
       TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf) 
     ) %>% 
-    ungroup() #%>% 
+    ungroup() %>% 
     # 
     # !! Very important action here !!
     # we consider that the total number of farmers for coops that have no link disclosed is NA, and not 0, as is currently attributed by the code above.
@@ -1936,6 +1957,11 @@ mutate(TOTAL_FARMERS = case_when(
       TRUE ~ TOTAL_FARMERS
     )
     )
+print("The warnings that 'no non-missing arguments to max; returning -Inf' are not problematic.")
+
+civ %>% filter(TOTAL_FARMERS == 10788) %>% View()
+# the one with 10788 farmers is a lot, but it soundly derives from the estimation rule, as expected.  
+civ$TOTAL_FARMERS %>% summary()
 
 tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>% 
   mutate(ANYNA = anyNA(COMPANY)) %>% 
@@ -1945,12 +1971,10 @@ tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>%
 tmp$COOP_ID %>% unique() %>%length()
 nrow(tmp)
 
-  # print("The warnings that 'no non-missing arguments to max; returning -Inf' are not problematic.")
 
 # civ$TOTAL_FARMERS %>% summary()
 # civ %>% filter(TOTAL_FARMERS > 3000) %>% View()
 
-if(anyNA(civ$TOTAL_FARMERS)){stop("Farmer number extrapolation not complete")}
 summary(civ$TOTAL_FARMERS)
 civ %>% filter(TOTAL_FARMERS==0) %>% nrow()
 civ %>% filter(TOTAL_FARMERS==0 & is.na(COMPANY)) %>% View()
@@ -2058,7 +2082,6 @@ print("Coops cumulatively disclosed were: ")
 for(year in sort(unique(civ$DISCL_YEAR))){
   civ %>% filter(DISCL_YEAR == year) %>%  pull(COOP_ID) %>% unique() %>% length() %>% paste0(" in ", year) %>% print()
 }
-if(anyNA(civ$TOTAL_FARMERS)){stop("Farmer number extrapolation not complete")}
 summary(civ$TOTAL_FARMERS)
 
 # REMOVE DUPLICATES -----------------------------

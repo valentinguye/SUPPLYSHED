@@ -120,11 +120,11 @@ nb_dst_coops_farmers_civ22 <-
   pull(COOP_ID) %>% 
   unique() %>% 
   length() 
-# identical to: 
+# NOT identical to: 
 camcy22 %>% 
   filter(!is.na(TOTAL_FARMERS)) %>% 
   nrow()
-# NO, not anymore, because this includes cooperatives for which there is info only from RFA or FT now. 
+# because this includes cooperatives for which there is info only from RFA or FT now. 
 
 # Number of coops with at least one SSI program disclosed
 nb_dst_coops_SSI_civ22 <-
@@ -156,7 +156,7 @@ compar_tbl <-
              row.names = rowna)
 names(compar_tbl) <- colna
 # nb_dst_coops_fairtrade
-# compar_tbl
+compar_tbl
 
 ```
 # Certification descriptives
@@ -167,22 +167,33 @@ names(compar_tbl) <- colna
 # Total number of farmers 
 
 # Total minimum number of farmers supplying a coop in 2022 and 2023
+camcy %>% filter(YEAR == 2019) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+camcy %>% filter(YEAR == 2019) %>% pull(TOTAL_FARMERS) %>% summary()
+
+camcy %>% filter(YEAR == 2020) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+camcy %>% filter(YEAR == 2020) %>% pull(TOTAL_FARMERS) %>% summary()
+
+camcy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+camcy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS) %>% summary()
 
 camcy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
-camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
 camcy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% summary()
+
+camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
 camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% summary()
 
 camcy22 %>% filter(is.na(TOTAL_FARMERS)) %>% View()
 
 camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
-camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
 camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
+
+camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
 camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
 
 camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
-camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
 camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% summary()
+
+camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
 camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% summary()
 
 # camlink %>% filter(YEAR == 2022) %>% distinct(COOP_ID, .keep_all = T) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
@@ -191,12 +202,18 @@ camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% summary()
 ## At least RFA
 camlink22 %>% filter(DISCLOSURE_SOURCE == "RAINFOREST ALLIANCE") %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
 camcy22$TOTAL_FARMERS_RFA %>% sum(na.rm = T)
+# Why such a difference? Because RFA does not disclose its number of farmers. We have it in TOTAL_FARMERS_RFA thanks to the CAM
 
-## At least UTZ
+# Recall that RFA includes UTZ here. But 943800 FARMERS is still too much compared to ~650 TONNES of RA&UTZ their official number
+
+# HOWEVER, PB THAT IN 2021 IT IS NOT THE SAME AT ALL, 
+
+
+camcy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS_RFA) %>% sum(na.rm = T)
 
 ## At least FT
-
 camlink22 %>% filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
+camcy22$TOTAL_FARMERS_FT %>% sum(na.rm = T)
 
 # They all supply a cooperative, i.e. the direct supply chain.  
 
@@ -204,9 +221,22 @@ camlink22 %>% filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% pull(NUM_FARMERS) %>%
 
 
 
+
 # The minimum number of farmers (after extrapolation) supplying known cooperatives is  
 
 ```
+In the public reports, in 2021, there was 
+RA: 
+126279 tonnes of RA cocoa sold from CIV (down 8% from 2020)
+162270 tonnes of RA cocoa produced in CIV (down 15% from 2020)
+
+442515 tonnes of UTZ cocoa sold from CIV (down 8% from 2020)
+485797 tonnes of UTZ cocoa produced in CIV (down 15% from 2020)
+
+That's an estimated 530k farmers. 
+`r (162270+485797)/1.222``
+
+Just 
 
 
 ## The different SSIs and their sizes

@@ -1,5 +1,8 @@
 # Purpose of this script: pre-process JRC survey data provided for the supply shed project
 # Workstation set-up ------------------------------------------------------
+library(aws.s3)
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
 
 library(tidyverse)
 library(sf)
@@ -249,13 +252,28 @@ jrc_buyer_roster =
 
 
 
-# dummy variables
+### Make booleans -------
 jrc = 
   jrc %>% 
   mutate(across(contains("_is_"), ~if_else(. %in% c("oui", "yes"), TRUE, FALSE)))
 
 # numeric variables 
 
+### Make coordinates of intermediary --------
+jrc =
+  jrc %>% 
+  mutate(
+    LONGITUDE = case_when(
+      is.na(i00q24__longitude_cp) & !is.na(i00q21__itw_longitude) & i00q22__is_cp ~ i00q21__itw_longitude, 
+      TRUE ~ i00q24__longitude_cp
+    ),
+    LATITUDE = case_when(
+      is.na(i00q24__latitude_cp) & !is.na(i00q21__itw_latitude) & i00q22__is_cp ~ i00q21__itw_latitude, 
+      TRUE ~ i00q24__latitude_cp
+    )
+  ) 
+if(nrow(jrc %>% filter(is.na(LATITUDE))) != nrow(jrc %>% filter(is.na(LATITUDE)))){
+  stop("pb in missing gps coords")}
 
 
 ## For IC2B  --------
@@ -263,8 +281,10 @@ jrc =
 # filter to coops only 
 jrc_coops = 
   jrc %>% 
-  filter(grepl("coop", i01bq3__type) |
-           grepl("coop", i01bq3_oth__type_oth))
+  filter((grepl("coop", i01bq3__type) |
+          grepl("coop", i01bq3_oth__type_oth)) & 
+         i01bq3__type != "délégué de coopérative") # remove them as they will have different values than in coops in scales etc. 
+
 
 jrc_coops %>% 
   filter(i03aq1__nb_farmers > 0 | 
@@ -324,26 +344,34 @@ jrc_coops %>%
   select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, i01bq4__name, everything()) %>% 
   View()
 
-
-### make coordinates of coop --------
-jrc_coops =
-  jrc_coops %>% 
-  mutate(
-    LONGITUDE = case_when(
-      is.na(i00q24__longitude_cp) & !is.na(i00q21__itw_longitude) & i00q22__is_cp ~ i00q21__itw_longitude, 
-      TRUE ~ i00q24__longitude_cp
-    ),
-    LATITUDE = case_when(
-      is.na(i00q24__latitude_cp) & !is.na(i00q21__itw_latitude) & i00q22__is_cp ~ i00q21__itw_latitude, 
-      TRUE ~ i00q24__latitude_cp
-    )
-  ) 
-if(nrow(jrc_coops %>% filter(is.na(LATITUDE))) != nrow(jrc_coops %>% filter(is.na(LATITUDE)))){stop("pb in missing gps coords")}
-
 jrc_coops %>% 
   filter(is.na(LONGITUDE)) %>% 
   select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, everything()) %>% 
   View()
+
+
+### Remove duplicate coops -----
+# Those are from cases where several farmers report to sell to the same coop
+jrc_coops %>% 
+  arrange(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE) %>% 
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, everything()) %>% 
+  View()
+
+# if this passes, it means all the heterogeneity between coops is captured by their identifiers.
+if(
+jrc_coops %>% 
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE,
+         starts_with("i0")) %>% 
+  distinct(.keep_all = TRUE) %>% 
+  nrow() != nrow(distinct(jrc_coops, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE))
+){stop("some info in intermediary survey responses are lost")}
+
+jrc_coops = 
+  jrc_coops %>% 
+  distinct(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, .keep_all = TRUE)
+
+nrow(jrc_coops) # so the JRC data provides info on 47 apparently distinct (at this stage) coops.
+# This is consistent with what Jens Van Hee counts.  
 
 
 ### Departmenet and locality names --------
@@ -451,13 +479,14 @@ jrc_coops$TRADER_NAME %>% unique()
 jrc_coops = 
   jrc_coops %>% 
   mutate(
-    DISCL_TOTAL_FARMERS = case_when(
+    TOTAL_FARMERS = case_when(
       !is.na(i03aq1__nb_farmers) ~ i03aq1__nb_farmers,
       !is.na(i03cq15__coop_nb_members) ~ as.integer(i03cq15__coop_nb_members),
       TRUE ~ as.integer(i03cq16__coop_nb_members_2014)
-    ), 
-    NUMBER_FARMERS = i04aq17__tonne_supply_2019 / 1.222 
+    )#, 
+    # NUMBER_FARMERS = i04aq17__tonne_supply_2019 / 1.222 # don't do until we solve the outlier issue in i04aq17
   ) 
+jrc_buyer_roster$i04aq17__tonne_supply_2019 %>% summary()
 
 ### Certification ------ 
 # I didn't ask for this variable actually (i04aq25, i04aq26 etc.)
@@ -475,7 +504,26 @@ jrc_coops_merge =
          YEAR = 2019) %>% # jrc$i00q21__itw_date %>% unique()
   select(YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME,  
          DISTRICT_GEOCODE, LOCALITY_NAME, COUNTRY_NAME, TRADER_NAME, 
-         NUMBER_FARMERS, TOTAL_FARMERS)  # order does not matter
+         # NUMBER_FARMERS, 
+         TOTAL_FARMERS)  # order does not matter
+
+## For SUPPLY SHED MODEL ------
+# we don't restrict to jrc_coops 
+
+farm_pt = 
+  jrc %>% 
+  select(starts_with("s0")) %>% 
+  filter(!is.na(s00q12__itw_longitude) & !is.na(s00q12__itw_latitude)) %>% 
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"))
+
+itm_pt = 
+  jrc %>% 
+  select(!starts_with("s0")) %>% 
+  filter(!is.na(LONGITUDE) & !is.na(LATITUDE)) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"))
+
+
+
 
 # EXPORT -----
 

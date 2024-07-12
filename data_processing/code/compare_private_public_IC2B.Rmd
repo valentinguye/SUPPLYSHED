@@ -1,0 +1,360 @@
+---
+title: "compare_private_public_IC2B"
+author: "Valentin"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Set up and inputs
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(aws.s3)
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
+
+library(tidyverse)
+library(sf)
+library(readxl)
+library(xlsx)
+library(stringr)
+library(DescTools)
+library(rnaturalearth)
+library(ggpubr)
+library(units)
+library(scales)
+library(kableExtra)
+library(here)
+library(pals)
+
+## Functions
+# Trase palettes etc. for plots
+source(here("code", "theme_trase.R"))
+
+# load in particular the function fn_trader_to_group_names, str_trans, ... 
+source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+
+## Assets
+
+# Private
+camcy_pri = read.csv(
+  file = here("temp_data/private_IC2B/IC2B_coop.csv"))
+# keep it named like this for consistency with earlier script version. 
+# Elsewhere, this object is called cam_long.  
+camlink_pri = read.csv(
+  file = here("temp_data/private_IC2B/IC2B_link.csv"))
+
+# Public
+camcy_pub <- s3read_using(
+  object = "cote_divoire/cocoa/logistics/out/CAM_V4/CAM_coopyear.csv", 
+  bucket = "trase-storage",
+  FUN = read.csv2,
+  opts = c("check_region" = TRUE)
+)
+camlink_pub <- s3read_using(
+  object = "cote_divoire/cocoa/logistics/out/CAM_V4/CAM_seipcs.csv", 
+  bucket = "trase-storage",
+  FUN = read.csv2,
+  opts = c("check_region" = TRUE)
+)
+
+departements <- s3read_using(
+  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson", 
+  bucket = "trase-storage",
+  FUN = read_sf,
+  #sheet = "Cacao", 
+  #skip = 3,
+  opts = c("check_region" = T)
+)
+
+# to plot coordinate axis labels in (with geom_sf) correctly 
+xlabs = seq(-8, -4, 2)
+ylabs = seq(5, 11, 2)
+```
+
+## Pre-processing
+```{r}
+
+# At LINK LEVEL
+camlink_pri = 
+  camlink_pri %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+camlink_pub = 
+  camlink_pub %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+# At COOP YEAR LEVEL
+camcy_pri = 
+  camcy_pri %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCES %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+camcy_pub = 
+  camcy_pub %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCES %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+```
+
+
+# PRIVATE IC2B annual descriptives 
+```{r}
+annual_stats <- list()
+
+for(y in 2019:2023){
+  camcy <- 
+    camcy_pri %>% 
+    filter(YEAR==y)
+  
+  camlink <- 
+    camlink_pri %>% 
+    filter(YEAR==y) 
+  
+  # distinct coops identified
+  nb_dst_coops_civ <- 
+    nrow(camcy)
+  
+  # distinct disclosing companies 
+  # camlink$DISCLOSURE_SOURCE %>% unique() 
+  
+  
+  # coop-company links identified
+  nb_coop_comp_links_civ <- 
+    camlink %>% 
+    filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "JOINT RESEARCH CENTER")) %>% 
+    nrow()
+  
+  
+  # distinct coops linked with a company
+  nb_dst_linked_coops_civ <-
+    camlink %>% 
+    filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "JOINT RESEARCH CENTER")) %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  # Coops with info on number of farmers
+  nb_dst_coops_farmers_civ <-
+    camlink %>% 
+    filter(!all(is.na(DISCL_NUMBER_FARMERS)), .by = COOP_ID) %>% 
+    pull(COOP_ID) %>% 
+    unique() %>% 
+    length() 
+  # NOT identical to: 
+  camcy %>% 
+    filter(!is.na(TOTAL_FARMERS)) %>% 
+    nrow()
+  # because this includes cooperatives for which there is info only from RFA or FT now. 
+  
+  # Number of coops with at least one SSI program disclosed
+  nb_dst_coops_SSI_civ <-
+  camlink %>% 
+    filter(HAS_SSI) %>% 
+    pull(COOP_ID) %>% 
+    unique() %>% 
+    length() 
+  
+  # distinct coops RFA or UTZ certified
+  nb_dst_coops_rfa <-
+    camlink %>% 
+    filter(grepl("RAINFOREST ALLIANCE|UTZ", CERTIFICATIONS)) %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  # distinct coops FT certified
+  nb_dst_coops_ft <-
+    camlink %>% 
+    filter(grepl("FAIRTRADE", CERTIFICATIONS)) %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  if(
+  camcy %>% 
+    filter(grepl("FAIRTRADE", CERTIFICATIONS)) %>% 
+    nrow() != nb_dst_coops_ft){
+    stop("there is a pb in link vs. coop data relation")
+  }
+  
+  # distinct coops disclosed by FAIRTRADE
+  nb_dst_coops_discl_ft <-
+    camlink %>% 
+    filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  nb_coop_farmers <- 
+    camcy$TOTAL_FARMERS %>% 
+    sum(na.rm = T)
+  
+  # Store everything in a table 
+  colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops RFA/UTZ", "Coops FT", "Coops with a SSI", "Number of farmers")
+  rowna <- c(paste0(y)) 
+  
+  compar_tbl <- 
+    data.frame("A" = c(nb_dst_coops_civ), 
+               "B" = c(nb_coop_comp_links_civ),
+               "C" = c(nb_dst_linked_coops_civ),
+               "D" = c(nb_dst_coops_farmers_civ),
+               "E" = c(nb_dst_coops_rfa),
+               "F" = c(nb_dst_coops_ft),
+               "G" = c(nb_dst_coops_SSI_civ),
+               "H" = c(nb_coop_farmers),
+               row.names = rowna) 
+  names(compar_tbl) <- colna
+  
+  compar_tbl = 
+    compar_tbl %>% 
+    mutate(`Avg nb farmers per coop with info` = `Number of farmers` / `Coops with some farmer info`)
+  
+  # nb_dst_coops_fairtrade
+  annual_stats[[as.character(y)]] <- compar_tbl
+  
+  rm(camcy, camlink)
+}
+
+private_stats <- bind_rows(annual_stats)
+
+```
+
+
+# PUBLIC IC2B annual descriptives 
+```{r}
+annual_stats <- list()
+
+for(y in 2019:2023){
+  camcy <- 
+    camcy_pub %>% 
+    filter(YEAR==y)
+  
+  camlink <- 
+    camlink_pub %>% 
+    filter(YEAR==y) 
+  
+  # distinct coops identified
+  nb_dst_coops_civ <- 
+    nrow(camcy)
+  
+  # distinct disclosing companies 
+  # camlink$DISCLOSURE_SOURCE %>% unique() 
+  
+  
+  # coop-company links identified
+  nb_coop_comp_links_civ <- 
+    camlink %>% 
+    filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "JOINT RESEARCH CENTER")) %>% 
+    nrow()
+  
+  
+  # distinct coops linked with a company
+  nb_dst_linked_coops_civ <-
+    camlink %>% 
+    filter(!is.na(DISCLOSURE_SOURCE) & !DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "JOINT RESEARCH CENTER")) %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  # Coops with info on number of farmers
+  nb_dst_coops_farmers_civ <-
+    camlink %>% 
+    filter(!all(is.na(DISCL_NUMBER_FARMERS)), .by = COOP_ID) %>% 
+    pull(COOP_ID) %>% 
+    unique() %>% 
+    length() 
+  # NOT identical to: 
+  camcy %>% 
+    filter(!is.na(TOTAL_FARMERS)) %>% 
+    nrow()
+  # because this includes cooperatives for which there is info only from RFA or FT now. 
+  
+  # Number of coops with at least one SSI program disclosed
+  nb_dst_coops_SSI_civ <-
+  camlink %>% 
+    filter(HAS_SSI) %>% 
+    pull(COOP_ID) %>% 
+    unique() %>% 
+    length() 
+  
+  # distinct coops RFA or UTZ certified
+  nb_dst_coops_rfa <-
+    camlink %>% 
+    filter(grepl("RAINFOREST ALLIANCE|UTZ", CERTIFICATIONS)) %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  # distinct coops FT certified
+  nb_dst_coops_ft <-
+    camlink %>% 
+    filter(grepl("FAIRTRADE", CERTIFICATIONS)) %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  if(
+  camcy %>% 
+    filter(grepl("FAIRTRADE", CERTIFICATIONS)) %>% 
+    nrow() != nb_dst_coops_ft){
+    stop("there is a pb in link vs. coop data relation")
+  }
+    
+  # distinct coops disclosed by FAIRTRADE
+  nb_dst_coops_discl_ft <-
+    camlink %>% 
+    filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% 
+    select(COOP_ID) %>% 
+    unique() %>% 
+    nrow() 
+  
+  nb_coop_farmers <- 
+    camcy$TOTAL_FARMERS %>% 
+    sum(na.rm = T)
+  
+  # Store everything in a table 
+  colna <- c("Distinct cooperatives", "Coop-company links", "Coops linked with a company", "Coops with some farmer info", "Coops RFA/UTZ", "Coops FT", "Coops with a SSI", "Number of farmers")
+  rowna <- c(paste0(y)) 
+  
+  compar_tbl <- 
+    data.frame("A" = c(nb_dst_coops_civ), 
+               "B" = c(nb_coop_comp_links_civ),
+               "C" = c(nb_dst_linked_coops_civ),
+               "D" = c(nb_dst_coops_farmers_civ),
+               "E" = c(nb_dst_coops_rfa),
+               "F" = c(nb_dst_coops_ft),
+               "G" = c(nb_dst_coops_SSI_civ),
+               "H" = c(nb_coop_farmers),
+               row.names = rowna) 
+  names(compar_tbl) <- colna
+  
+  compar_tbl = 
+    compar_tbl %>% 
+    mutate(`Avg nb farmers per coop with info` = `Number of farmers` / `Coops with some farmer info`)
+  
+  # nb_dst_coops_fairtrade
+  annual_stats[[as.character(y)]] <- compar_tbl
+  
+  rm(camcy, camlink)
+
+}
+
+public_stats <- bind_rows(annual_stats)
+
+
+public_stats
+private_stats 
+```
