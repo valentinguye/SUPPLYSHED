@@ -356,7 +356,8 @@ ftpro =
 ftmerge =
   ftpro %>% 
   mutate(COUNTRY_NAME = "IVORY_COAST", 
-         YEAR = 2022) %>% # that's arbitrary
+         YEAR = 2019) %>% # that's arbitrary, just make it start the same year as all disclosures start, with the CAM, 
+                          # so it's repeated the same way.
   select(YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, # TRADER_NAME, 
          AREA_NAME, COUNTRY_NAME, CERTIFICATION_NAME, NUMBER_FARMERS)  # order does not matter
 
@@ -924,9 +925,10 @@ civ %>%
 civ <- mutate(civ, SIMPLIF_ABRVNAME = fn_clean_abrvname3(SUPPLIER_ABRVNAME))
 
 # Prepare rounded coordinates (from already imputed ones)
-# Rounding at 2 decimal places in degrees implies that 1.005 and 1.0051 round to 1 and 1.01 resp. 
-# this is a spurious difference of 0.01 degree which is 1.1km at equator. 
-# This also means that things as different as 0.0051 and 1.005 (apart from 1.1km) are deemed at the same place. 
+# Rounding at 1 decimal place in degrees implies that 1.05 and 1.051 round to 1.0 and 1.1 resp. 
+# this is a spurious difference of ~0.1 degree which is ~11km at equator. 
+# This also means that things as different as 0.051 and 1.05 (apart of 11km) are deemed at the same place. 
+
 civ <- 
   mutate(civ, 
          ROUND_LONGITUDE = round(LONGITUDE, 1), 
@@ -952,7 +954,6 @@ civ %>% filter(grepl("CAREPCI", SUPPLIER_ABRVNAME)) %>% View()
 
 ### ### ### ### ### ### 
 
-## HOMOGENIZE
 # Group on full name and round coords, homogenize abrv name based on unique simplified abrv name. 
 # ... (i.e., it homogenizes also cases where, e.g., "COOP CA ABCD" and "ABCD COOP CA" have the same full name and round coords).
 civ0 <- civ
@@ -1014,6 +1015,7 @@ civ <-
          missing_full = is.na(SUPPLIER_FULLNAME))
 
 
+
 ### ### ### ### ### 
 ## FILL ALL-MISSING within cleanly identified (ie. by a name and coords) coops.  
 civ %>% filter(missing_abrv) %>% nrow()
@@ -1058,6 +1060,8 @@ civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% nrow()
 # civ %>% filter(grepl("ADA", SUPPLIER_ABRVNAME, ignore.case = T)) %>% View()
 
 
+
+
 ### STAGE 4 - DIFFERENTIATE ---------------------------------
 civ %>% filter(is.na(LONGITUDE) & !is.na(LATITUDE)) %>% nrow() 
 civ %>% filter(is.na(LATITUDE) & !is.na(LONGITUDE)) %>% nrow()
@@ -1070,8 +1074,8 @@ civ %>% filter(is.na(LATITUDE) & !is.na(LONGITUDE)) %>% nrow()
 # Make a long concatenation ID 
 civ <- 
   civ %>% 
-  mutate(CCTN_COOP_ID = paste0(SUPPLIER_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
-  arrange(CCTN_COOP_ID)
+  mutate(CCTN_COOP_POINT_ID = paste0(SUPPLIER_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
+  arrange(CCTN_COOP_POINT_ID)
 
 civ_save1 <- civ
 
@@ -1082,14 +1086,14 @@ civ_save1 <- civ
 # private inputs in the process above
 arbitrary_ids = 
     civ %>% 
-    distinct(CCTN_COOP_ID) %>%
-    mutate(COOP_ID = row_number()) # Arbitrary coop id, based on order (arrange above)
+    distinct(CCTN_COOP_POINT_ID) %>%
+    mutate(COOP_POINT_ID = row_number()) # Arbitrary coop id, based on order (arrange above)
 civ = 
   civ %>% 
   left_join(arbitrary_ids, 
-            by = "CCTN_COOP_ID") 
+            by = "CCTN_COOP_POINT_ID") 
 
-if(length(unique(civ$COOP_ID)) != nrow(arbitrary_ids)){stop("something wrong")}
+if(length(unique(civ$COOP_POINT_ID)) != nrow(arbitrary_ids)){stop("something wrong")}
 
 rm(arbitrary_ids)
 
@@ -1097,7 +1101,7 @@ rm(arbitrary_ids)
 # this is just to keep track of where the info comes from
 civ <- 
   civ %>% 
-  group_by(COOP_ID) %>% 
+  group_by(COOP_POINT_ID) %>% 
   mutate(
     IS_ALL_CAM_V3 = case_when(
       !all(IS_CAM_V3) ~ FALSE, 
@@ -1118,7 +1122,7 @@ civ %>% #filter(grepl("COASADA", SUPPLIER_ABRVNAME, ignore.case = T)) %>%
   # filter(SUPPLIER_ABRVNAME=="SOCEADAHS") %>% 
   select(DISCL_SUPPLIER_ABRVNAME, DISCL_SUPPLIER_FULLNAME, DISCL_LONGITUDE, DISCL_LATITUDE, 
          SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, ROUND_LONGITUDE, ROUND_LATITUDE, 
-         COOP_ID) %>%  View()
+         COOP_POINT_ID) %>%  View()
 
 civ %>% filter(grepl("COPACOL", SUPPLIER_ABRVNAME, ignore.case = T)) %>% 
   arrange(SUPPLIER_FULLNAME) %>% 
@@ -1126,7 +1130,7 @@ civ %>% filter(grepl("COPACOL", SUPPLIER_ABRVNAME, ignore.case = T)) %>%
   # filter(SUPPLIER_ABRVNAME=="SOCEADAHS") %>% 
   select(COMPANY, DISCL_SUPPLIER_ABRVNAME, DISCL_SUPPLIER_FULLNAME, DISCL_LONGITUDE, DISCL_LATITUDE, 
          SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, ROUND_LONGITUDE, ROUND_LATITUDE, 
-         COOP_ID) %>%  View()
+         COOP_POINT_ID) %>%  View()
 
 
 civ <- select(civ, -missing_full, -missing_coords, -missing_abrv, 
@@ -1154,7 +1158,7 @@ civ <- select(civ, -missing_full, -missing_coords, -missing_abrv,
 # 
 # imp_coords <- 
 #   civ %>% 
-#   select(COOP_ID, DISTRICT_GEOCODE, LONGITUDE, LATITUDE) %>% 
+#   select(COOP_POINT_ID, DISTRICT_GEOCODE, LONGITUDE, LATITUDE) %>% 
 #   filter(!is.na(LONGITUDE)) %>% 
 #   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326) %>% 
 #   st_transform(crs = st_crs(departements))
@@ -1167,24 +1171,28 @@ civ <- select(civ, -missing_full, -missing_coords, -missing_abrv,
 # 
 # pb_ids <- imp_coords %>% 
 #   filter(!is.na(DISTRICT_GEOCODE) & DISTRICT_GEOCODE != LVL_4_CODE) %>% 
-#   select(COOP_ID) %>% 
+#   select(COOP_POINT_ID) %>% 
 #   st_drop_geometry() %>% unlist()
 # 
-# mismatches <- imp_coords %>% filter(COOP_ID %in% pb_ids) 
+# mismatches <- imp_coords %>% filter(COOP_POINT_ID %in% pb_ids) 
 # departements[departements$LVL_4_CODE %in% mismatches$DISTRICT_GEOCODE,] %>% st_geometry() %>% plot()
 # mismatches %>% st_geometry() %>% plot(add=T, col = "red")
 # 
 # civ %>% filter(grepl("ECSP", SUPPLIER_ABRVNAME, ignore.case = T)) %>% View()
 
 
+
 # ATTRIBUTE DISTRICT (departement) GEOCODE -----------------------------------------
 
+# Do this here, at point (and not coop) level, i.e. before buying stations, because now 
+# district is an attribute of a point, not necessarily a coop
+
 civ0 <- civ
-# First on the basis of coordinates 
+### From coordinates  ----
 # Make spatial
 civ_coords <- 
   civ %>%
-  select(COOP_ID, DISTRICT_GEOCODE, LONGITUDE, LATITUDE) %>%
+  select(COOP_POINT_ID, DISTRICT_GEOCODE, LONGITUDE, LATITUDE) %>%
   filter(!is.na(LONGITUDE)) %>%
   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326) %>%
   st_transform(crs = st_crs(departements))
@@ -1218,11 +1226,11 @@ mis <- st_transform(mis, crs = 4326)
 civ <- 
   civ %>% mutate(
     LONGITUDE = case_when(
-      COOP_ID %in% mis$COOP_ID ~ NA, 
+      COOP_POINT_ID %in% mis$COOP_POINT_ID ~ NA, 
       TRUE ~ LONGITUDE
     ), 
     LATITUDE = case_when(
-      COOP_ID %in% mis$COOP_ID ~ NA, 
+      COOP_POINT_ID %in% mis$COOP_POINT_ID ~ NA, 
       TRUE ~ LATITUDE
     ))
 rm(mis)
@@ -1231,12 +1239,12 @@ rm(mis)
 civ_coords <- 
   civ_coords %>% 
   st_drop_geometry() %>% 
-  select(COOP_ID, LVL_4_CODE) %>% 
-  distinct(COOP_ID, .keep_all = TRUE) # keep only distinct coop ids for the join below
+  select(COOP_POINT_ID, LVL_4_CODE) %>% 
+  distinct(COOP_POINT_ID, .keep_all = TRUE) # keep only distinct coop ids for the join below
 
 civ <- 
   civ %>% 
-  left_join(civ_coords, by = "COOP_ID")
+  left_join(civ_coords, by = "COOP_POINT_ID")
 
 # Take geocode infered from coordinates where it was not already available 
 # (and keep initial district geocode in (3) conflicting cases)
@@ -1253,7 +1261,7 @@ civ <-
 # Extend district info from some disclosures to others within the same coop 
 civ <- 
   civ %>%
-  group_by(COOP_ID) %>% 
+  group_by(COOP_POINT_ID) %>% 
   mutate(
     DISTRICT_GEOCODE = case_when(
       is.na(DISTRICT_GEOCODE) ~ unique_unique(DISTRICT_GEOCODE), 
@@ -1264,25 +1272,31 @@ civ <-
 
 all_imp_rows <- setdiff(civ, civ0)
 all_imp_rows %>% nrow() %>% print()
-worthit_imp_grps_dept <- civ %>% filter(COOP_ID %in% all_imp_rows$COOP_ID)
+worthit_imp_grps_dept <- civ %>% filter(COOP_POINT_ID %in% all_imp_rows$COOP_POINT_ID)
 
 # NOT all obs. with a geocode have coordinates. 
-civ %>% filter(is.na(LONGITUDE) & !is.na(DISTRICT_GEOCODE))
+civ %>% filter(is.na(LONGITUDE) & !is.na(DISTRICT_GEOCODE)) %>% nrow()
 # All obs. with coordinates have a geocode 
-civ %>% filter(!is.na(LONGITUDE) & is.na(DISTRICT_GEOCODE))
+civ %>% filter(!is.na(LONGITUDE) & is.na(DISTRICT_GEOCODE)) %>% nrow()
+
+
+### From area name ----
 
 # Attribute District geocode where still not available from coordinates etc. above, but 
 # where a locality name is provided. 
-civ$DISCL_AREA_NAME <- toupper(civ$DISCL_AREA_NAME)
-unique(civ$DISCL_AREA_NAME)
+civ$AREA_NAME <- fn_clean_department_names(str_trans(civ$DISCL_AREA_NAME))
+unique(civ$AREA_NAME) %>% sort()
+# there are quite dirty names 
+civ %>% filter(is.na(LONGITUDE)) %>% pull(AREA_NAME) %>% unique() %>% sort()
 
 lvl4 <- departements %>% st_drop_geometry() %>% select(LVL_4_NAME, LVL_4_CODE)
+lvl4$LVL_4_NAME %>% sort()
 
 # join the LVL_4_CODE column, based on equality of disclosed area name and LVL_4_NAME
 civ <- 
   civ %>% 
-  left_join(lvl4, by = c("DISCL_AREA_NAME" = "LVL_4_NAME"))
-# civ %>% select(COOP_ID, DISCL_AREA_NAME, DISTRICT_NAME, DISTRICT_GEOCODE, LVL_4_CODE) %>% View()
+  left_join(lvl4, by = c("AREA_NAME" = "LVL_4_NAME"))
+# civ %>% select(COOP_POINT_ID, AREA_NAME, DISTRICT_NAME, DISTRICT_GEOCODE, LVL_4_CODE) %>% View()
 
 # attribute LVL_4_CODE to DISTRICT_GEOCODE when the latter is missing (which is also when coordinates are missing at this point)
 civ <- 
@@ -1302,6 +1316,276 @@ civ <-
   left_join(lvl4, 
             by = c("DISTRICT_GEOCODE" = "LVL_4_CODE")) %>% 
   mutate(DISTRICT_NAME = LVL_4_NAME) 
+
+civ$DISTRICT_NAME %>% unique() %>% sort()
+
+# Homogenize district info 
+if(anyNA(civ$COOP_POINT_ID)){stop("this is not expected and an issue for the homogenization below")}
+
+# one case is problematic, with SOCAS being disclosed both in DIVO and ABOISSO, 
+# and no more info to decide.
+# Based on below link, let's force it being in Aboisso
+# https://www.goafricaonline.com/ci/80521-socas-cafe-cacao-aboisso-cote-ivoire
+civ <- 
+  civ %>% 
+  mutate(
+    DISTRICT_GEOCODE = case_when(
+      DISCL_SUPPLIER_ABRVNAME == "SOCAS COOP CA" ~ "CI-3.2.1_1", 
+      TRUE ~ DISTRICT_GEOCODE
+    ), 
+    DISTRICT_NAME = case_when(
+      DISCL_SUPPLIER_ABRVNAME == "SOCAS COOP CA" ~ "ABOISSO", 
+      TRUE ~ DISTRICT_NAME
+    ))
+
+# homogenize
+civ <- 
+  civ %>% 
+  group_by(COOP_POINT_ID) %>% 
+  mutate(
+    DISTRICT_GEOCODE = case_when(
+      !all(is.na(DISTRICT_GEOCODE)) & is.na(DISTRICT_GEOCODE) ~ unique_mode(DISTRICT_GEOCODE),
+      all(is.na(DISTRICT_GEOCODE)) ~ NA_character_, 
+      TRUE ~ DISTRICT_GEOCODE
+    )) %>% 
+  ungroup()
+
+civ %>% filter(COOP_POINT_ID==4) %>% View()
+
+# check that if a link to a coop has a known district, then all links from this coop have
+if(
+  civ %>% 
+  group_by(COOP_POINT_ID) %>% 
+  mutate(NOT_HOMOGENIZED = !all(is.na(DISTRICT_GEOCODE)) & !all(!is.na(DISTRICT_GEOCODE))) %>% 
+  ungroup() %>% 
+  filter(NOT_HOMOGENIZED) %>% nrow() > 0
+){stop("department info homogenization not complete")}  
+
+
+# BUYING STATIONS -----
+# Regroup spatially distinct points into the same coop, as they can represent a coop's buying stations.
+### ### ### ### ### 
+## IDENTIFY BUYING STATIONS 
+# Now, we want to detect buying stations. We allow them to be 50km, arbitrarily, from the headquarters.  
+# Later, we could refine this parameter with something learned empirically.
+hq_bs_max_km <- 50
+
+# We don't use rounded coordinates because this is quite rough as it introduces arbitrary cut-offs (around 5)
+# It's cleaner to proceed as follows: 
+
+# Identify groups of links that have the same coop name and are in close distance. 
+# then homogenize info within them. 
+
+# Spatialize
+civ_sf <- 
+  civ %>%
+  filter(!is.na(LONGITUDE)) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
+# for every spatialized point, find the index of all points closer than hq_bs_max_km
+distances_civ <- 
+  civ_sf %>% 
+  st_distance()
+# this produces a list column, with every element being a vector of the index of points closer than the threshold. 
+civ_sf$CLOSE_INDEXES <- apply(distances_civ, 1, function(x) {which(x<=hq_bs_max_km*1e3) }) # st_distance returns meters
+# /!\ these are indexes OF CIV_SF, not civ. 
+
+civ_sf <- 
+  civ_sf %>% 
+  st_drop_geometry()
+
+# add indexes of those in the same district
+civ_sf <- 
+  civ_sf %>% 
+  group_by(DISTRICT_GEOCODE) %>% 
+  mutate(DISTR_INDEXES = list(cur_group_rows())) %>% 
+  ungroup() %>% 
+  # merge close and distr indexes
+  rowwise() %>% 
+  mutate(COORDS_INDEXES = list(unique(CLOSE_INDEXES, DISTR_INDEXES)))
+
+# no instance of coops being in the same district but outside the 50km range
+civ_sf %>% 
+  filter(length(COORDS_INDEXES) > length(CLOSE_INDEXES)) %>% nrow()
+# ~7000 coops (links actually), out of 7700, match more coops with the 50km-radius criteria than with the within-district criteria only. 
+civ_sf %>% 
+  filter(length(COORDS_INDEXES) > length(DISTR_INDEXES)) %>% nrow()
+
+
+# for every point, retrieve the full and abrv names of all close by points
+civ_sf2 <- 
+  civ_sf %>% 
+  rowwise() %>% 
+  # in a given row, the value of COORDS_INDEXES is the vector of indexes of rows close to this row's location
+  # civ_sf[COORDS_INDEXES,]$SUPPLIER_FULLNAME] are these rows' coop full names
+  # we return only elements of COORDS_INDEXES for which there is a name match
+  mutate(
+    COORDS_FULL_INDEXES = list(COORDS_INDEXES[which(SUPPLIER_FULLNAME == civ_sf[COORDS_INDEXES, ]$SUPPLIER_FULLNAME)] ),
+    COORDS_ABRV_INDEXES = list(COORDS_INDEXES[which(SUPPLIER_ABRVNAME == civ_sf[COORDS_INDEXES, ]$SUPPLIER_ABRVNAME)] )
+  ) 
+# note that which() gets rid of NAs, it only returns indexes of elements that evaluate as TRUE. 
+# --> when there is no other match than self match, the indexes var is length 1. 
+# --> when the name is NA, the value returned in the list is numeric(0)
+# Store the latter apart (currently there's none, as all rows have either a full or an abrv name)
+civ_sf2_noidx <- 
+  civ_sf2 %>% 
+  filter(length(COORDS_FULL_INDEXES) + length(COORDS_ABRV_INDEXES) == 0)
+# and remove them from the initial df  
+civ_sf2 <- 
+  civ_sf2 %>% 
+  filter(length(COORDS_FULL_INDEXES) + length(COORDS_ABRV_INDEXES) > 0)
+
+# Some tests
+arbi <- 1
+test <- civ_sf2[arbi,]
+x <- unlist(test$COORDS_INDEXES) # the indexes of points that are close to point #1
+distances_civ[arbi,] # all the distances from point #1
+distances_civ[arbi,unlist(test$COORDS_INDEXES)] # only the distances of indexes close to point #1 
+if(any(distances_civ[arbi, unlist(test$COORDS_INDEXES)] > as_units(hq_bs_max_km*1e3, "m") )){
+  stop("pb in identification of close by indexes")
+}
+test$SUPPLIER_FULLNAME # the name of coop in point #1
+civ_sf2[x,]$SUPPLIER_FULLNAME # the names of coops close by 
+# the indexes of coops close by that have the same name as coop in point #1
+x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)] 
+# this should be the same as:
+if(!all.equal(x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)], 
+              unlist(civ_sf2[arbi, ]$COORDS_FULL_INDEXES))){
+  stop("indexes are not correct")
+}
+# their names
+civ_sf2[x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)], ]$SUPPLIER_FULLNAME
+if(civ_sf2[x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)], ]$SUPPLIER_FULLNAME %>% 
+   unique() != test$SUPPLIER_FULLNAME){stop()}
+
+# Now make an ID that groups rows with same name (either full or abbreviated) and are close by (within range or district)
+civ_sf2 <- 
+  civ_sf2 %>% 
+  mutate(COORDS_FULL_INDEXES = list(sort(unlist(COORDS_FULL_INDEXES))),
+         COORDS_ABRV_INDEXES = list(sort(unlist(COORDS_ABRV_INDEXES)))) %>%
+  # mutate(COORDS_FULL_INDEXES = case_when(
+  #          length(COORDS_FULL_INDEXES) == 0 ~ list(sort(COORDS_FULL_INDEXES)),
+  #          TRUE ~ list(sort(COORDS_FULL_INDEXES))), 
+  #         
+  #        COORDS_ABRV_INDEXES = case_when(
+  #          length(COORDS_ABRV_INDEXES) == 0 ~ list(sort(COORDS_ABRV_INDEXES)),
+  #          TRUE ~ list(sort(COORDS_ABRV_INDEXES)))
+  #        ) %>% 
+  group_by(COORDS_FULL_INDEXES) %>% 
+  mutate(FULLNAME_ID = paste0("COORDS_", cur_group_id())) %>% 
+  ungroup() %>% 
+  group_by(COORDS_ABRV_INDEXES) %>% 
+  mutate(ABRVNAME_ID = paste0("COORDS_", cur_group_id())) %>% 
+  ungroup() 
+
+
+# Repeat process for those without coordinates but with district info
+civ_nosf_d <- 
+  civ %>%
+  filter(is.na(LONGITUDE) & !is.na(DISTRICT_GEOCODE))
+
+civ_nosf_d <- 
+  civ_nosf_d %>% 
+  group_by(DISTRICT_GEOCODE) %>% 
+  mutate(DISTR_INDEXES = list(cur_group_rows())) %>% 
+  ungroup() 
+
+# for every point, retrieve the full and abrv names of all same-district points
+civ_nosf_d2 <- 
+  civ_nosf_d %>% 
+  rowwise() %>% 
+  # in a given row, the value of DISTR_INDEXES is the vector of indexes of rows in the same district as this row's coop
+  # civ_nosf_d[DISTR_INDEXES,]$SUPPLIER_FULLNAME] are these rows' coop full names
+  # we return only elements of DISTR_INDEXES for which there is a name match
+  mutate(
+    DISTR_FULL_INDEXES = list(DISTR_INDEXES[which(SUPPLIER_FULLNAME == civ_nosf_d[DISTR_INDEXES, ]$SUPPLIER_FULLNAME)] ),
+    DISTR_ABRV_INDEXES = list(DISTR_INDEXES[which(SUPPLIER_ABRVNAME == civ_nosf_d[DISTR_INDEXES, ]$SUPPLIER_ABRVNAME)] )
+  ) 
+# note that which() gets rid of NAs, it only returns indexes of elements that evaluate as TRUE. 
+# --> when there is no other match than self match, the indexes var is length 1. 
+# --> when the name is NA, the value returned in the list is numeric(0)
+# Store the latter apart (currently there's none, as all rows have either a full or an abrv name)
+civ_nosf_d2_noidx <- 
+  civ_nosf_d2 %>% 
+  filter(length(DISTR_FULL_INDEXES) + length(DISTR_ABRV_INDEXES) == 0)
+# and remove them from the initial df  
+civ_nosf_d2 <- 
+  civ_nosf_d2 %>% 
+  filter(length(DISTR_FULL_INDEXES) + length(DISTR_ABRV_INDEXES) > 0)
+
+# Now make an ID that groups rows with same name (either full or abbreviated) and are within district)
+civ_nosf_d2 <- 
+  civ_nosf_d2 %>% 
+  mutate(DISTR_FULL_INDEXES = list(sort(unlist(DISTR_FULL_INDEXES))),
+         DISTR_ABRV_INDEXES = list(sort(unlist(DISTR_ABRV_INDEXES)))) %>%
+  
+  group_by(DISTR_FULL_INDEXES) %>% 
+  mutate(FULLNAME_ID = paste0("DISTR_", cur_group_id())) %>% 
+  ungroup() %>% 
+  group_by(DISTR_ABRV_INDEXES) %>% 
+  mutate(ABRVNAME_ID = paste0("DISTR_", cur_group_id())) %>% 
+  ungroup()
+
+# Produce IDs for the remainder of the data, those rows without coords nor district info
+civ_nosf_nod <- 
+  civ %>% 
+  filter(is.na(LONGITUDE) & is.na(DISTRICT_GEOCODE)) %>% 
+  # also add these in case they are not null in future versions of the input data
+  rbind(civ_sf2_noidx %>% 
+          select(-CLOSE_INDEXES, -DISTR_INDEXES, -COORDS_INDEXES, -COORDS_FULL_INDEXES, -COORDS_ABRV_INDEXES), 
+        civ_nosf_d2_noidx %>% 
+          select(-DISTR_INDEXES, -DISTR_FULL_INDEXES, -DISTR_ABRV_INDEXES)
+        )
+
+
+civ_nosf_nod2 <- 
+  civ_nosf_nod %>% 
+  mutate(FULLNAME_ID = paste0("NONE_", row_number()),
+         ABRVNAME_ID = FULLNAME_ID)
+  
+# Stack everything
+civ_save3 <- civ
+
+if(nrow(civ_sf) + nrow(civ_nosf_d) + nrow(civ_nosf_nod) != nrow(civ)){stop("data unperfectly split")}
+
+if(nrow(civ_sf2) + nrow(civ_nosf_d2) + nrow(civ_nosf_nod) != nrow(civ)){stop("data unperfectly split")}
+
+# also, because we have homogenized above, the split based on coords and district info availability 
+# is aligned with coop ids: 
+if(
+  length(base::intersect(civ_sf$COOP_POINT_ID, civ_nosf_d$COOP_POINT_ID)) > 0 |
+  length(base::intersect(civ_sf$COOP_POINT_ID, civ_nosf_nod$COOP_POINT_ID)) > 0 | 
+  length(base::intersect(civ_nosf_d$COOP_POINT_ID, civ_nosf_nod$COOP_POINT_ID)) > 0 
+  ){stop("point ids split between groups within which we make coop ids")}
+  
+
+civ <- 
+  rbind(
+    civ_sf2 %>% 
+    select(-CLOSE_INDEXES, -DISTR_INDEXES, -COORDS_INDEXES, -COORDS_FULL_INDEXES, -COORDS_ABRV_INDEXES),
+  
+    civ_nosf_d2 %>% 
+    select(-DISTR_INDEXES, -DISTR_FULL_INDEXES, -DISTR_ABRV_INDEXES),
+  
+    civ_nosf_nod2
+  )
+
+# There are several things to handle from here:
+
+# - numeric(0) indexes, i.e. those that have no name or that matched no other name in the 50km radius.  
+#   ... this will matter for ID creation, because currently they are not distinguished by indexes vars.  
+
+# - have a point specific ID, and a COOP ID that is going to be the same for buying stations of the same coop. 
+
+# Homogenize - i.e. attribute the mode and store a vector of unique values... 
+# first, of abbreviated names for coops that have the same full name and are close-by (same non-null CLOSE_FULL_INDEXES)
+# second, full names for coops that have the same abrv name and are close-by (same non-null CLOSE_ABRV_INDEXES) 
+
+# Homogenize only among subsets of the data that have no null indexes, to avoid homogenize across a very wide group of 
+# all those that didn't match. 
+
+
+
 
 
 
@@ -1808,15 +2092,22 @@ civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
 # ... when we have no disclosure at all from a company those years  
 
 # For instance, in 2020, we have almost no disclosure from traders:
-civ %>% filter(DISCL_YEAR == 2020) %>% pull(TRADER_NAME) %>% unique()
+# civ %>% filter(DISCL_YEAR == 2020) %>% pull(TRADER_NAME) %>% unique()
 
-# Rationales: 
-# Start from baseline year, 2019, for which and only for which we have near complete coverage of companies. 
-# For every company present a given year, check whether it has made a disclosure the next year. 
-# ... (starting in 2020, but when 2020 has been imputed then look at all companies in 2020, to capture possibly new ones)
-# We are at the disclosure level (working on COMPANY variable), not trader level. 
+# First, handle certification schemes. 
+# - Repeat Fairtrade which is only disclosed per the private data set deemed valid for 2019.
+civ %>% filter(COMPANY=="FAIRTRADE") %>% select(DISCL_YEAR) %>% table()
 
-# unique(civ$COMPANY)
+# - And handle RFA which discloses several years: 2019 through the CAM, and 2022 through their website, 
+# with suspended coops in 2021 and an additional one in 2023  
+
+rfa_202123 = 
+  civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR %in% c(2020, 2021, 2023))
+
+civ = 
+  civ %>% filter(!(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR %in% c(2020, 2021, 2023)))
+
+civ %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% select(DISCL_YEAR) %>% table()
 
 civ$REPEATED_FROM_PAST_YEAR <- FALSE # see below
 
@@ -1826,9 +2117,66 @@ for(year in 2020:max(unique(civ$DISCL_YEAR))){
   civ_year <- filter(civ, DISCL_YEAR == year)
   
   # companies known to disclose as of past year
+  certification_past_year <- unique(civ_past_year$COMPANY)
+  # keep only certification schemes
+  certification_past_year <- certification_past_year[certification_past_year %in% c("FAIRTRADE",
+                                                                        "RAINFOREST ALLIANCE")]
+  
+  for(scheme in certification_past_year){
+    
+    if(!(scheme %in% unique(civ_year$COMPANY))){ # if this company is not among the companies that disclosed in the current year... 
+      # then impute the suppliers of this company in this year from what it disclosed in the past year
+      to_stack <- 
+        civ_past_year %>% 
+        filter(COMPANY == scheme) %>% 
+        mutate(DISCL_YEAR = year, # need to change the year
+               REPEATED_FROM_PAST_YEAR = TRUE  # flag that information is just being repeated in this year and company
+        ) 
+      
+      civ <- rbind(civ, to_stack)
+      rm(to_stack)
+    }
+  }
+
+  rm(scheme, civ_year, civ_past_year, certification_past_year)
+}
+
+# remove the two suspended coops
+rfa_suspended <- rfa_202123 %>% filter(grepl("Suspend", DISCL_CERTIFICATION_NAME)) 
+new_rfa <- 
+  rfa_202123 %>% 
+  filter(DISCL_CERTIFICATION_NAME == "RFA") %>% 
+  mutate(REPEATED_FROM_PAST_YEAR = FALSE)
+  
+civ = 
+  civ %>% 
+  filter(!(COOP_ID %in% rfa_suspended$COOP_ID & DISCL_YEAR == 2021))
+
+civ = 
+  civ %>% 
+  rbind(new_rfa)
+
+
+# Rationales for company disclosures: 
+# Start from baseline year, 2019, for which and only for which we have near complete coverage of companies. 
+# For every company present a given year, check whether it has made a disclosure the next year. 
+# ... (starting in 2020, but when 2020 has been imputed then look at all companies in 2020, to capture possibly new ones)
+# We are at the disclosure level (working on COMPANY variable), not trader level. 
+
+for(year in 2020:max(unique(civ$DISCL_YEAR))){
+  
+  civ_past_year <- filter(civ, DISCL_YEAR == year-1)
+  civ_year <- filter(civ, DISCL_YEAR == year)
+  
+  # companies known to disclose as of past year
   companies_past_year <- unique(civ_past_year$COMPANY)
   # remove NAs (recall: there are NAs in company - they are all the coops not linked to a company in the CAM)
-  companies_past_year <- companies_past_year[!is.na(companies_past_year)]
+  # and remove certification schemes
+  companies_past_year <- companies_past_year[!(is.na(companies_past_year) | 
+                                                 companies_past_year %in% c("JOINT RESEARCH CENTER",   # (of course, we don't repeat Joint Research Center)
+                                                                            "FAIRTRADE",
+                                                                            "RAINFOREST ALLIANCE")
+                                               )]
   
   for(comp in companies_past_year){
     
@@ -1862,6 +2210,7 @@ if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not co
 summary(civ$NUM_FARMERS_EXTRAPOLATED)
 civ %>% filter(NUM_FARMERS_EXTRAPOLATED==0) %>% nrow()
 
+civ %>% filter(COMPANY != "RAINFOREST ALLIANCE") %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
 # It is important that this repetition of whole disclosures comes before the next step, and not after, as was the case in IC2B v1.0, 
@@ -1939,7 +2288,7 @@ civ <-
     rowwise() %>% 
     mutate(
       # the case when is to leave the value unchanged when it's already 
-      # disclosed by the coop itself in that year.
+      # disclosed by the coop itself in that year (e.g. in JRC data).
       TOTAL_FARMERS = case_when( 
         is.na(DISCL_TOTAL_FARMERS) ~ max(
           c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT", "TOTAL_FARMERS_NODISCL"))),
@@ -1962,6 +2311,9 @@ print("The warnings that 'no non-missing arguments to max; returning -Inf' are n
 civ %>% filter(TOTAL_FARMERS == 10788) %>% View()
 # the one with 10788 farmers is a lot, but it soundly derives from the estimation rule, as expected.  
 civ$TOTAL_FARMERS %>% summary()
+
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
 tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>% 
   mutate(ANYNA = anyNA(COMPANY)) %>% 
@@ -2083,6 +2435,8 @@ for(year in sort(unique(civ$DISCL_YEAR))){
   civ %>% filter(DISCL_YEAR == year) %>%  pull(COOP_ID) %>% unique() %>% length() %>% paste0(" in ", year) %>% print()
 }
 summary(civ$TOTAL_FARMERS)
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
 
 # REMOVE DUPLICATES -----------------------------
 # At this point, within a year, several rows can reflect the same coop obviously 
@@ -2125,7 +2479,7 @@ civ_seipcs <-
   mutate(
     # ERASE ALREADY EXISTING BUYER VARIABLE, TO PRODUCE THE ONE THAT WILL EVENTUALLY BE USED IN SEIPCS
     BUYER = case_when( # the most upstream disclosed actor that buys this flow. /!\ NOT NECESSARILY A TRADER
-      is.na(TRADER_NAME) & !COMPANY %in% c("FAIRTRADE", "RAINFOREST ALLIANCE") ~ COMPANY,
+      is.na(TRADER_NAME) & !COMPANY %in% c("FAIRTRADE", "RAINFOREST ALLIANCE", "JOINT RESEARCH CENTER") ~ COMPANY,
       TRUE ~ TRADER_NAME
     )
   ) %>%
@@ -2155,6 +2509,9 @@ civ_seipcs <-
          DISCLOSURE_SOURCE = COMPANY, # note that this is not the same variable as DISCLOSURE_SOURCE*S* in civ_coopyear above. This one is always length 1.
          IS_TRADER = TRADER) 
 
+civ_coopyear %>% summarise(.by = YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(YEAR) 
+
+
 civ_seipcs %>%
   filter(COOP_ID %in% c(259, 140, 1145, 1079, 1407, 2782, 2857, 4674, 4512, 710, 2856, 2857)) %>%
   select(FLOW_ID, COOP_ID, YEAR, BUYER, DISCLOSURE_SOURCE,
@@ -2169,13 +2526,13 @@ civ_seipcs %>%
 dir.create(here("temp_data/private_IC2B"))
 
 write_csv(civ_coopyear,
-          file = here("temp_data/private_IC2B/IC2B_coop.csv"),
+          file = here("temp_data/private_IC2B/IC2B_v2_coop.csv"),
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)
 
 write_csv(civ_seipcs,
-          file = here("temp_data/private_IC2B/IC2B_link.csv"),
+          file = here("temp_data/private_IC2B/IC2B_v2_link.csv"),
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)

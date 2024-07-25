@@ -427,7 +427,7 @@ jrc_buyer_roster =
     i04aq15__buyer_code == "22" ~ "ICP", 
     i04aq15__buyer_code == "23" ~ "IVCAO", 
     i04aq15__buyer_code == "24" ~ "IVCOM", 
-    i04aq15__buyer_code == "25" ~"KINEDEN COMMODITIES", 
+    i04aq15__buyer_code == "25" ~ "KINEDEN COMMODITIES", 
     i04aq15__buyer_code == "26" ~ "NESTLE", 
     i04aq15__buyer_code == "27" ~ "OCEAN", 
     i04aq15__buyer_code == "28" ~ "OLAM", 
