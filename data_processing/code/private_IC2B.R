@@ -925,14 +925,14 @@ civ %>%
 civ <- mutate(civ, SIMPLIF_ABRVNAME = fn_clean_abrvname3(SUPPLIER_ABRVNAME))
 
 # Prepare rounded coordinates (from already imputed ones)
-# Rounding at 1 decimal place in degrees implies that 1.05 and 1.051 round to 1.0 and 1.1 resp. 
-# this is a spurious difference of ~0.1 degree which is ~11km at equator. 
-# This also means that things as different as 0.051 and 1.05 (apart of 11km) are deemed at the same place. 
+# Rounding at 2 decimal place in degrees implies that 1.0050 and 1.0051 round to 1.00 and 1.01 resp. 
+# this is a spurious difference of ~0.01 degree which is ~1.1km at equator. 
+# This also means that things as different as 1.0051 and 1.0099 (apart of ~0.5km) are deemed at the same place. 
 
 civ <- 
   mutate(civ, 
-         ROUND_LONGITUDE = round(LONGITUDE, 1), 
-         ROUND_LATITUDE = round(LATITUDE, 1),
+         ROUND_LONGITUDE = round(LONGITUDE, 2), 
+         ROUND_LATITUDE = round(LATITUDE, 2),
          # Correct manually spotted cases where even the 1-digit rounding keeps two rows distinct although they are clearly alike. 
          # One way to automatize and improve this would be by looking, within rows with the same names, at those which coordinates' have a '5' in the digits, or something like that... 
          ROUND_LONGITUDE = case_when(
@@ -1079,7 +1079,12 @@ civ <-
 
 civ_save1 <- civ
 
-### MAKE ARBITRARY COOP IDS -----------------------------
+### Buying station IDs -----------------------------
+# Here, we make ids for distinct combinations of geo coordinates and full and abbreviated names. 
+# We call these buying station IDs, because we consider that the same coop can have 
+# several locations when it has several buying stations. 
+
+
 # Don't make stable IDs because stable ids are necessary and built only for the public data set. 
 # here, we just want arbitrary IDs. They don't need to match with the public data set because 
 # we will never merge those, as they are intrinsically built differently by the addition of 
@@ -1087,7 +1092,7 @@ civ_save1 <- civ
 arbitrary_ids = 
     civ %>% 
     distinct(CCTN_COOP_POINT_ID) %>%
-    mutate(COOP_POINT_ID = row_number()) # Arbitrary coop id, based on order (arrange above)
+    mutate(COOP_POINT_ID = row_number()) # Arbitrary BS id, based on order (arrange above)
 civ = 
   civ %>% 
   left_join(arbitrary_ids, 
@@ -1098,7 +1103,7 @@ if(length(unique(civ$COOP_POINT_ID)) != nrow(arbitrary_ids)){stop("something wro
 rm(arbitrary_ids)
 
 
-# this is just to keep track of where the info comes from
+# this is just to keep track of where the info comes from, at point level. 
 civ <- 
   civ %>% 
   group_by(COOP_POINT_ID) %>% 
@@ -1182,10 +1187,10 @@ civ <- select(civ, -missing_full, -missing_coords, -missing_abrv,
 
 
 
-# ATTRIBUTE DISTRICT (departement) GEOCODE -----------------------------------------
+# ATTRIBUTE DISTRICT GEOCODE -----------------------------------------
 
-# Do this here, at point (and not coop) level, i.e. before buying stations, because now 
-# district is an attribute of a point, not necessarily a coop
+# Do this here, at point (and not coop) level, i.e. before grouping buying stations in distinct coops, 
+# because now district is an attribute of a point, not necessarily a coop
 
 civ0 <- civ
 ### From coordinates  ----
@@ -1364,119 +1369,185 @@ if(
 
 # BUYING STATIONS -----
 # Regroup spatially distinct points into the same coop, as they can represent a coop's buying stations.
+
+civ_save_preBS <- civ
+
 ### ### ### ### ### 
 ## IDENTIFY BUYING STATIONS 
-# Now, we want to detect buying stations. We allow them to be 50km, arbitrarily, from the headquarters.  
+# Now, we want to detect buying stations of the same coop. 
+# We construct a first condition for being buying stations (BS) of the same coop: being close-by. 
+# Close-by BS are either in the same district, or within 50km of each others. 
 # Later, we could refine this parameter with something learned empirically.
-hq_bs_max_km <- 50
+hq_bs_max_km <- 100
 
-# We don't use rounded coordinates because this is quite rough as it introduces arbitrary cut-offs (around 5)
-# It's cleaner to proceed as follows: 
+# (We don't use rounded coordinates because this is quite rough as it introduces arbitrary cut-offs)
 
-# Identify groups of links that have the same coop name and are in close distance. 
-# then homogenize info within them. 
-
-# Spatialize
-civ_sf <- 
-  civ %>%
-  filter(!is.na(LONGITUDE)) %>% 
-  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
-
-# for every spatialized point, find the index of all points closer than hq_bs_max_km
-distances_civ <- 
-  civ_sf %>% 
-  st_distance()
-# this produces a list column, with every element being a vector of the index of points closer than the threshold. 
-civ_sf$CLOSE_INDEXES <- apply(distances_civ, 1, function(x) {which(x<=hq_bs_max_km*1e3) }) # st_distance returns meters
-# /!\ these are indexes OF CIV_SF, not civ. 
-
-civ_sf <- 
-  civ_sf %>% 
-  st_drop_geometry()
-
-# add indexes of those in the same district
-civ_sf <- 
-  civ_sf %>% 
+# Because the distance criteria is relational, and not absolute, it cannot be a single value in a column
+# it has to be indexes of those in the same district, to which we then add indexes of those within distance. 
+civ <- 
+  civ %>% 
   group_by(DISTRICT_GEOCODE) %>% 
   mutate(DISTR_INDEXES = list(cur_group_rows())) %>% 
-  ungroup() %>% 
-  # merge close and distr indexes
-  rowwise() %>% 
-  mutate(COORDS_INDEXES = list(unique(CLOSE_INDEXES, DISTR_INDEXES)))
-
-# no instance of coops being in the same district but outside the 50km range
-civ_sf %>% 
-  filter(length(COORDS_INDEXES) > length(CLOSE_INDEXES)) %>% nrow()
-# ~7000 coops (links actually), out of 7700, match more coops with the 50km-radius criteria than with the within-district criteria only. 
-civ_sf %>% 
-  filter(length(COORDS_INDEXES) > length(DISTR_INDEXES)) %>% nrow()
+  ungroup() 
 
 
-# for every point, retrieve the full and abrv names of all close by points
-civ_sf2 <- 
-  civ_sf %>% 
-  rowwise() %>% 
-  # in a given row, the value of COORDS_INDEXES is the vector of indexes of rows close to this row's location
-  # civ_sf[COORDS_INDEXES,]$SUPPLIER_FULLNAME] are these rows' coop full names
-  # we return only elements of COORDS_INDEXES for which there is a name match
+# Spatialize
+civ_sf <-
+  civ %>%
+  # temporarily give fake coordinates where missing, to be able to work on the full df, and thus work with readily valid indexes
   mutate(
-    COORDS_FULL_INDEXES = list(COORDS_INDEXES[which(SUPPLIER_FULLNAME == civ_sf[COORDS_INDEXES, ]$SUPPLIER_FULLNAME)] ),
-    COORDS_ABRV_INDEXES = list(COORDS_INDEXES[which(SUPPLIER_ABRVNAME == civ_sf[COORDS_INDEXES, ]$SUPPLIER_ABRVNAME)] )
-  ) 
-# note that which() gets rid of NAs, it only returns indexes of elements that evaluate as TRUE. 
-# --> when there is no other match than self match, the indexes var is length 1. 
+    TMP_LONGITUDE = case_when(
+      is.na(LONGITUDE) ~ 0,
+      TRUE ~ LONGITUDE
+    ),
+    TMP_LATITUDE = case_when(
+      is.na(LATITUDE) ~ 90,
+      TRUE ~ LATITUDE
+    )
+  ) %>%
+  st_as_sf(coords = c("TMP_LONGITUDE", "TMP_LATITUDE"), crs = 4326)
+
+# for every spatialized point, find the index of all points closer than hq_bs_max_km
+distances_civ <-
+  civ_sf %>%
+  st_distance()
+# this produces a list column, with every element being a vector of the index of points closer than the threshold.
+civ_sf$DISTANCE_INDEXES <- apply(distances_civ, 1, function(x) {which(x<=hq_bs_max_km*1e3) }) # st_distance returns meters
+# /!\ these are indexes OF CIV_SF, not civ.
+
+civ <-
+  civ_sf %>%
+  st_drop_geometry()
+
+# remove the indexes of points with fake coordinate - they are not actually close-by at the north pole.
+civ <-
+  civ %>%
+  rowwise() %>%
+  mutate(
+    DISTANCE_INDEXES = case_when(
+      is.na(LONGITUDE) ~ list(integer(0)),
+      TRUE ~ list(DISTANCE_INDEXES)),
+    # merge close and distr indexes
+    CLOSEBY_INDEXES = list(sort(unique(DISTR_INDEXES, DISTANCE_INDEXES)))
+  )
+
+# Because close by is not an absolute value but relational, again, we cannot just go from there and use
+# CLOSEBY_INDEXES as a grouping variable.
+# E.g., two coops 10km apart won't be equal on CLOSEBY_INDEXES if one is close to points the other one isn't close to.
+# Restrict the indexes to those that share names in addition to being close by,
+# and group points that have common indexes
+civ2 <-
+  civ %>%
+  rowwise() %>%
+  # in a given row, the value of CLOSEBY_INDEXES is the vector of indexes of rows close to this row's location
+  # civ[CLOSEBY_INDEXES,]$SUPPLIER_FULLNAME] are these rows' coop full names
+  # we return only elements of CLOSEBY_INDEXES for which there is a name match
+  mutate(
+    CLOSEBY_FULL_INDEXES = list(sort(CLOSEBY_INDEXES[which(SUPPLIER_FULLNAME == civ[CLOSEBY_INDEXES, ]$SUPPLIER_FULLNAME)]) ),
+    CLOSEBY_ABRV_INDEXES = list(sort(CLOSEBY_INDEXES[which(SIMPLIF_ABRVNAME == civ[CLOSEBY_INDEXES, ]$SIMPLIF_ABRVNAME)]) ),
+
+    DISTR_FULL_INDEXES = list(sort(DISTR_INDEXES[which(SUPPLIER_FULLNAME == civ[DISTR_INDEXES, ]$SUPPLIER_FULLNAME)]) ),
+    DISTR_ABRV_INDEXES = list(sort(DISTR_INDEXES[which(SIMPLIF_ABRVNAME == civ[DISTR_INDEXES, ]$SIMPLIF_ABRVNAME)]) ),
+
+    DISTANCE_FULL_INDEXES = list(sort(DISTANCE_INDEXES[which(SUPPLIER_FULLNAME == civ[DISTANCE_INDEXES, ]$SUPPLIER_FULLNAME)]) ),
+    DISTANCE_ABRV_INDEXES = list(sort(DISTANCE_INDEXES[which(SIMPLIF_ABRVNAME == civ[DISTANCE_INDEXES, ]$SIMPLIF_ABRVNAME)]) )
+  )
+# note that which() gets rid of NAs, it only returns indexes of elements that evaluate as TRUE.
+# --> when there is no other match than self match, the indexes var is length 1.
 # --> when the name is NA, the value returned in the list is numeric(0)
-# Store the latter apart (currently there's none, as all rows have either a full or an abrv name)
-civ_sf2_noidx <- 
-  civ_sf2 %>% 
-  filter(length(COORDS_FULL_INDEXES) + length(COORDS_ABRV_INDEXES) == 0)
-# and remove them from the initial df  
-civ_sf2 <- 
-  civ_sf2 %>% 
-  filter(length(COORDS_FULL_INDEXES) + length(COORDS_ABRV_INDEXES) > 0)
+# # Store the latter apart (currently there's none, as all rows have either a full or an abrv name)
+# civ2_noidx <-
+#   civ2 %>%
+#   filter(length(COORDS_FULL_INDEXES) + length(COORDS_ABRV_INDEXES) == 0)
+# # and remove them from the initial df
+# civ2 <-
+#   civ2 %>%
+#   filter(length(COORDS_FULL_INDEXES) + length(COORDS_ABRV_INDEXES) > 0)
 
-# Some tests
-arbi <- 1
-test <- civ_sf2[arbi,]
-x <- unlist(test$COORDS_INDEXES) # the indexes of points that are close to point #1
-distances_civ[arbi,] # all the distances from point #1
-distances_civ[arbi,unlist(test$COORDS_INDEXES)] # only the distances of indexes close to point #1 
-if(any(distances_civ[arbi, unlist(test$COORDS_INDEXES)] > as_units(hq_bs_max_km*1e3, "m") )){
-  stop("pb in identification of close by indexes")
-}
-test$SUPPLIER_FULLNAME # the name of coop in point #1
-civ_sf2[x,]$SUPPLIER_FULLNAME # the names of coops close by 
-# the indexes of coops close by that have the same name as coop in point #1
-x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)] 
-# this should be the same as:
-if(!all.equal(x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)], 
-              unlist(civ_sf2[arbi, ]$COORDS_FULL_INDEXES))){
-  stop("indexes are not correct")
-}
-# their names
-civ_sf2[x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)], ]$SUPPLIER_FULLNAME
-if(civ_sf2[x[which(test$SUPPLIER_FULLNAME == civ_sf2[x,]$SUPPLIER_FULLNAME)], ]$SUPPLIER_FULLNAME %>% 
-   unique() != test$SUPPLIER_FULLNAME){stop()}
+civ2 <-
+  civ2 %>%
+  mutate(n_matched_DISTR_FULL = length(DISTR_FULL_INDEXES),
+         n_matched_DISTANCE_FULL = length(DISTANCE_FULL_INDEXES),
+         n_matched_CLOSEBY_FULL = length(CLOSEBY_FULL_INDEXES),
+         DISTANCE_ADDS_MATCHES_FULL = n_matched_CLOSEBY_FULL > n_matched_DISTR_FULL,
+         DISTR_ADDS_MATCHES_FULL = n_matched_CLOSEBY_FULL > n_matched_DISTANCE_FULL,
+         # repeat test for ABRV
+         n_matched_DISTR_ABRV = length(DISTR_ABRV_INDEXES),
+         n_matched_DISTANCE_ABRV = length(DISTANCE_ABRV_INDEXES),
+         n_matched_CLOSEBY_ABRV = length(CLOSEBY_ABRV_INDEXES),
+         DISTANCE_ADDS_MATCHES_ABRV = n_matched_CLOSEBY_ABRV > n_matched_DISTR_ABRV,
+         DISTR_ADDS_MATCHES_ABRV = n_matched_CLOSEBY_ABRV > n_matched_DISTANCE_ABRV)
 
-# Now make an ID that groups rows with same name (either full or abbreviated) and are close by (within range or district)
-civ_sf2 <- 
-  civ_sf2 %>% 
-  mutate(COORDS_FULL_INDEXES = list(sort(unlist(COORDS_FULL_INDEXES))),
-         COORDS_ABRV_INDEXES = list(sort(unlist(COORDS_ABRV_INDEXES)))) %>%
-  # mutate(COORDS_FULL_INDEXES = case_when(
-  #          length(COORDS_FULL_INDEXES) == 0 ~ list(sort(COORDS_FULL_INDEXES)),
-  #          TRUE ~ list(sort(COORDS_FULL_INDEXES))), 
-  #         
-  #        COORDS_ABRV_INDEXES = case_when(
-  #          length(COORDS_ABRV_INDEXES) == 0 ~ list(sort(COORDS_ABRV_INDEXES)),
-  #          TRUE ~ list(sort(COORDS_ABRV_INDEXES)))
-  #        ) %>% 
+# District does add matches, i.e. there are points with the same name that
+# are farther than 50km away, but are in the same district
+civ2 %>%
+  filter(DISTR_ADDS_MATCHES_FULL) %>% nrow()
+civ2 %>%
+  filter(DISTR_ADDS_MATCHES_ABRV) %>% nrow()
+# Spatially explicit distance does not add matches, i.e. all points with the same name
+# are in the same district - there is never one that is within 50km but in a different district.
+civ2 %>%
+  filter(DISTANCE_ADDS_MATCHES_FULL) %>% nrow()
+civ2 %>%
+  filter(DISTANCE_ADDS_MATCHES_ABRV) %>% nrow()
+
+
+
+toy_list <- c(indexes_list[1:15], list(c(12, 13, 16, 17), c(16, 17)))
+
+which(lengths(lapply(
+  toy_list, 
+  function(x){
+    intersect(c(12, 13, 16, 17), x)
+  })) > 0)
+
+civ3 <- 
+  civ2 %>% 
+  rowwise() %>% 
+  mutate(
+    FULLNAME_ID = list(which(lengths(lapply(
+                                      indexes_list, 
+                                      function(x){
+                                        intersect(COORDS_FULL_INDEXES, x)
+                                      })
+                                    ) > 0 ))
+  )
+# FULLNAME_ID = indexes_list[sapply(indexes_list, function(x){intersect(x, COORDS_FULL_INDEXES)})]
+
+
+  # Now make an ID that groups rows with same name (either full or abbreviated) and are close by (within range or district)
   group_by(COORDS_FULL_INDEXES) %>% 
   mutate(FULLNAME_ID = paste0("COORDS_", cur_group_id())) %>% 
   ungroup() %>% 
   group_by(COORDS_ABRV_INDEXES) %>% 
   mutate(ABRVNAME_ID = paste0("COORDS_", cur_group_id())) %>% 
   ungroup() 
+
+# Some tests
+arbi <- 1
+test <- civ2[arbi,]
+x <- unlist(test$COORDS_INDEXES) # the indexes of points that are close to point #1
+distances_civ[arbi,] # all the distances from point #1, incl. those to the fake coordinates
+distances_civ[arbi,unlist(test$CLOSE_INDEXES)] # only the distances of indexes close to point #1 
+if(any(distances_civ[arbi, unlist(test$CLOSE_INDEXES)] > as_units(hq_bs_max_km*1e3, "m") )){
+  stop("pb in identification of close by indexes")
+}
+test$SUPPLIER_FULLNAME # the name of coop in point #1
+civ2[x,]$SUPPLIER_FULLNAME # the names of coops close by 
+# the indexes of coops close by that have the same name as coop in point #1
+x[which(test$SUPPLIER_FULLNAME == civ2[x,]$SUPPLIER_FULLNAME)] 
+# this should be the same as:
+if(!all.equal(x[which(test$SUPPLIER_FULLNAME == civ2[x,]$SUPPLIER_FULLNAME)], 
+              unlist(civ2[arbi, ]$COORDS_FULL_INDEXES))){
+  stop("indexes are not correct")
+}
+# their names
+civ2[x[which(test$SUPPLIER_FULLNAME == civ2[x,]$SUPPLIER_FULLNAME)], ]$SUPPLIER_FULLNAME
+if(civ2[x[which(test$SUPPLIER_FULLNAME == civ2[x,]$SUPPLIER_FULLNAME)], ]$SUPPLIER_FULLNAME %>% 
+   unique() != test$SUPPLIER_FULLNAME){stop()}
+
+
+
 
 
 # Repeat process for those without coordinates but with district info
@@ -1499,7 +1570,7 @@ civ_nosf_d2 <-
   # we return only elements of DISTR_INDEXES for which there is a name match
   mutate(
     DISTR_FULL_INDEXES = list(DISTR_INDEXES[which(SUPPLIER_FULLNAME == civ_nosf_d[DISTR_INDEXES, ]$SUPPLIER_FULLNAME)] ),
-    DISTR_ABRV_INDEXES = list(DISTR_INDEXES[which(SUPPLIER_ABRVNAME == civ_nosf_d[DISTR_INDEXES, ]$SUPPLIER_ABRVNAME)] )
+    DISTR_ABRV_INDEXES = list(DISTR_INDEXES[which(SIMPLIF_ABRVNAME == civ_nosf_d[DISTR_INDEXES, ]$SIMPLIF_ABRVNAME)] )
   ) 
 # note that which() gets rid of NAs, it only returns indexes of elements that evaluate as TRUE. 
 # --> when there is no other match than self match, the indexes var is length 1. 
@@ -1557,8 +1628,10 @@ if(
   length(base::intersect(civ_sf$COOP_POINT_ID, civ_nosf_nod$COOP_POINT_ID)) > 0 | 
   length(base::intersect(civ_nosf_d$COOP_POINT_ID, civ_nosf_nod$COOP_POINT_ID)) > 0 
   ){stop("point ids split between groups within which we make coop ids")}
-  
+# So COOP_POINT_ID is perfectly nested within FULLNAME_ID or ABRVNAME_ID
 
+# Thanks to the COORDS_, DISTR_ and NONE_ suffixes above, we can stack everything
+# and homogenize on the stack. 
 civ <- 
   rbind(
     civ_sf2 %>% 
@@ -1586,6 +1659,7 @@ civ <-
 
 
 
+### COOP IDS -----------------------------
 
 
 
