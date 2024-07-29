@@ -750,6 +750,55 @@ civ <-
     )
   )
 
+# Set this up to track coops that don't integrate well with the others. 
+track <- data.frame(initial_distinct_both = rep(NA,2), initial_abrv = rep(NA,2), initial_full = rep(NA,2), initial_both = rep(NA,2), 
+                    post_imput_distinct_both = rep(NA,2), post_imput_abrv = rep(NA,2), post_imput_full = rep(NA,2), post_imput_both = rep(NA,2), 
+                    post_homog_distinct_both = rep(NA,2), post_homog_abrv = rep(NA,2), post_homog_full = rep(NA,2), post_homog_both = rep(NA,2),
+                    post_homogallm_distinct_both = rep(NA,2), post_homogallm_abrv = rep(NA,2), post_homogallm_full = rep(NA,2), post_homogallm_both = rep(NA,2))
+row.names(track) <- c("RFA", "OLAM")
+
+rfa22 <- civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022)
+olam22 <- civ %>% filter(COMPANY == "OLAM" & DISCL_YEAR == 2022)
+civ_tmp <- 
+  civ %>% 
+  filter(!(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022) & 
+           !(COMPANY == "OLAM" & DISCL_YEAR == 2022))
+nrow(rfa22)+nrow(olam22)+nrow(civ_tmp)==nrow(civ)
+
+# RFA
+nrow(rfa22)
+
+track["RFA", "initial_distinct_both"] <- distinct(rfa22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "initial_abrv"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["RFA", "initial_full"] <- rfa22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "initial_both"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                  SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                   SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                   !is.na(LONGITUDE)) %>% nrow()
+
+rfa22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+# rfa22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+# OLAM 
+nrow(olam22)
+
+track["OLAM", "initial_distinct_both"] <- distinct(olam22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "initial_abrv"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["OLAM", "initial_full"] <- olam22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "initial_both"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                    SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                    SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                    !is.na(LONGITUDE)) %>% nrow()
+olam22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+# olam22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+track
 
 ### STAGE 2 - IMPUTING MISSINGS ---------------
 
@@ -785,6 +834,9 @@ while(keep_imputing > 0){
   worthit_imp_grps1 <- civ %>% filter(SUPPLIER_FULLNAME %in% all_imp_rows$SUPPLIER_FULLNAME & 
                                         is.na(LONGITUDE))
   
+  worthit_imp_grps1 %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% nrow() %>% paste0(" imputations on RFA coops") %>% print()
+  worthit_imp_grps1 %>% filter(COMPANY == "OLAM") %>% nrow() %>% paste0(" imputations on OLAM coops") %>% print()
+  
   ### ### ### ### ### 
   # COORDINATES
   
@@ -804,6 +856,8 @@ while(keep_imputing > 0){
   worthit_imp_grps2 <- civ %>% filter(LONGITUDE %in% all_imp_rows$LONGITUDE & 
                                         LATITUDE %in% all_imp_rows$LATITUDE &
                                         is.na(SUPPLIER_FULLNAME))
+  worthit_imp_grps2 %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% nrow() %>% paste0(" imputations on RFA coops") %>% print()
+  worthit_imp_grps2 %>% filter(COMPANY == "OLAM") %>% nrow() %>% paste0(" imputations on OLAM coops") %>% print()
   
   
   # Group on coords, impute full
@@ -823,6 +877,9 @@ while(keep_imputing > 0){
                                         LATITUDE %in% all_imp_rows$LATITUDE &
                                         is.na(SUPPLIER_ABRVNAME))
   
+  worthit_imp_grps3 %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% nrow() %>% paste0(" imputations on RFA coops") %>% print()
+  worthit_imp_grps3 %>% filter(COMPANY == "OLAM") %>% nrow() %>% paste0(" imputations on OLAM coops") %>% print()
+  
   ### ### ### ### ### 
   # ABBREVIATED NAME
   
@@ -839,8 +896,12 @@ while(keep_imputing > 0){
   
   all_imp_rows <- setdiff(civ, civ0)
   all_imp_rows %>% nrow() %>% print()
+  
   worthit_imp_grps4 <- civ %>% filter(SUPPLIER_ABRVNAME %in% all_imp_rows$SUPPLIER_ABRVNAME & 
                                         is.na(LONGITUDE))
+  
+  worthit_imp_grps4 %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% nrow() %>% paste0(" imputations on RFA coops") %>% print()
+  worthit_imp_grps4 %>% filter(COMPANY == "OLAM") %>% nrow() %>% paste0(" imputations on OLAM coops") %>% print()
   
   # civ %>% filter(grepl("ECAKOOG", SUPPLIER_ABRVNAME)) %>% View()
   # civ %>% filter(grepl("COOPALBA", SUPPLIER_ABRVNAME)) %>% View()
@@ -891,6 +952,8 @@ while(keep_imputing > 0){
                                 SUPPLIER_FULLNAME %in% imp_rows$SUPPLIER_FULLNAME)
   
   # imp_grps7 %>% arrange(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% View()
+  imp_grps7 %>% filter(COMPANY == "RAINFOREST ALLIANCE") %>% nrow() %>% paste0(" imputations on RFA coops") %>% print()
+  imp_grps7 %>% filter(COMPANY == "OLAM") %>% nrow() %>% paste0(" imputations on OLAM coops") %>% print()
   
   civ <- 
     civ %>% 
@@ -919,6 +982,52 @@ civ %>%
   filter(COMPANY == "FAIRTRADE") %>% 
   distinct(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% 
   nrow() 
+
+
+rfa22 <- civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022)
+olam22 <- civ %>% filter(COMPANY == "OLAM" & DISCL_YEAR == 2022)
+civ_tmp <- 
+  civ %>% 
+  filter(!(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022) & 
+           !(COMPANY == "OLAM" & DISCL_YEAR == 2022))
+nrow(rfa22)+nrow(olam22)+nrow(civ_tmp)==nrow(civ)
+
+# RFA
+nrow(rfa22)
+
+track["RFA", "post_imput_distinct_both"] <- distinct(rfa22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "post_imput_abrv"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["RFA", "post_imput_full"] <- rfa22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "post_imput_both"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                   SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                   SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                   !is.na(LONGITUDE)) %>% nrow()
+
+rfa22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+# rfa22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+# OLAM 
+nrow(olam22)
+distinct(olam22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+
+track["OLAM", "post_imput_distinct_both"] <- distinct(olam22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "post_imput_abrv"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["OLAM", "post_imput_full"] <- olam22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "post_imput_both"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                     SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                    SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                    !is.na(LONGITUDE)) %>% nrow()
+olam22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+# olam22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+track
+
 
 ### STAGE 3 - HOMOGENIZATION ----------------------------------------------------------------
 
@@ -1018,45 +1127,88 @@ civ <-
          missing_full = is.na(SUPPLIER_FULLNAME))
 
 
+rfa22 <- civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022)
+olam22 <- civ %>% filter(COMPANY == "OLAM" & DISCL_YEAR == 2022)
+civ_tmp <- 
+  civ %>% 
+  filter(!(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022) & 
+           !(COMPANY == "OLAM" & DISCL_YEAR == 2022))
+nrow(rfa22)+nrow(olam22)+nrow(civ_tmp)==nrow(civ)
+
+# RFA
+nrow(rfa22)
+
+track["RFA", "post_homog_distinct_both"] <- distinct(rfa22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "post_homog_abrv"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["RFA", "post_homog_full"] <- rfa22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "post_homog_both"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                   SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                   SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                   !is.na(LONGITUDE)) %>% nrow()
+
+rfa22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+# rfa22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+# OLAM 
+nrow(olam22)
+
+track["OLAM", "post_homog_distinct_both"] <- distinct(olam22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "post_homog_abrv"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["OLAM", "post_homog_full"] <- olam22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "post_homog_both"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                     SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                    SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                    !is.na(LONGITUDE)) %>% nrow()
+olam22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+# olam22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+track
+
 
 ### ### ### ### ### 
 ## FILL ALL-MISSING within cleanly identified (ie. by a name and coords) coops.  
 civ %>% filter(missing_abrv) %>% nrow()
 civ %>% filter(missing_full) %>% nrow()
 
-# Where there's no abrv name, give the full name
-civ0 <- civ
-civ <- 
-  civ %>% 
-  group_by(SUPPLIER_FULLNAME, ROUND_LONGITUDE, ROUND_LATITUDE) %>% 
-  mutate(
-    SUPPLIER_ABRVNAME = case_when(
-      all(missing_abrv) & !is.na(SUPPLIER_FULLNAME) ~ SUPPLIER_FULLNAME, 
-      TRUE ~ SUPPLIER_ABRVNAME
-    )
-  ) %>% 
-  ungroup()
-# civ %>% filter(missing_abrv) %>% arrange(SUPPLIER_FULLNAME, LONGITUDE) %>% View()
-civ %>% filter(is.na(SUPPLIER_ABRVNAME)) %>% nrow()
-
-# note: for ADA, this does not cover all full names because supplier is not always missing. 
-# These should have been filled at imputation stage then. But the abrv name was not yet similar. 
-# And that's correct not to make these imputations, because initially, these empty full name rows for ADA 
-# have no other information than abrv name COOP-CA ADA, which is not enough to assume it's the same coop as ADA WAREHOUSE or others. 
-
-civ <- 
-  civ %>% 
-  group_by(SUPPLIER_ABRVNAME, ROUND_LONGITUDE, ROUND_LATITUDE) %>% 
-  mutate(
-    SUPPLIER_FULLNAME = case_when(
-      all(missing_full) & !is.na(SUPPLIER_ABRVNAME) ~ SUPPLIER_ABRVNAME, 
-      TRUE ~ SUPPLIER_FULLNAME
-    )
-  ) %>% 
-  ungroup()
-# civ %>% filter(missing_full) %>% arrange(SUPPLIER_ABRVNAME, LONGITUDE) %>% View()
-# civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% arrange(SUPPLIER_ABRVNAME, LONGITUDE) %>% View()
-civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% nrow()
+# # Where there's no abrv name, give the full name
+# civ0 <- civ
+# civ <- 
+#   civ %>% 
+#   group_by(SUPPLIER_FULLNAME, ROUND_LONGITUDE, ROUND_LATITUDE) %>% 
+#   mutate(
+#     SUPPLIER_ABRVNAME = case_when(
+#       all(missing_abrv) & !is.na(SUPPLIER_FULLNAME) ~ SUPPLIER_FULLNAME, 
+#       TRUE ~ SUPPLIER_ABRVNAME
+#     )
+#   ) %>% 
+#   ungroup()
+# # civ %>% filter(missing_abrv) %>% arrange(SUPPLIER_FULLNAME, LONGITUDE) %>% View()
+# civ %>% filter(is.na(SUPPLIER_ABRVNAME)) %>% nrow()
+# 
+# # note: for ADA, this does not cover all full names because supplier is not always missing. 
+# # These should have been filled at imputation stage then. But the abrv name was not yet similar. 
+# # And that's correct not to make these imputations, because initially, these empty full name rows for ADA 
+# # have no other information than abrv name COOP-CA ADA, which is not enough to assume it's the same coop as ADA WAREHOUSE or others. 
+# 
+# civ <- 
+#   civ %>% 
+#   group_by(SUPPLIER_ABRVNAME, ROUND_LONGITUDE, ROUND_LATITUDE) %>% 
+#   mutate(
+#     SUPPLIER_FULLNAME = case_when(
+#       all(missing_full) & !is.na(SUPPLIER_ABRVNAME) ~ SUPPLIER_ABRVNAME, 
+#       TRUE ~ SUPPLIER_FULLNAME
+#     )
+#   ) %>% 
+#   ungroup()
+# # civ %>% filter(missing_full) %>% arrange(SUPPLIER_ABRVNAME, LONGITUDE) %>% View()
+# # civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% arrange(SUPPLIER_ABRVNAME, LONGITUDE) %>% View()
+# civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% nrow()
 
 
 # civ %>% filter(grepl("INDENIE", SUPPLIER_FULLNAME, ignore.case = T)) %>% View()
@@ -1081,6 +1233,7 @@ civ <-
   arrange(CCTN_COOP_POINT_ID)
 
 civ_save1 <- civ
+
 
 ### Buying station IDs -----------------------------
 # Here, we make ids for distinct combinations of geo coordinates and full and abbreviated names. 
@@ -1147,6 +1300,53 @@ civ <- select(civ, -missing_full, -missing_coords, -missing_abrv,
 # civ_save <- civ
 
 ## Sanity checks 
+
+rfa22 <- civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022)
+olam22 <- civ %>% filter(COMPANY == "OLAM" & DISCL_YEAR == 2022)
+civ_tmp <- 
+  civ %>% 
+  filter(!(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022) & 
+           !(COMPANY == "OLAM" & DISCL_YEAR == 2022))
+nrow(rfa22)+nrow(olam22)+nrow(civ_tmp)==nrow(civ)
+
+# RFA
+nrow(rfa22)
+
+track["RFA", "post_homogallm_distinct_both"] <- distinct(rfa22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "post_homogallm_abrv"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["RFA", "post_homogallm_full"] <- rfa22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["RFA", "post_homogallm_both"] <- rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                      SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+rfa22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                   SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                   !is.na(LONGITUDE)) %>% nrow()
+
+rfa22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+rfa22 %>% filter(COOP_POINT_ID%in%civ_tmp$COOP_POINT_ID) %>% nrow()
+# rfa22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+# OLAM 
+nrow(olam22)
+
+track["OLAM", "post_homogallm_distinct_both"] <- distinct(olam22, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "post_homogallm_abrv"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME) %>% nrow()
+track["OLAM", "post_homogallm_full"] <- olam22 %>% filter(SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+track["OLAM", "post_homogallm_both"] <- olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                                                        SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME) %>% nrow()
+
+olam22 %>% filter(SUPPLIER_ABRVNAME%in%civ_tmp$SUPPLIER_ABRVNAME & 
+                    SUPPLIER_FULLNAME%in%civ_tmp$SUPPLIER_FULLNAME & 
+                    !is.na(LONGITUDE)) %>% nrow()
+olam22 %>% filter(!is.na(LONGITUDE)) %>% nrow()
+
+olam22 %>% filter(COOP_POINT_ID%in%civ_tmp$COOP_POINT_ID) %>% nrow()
+# olam22$SUPPLIER_ABRVNAME %>% unique() %>% sort()
+
+track
+
+
 #### 
 # In several manually checked instances, the disclosed area name does not match with the imputed coordinates in Google maps. 
 # (Notably for CEMOI coops). 
@@ -1318,8 +1518,6 @@ civ <-
 # civ %>% filter(is.na(DISTRICT_GEOCODE) & !is.na(LVL_4_CODE))
 
 
-# Homogenize district info 
-if(anyNA(civ$COOP_POINT_ID)){stop("this is not expected and an issue for the homogenization below")}
 
 # one case is problematic, with SOCAS being disclosed both in DIVO and ABOISSO, 
 # and no more info to decide.
@@ -1337,7 +1535,9 @@ civ <-
     #   TRUE ~ DISTRICT_NAME)
     )
 
-# homogenize
+# Homogenize district info 
+if(anyNA(civ$COOP_POINT_ID)){stop("this is not expected and an issue for the homogenization below")}
+
 civ <- 
   civ %>% 
   group_by(COOP_POINT_ID) %>% 
@@ -1595,37 +1795,37 @@ civ <-
 
 
 ### ### ### ### ### 
-## FILL ALL-MISSING within cleanly identified (ie. by a name and district) coops.  
-civ %>% filter(missing_abrv) %>% nrow()
-civ %>% filter(missing_full) %>% nrow()
-
-# Where there's no abrv name, give the full name
-civ0 <- civ
-civ <- 
-  civ %>% 
-  group_by(SUPPLIER_FULLNAME, DISTRICT_GEOCODE) %>% 
-  mutate(
-    SUPPLIER_ABRVNAME = case_when(
-      all(missing_abrv) & !is.na(SUPPLIER_FULLNAME) ~ SUPPLIER_FULLNAME, 
-      TRUE ~ SUPPLIER_ABRVNAME
-    )
-  ) %>% 
-  ungroup()
-# civ %>% filter(missing_abrv) %>% arrange(SUPPLIER_FULLNAME, LONGITUDE) %>% View()
-civ %>% filter(is.na(SUPPLIER_ABRVNAME)) %>% nrow()
-
-civ <- 
-  civ %>% 
-  group_by(SUPPLIER_ABRVNAME, DISTRICT_GEOCODE) %>% 
-  mutate(
-    SUPPLIER_FULLNAME = case_when(
-      all(missing_full) & !is.na(SUPPLIER_ABRVNAME) ~ SUPPLIER_ABRVNAME, 
-      TRUE ~ SUPPLIER_FULLNAME
-    )
-  ) %>% 
-  ungroup()
-
-civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% nrow()
+# ## FILL ALL-MISSING within cleanly identified (ie. by a name and district) coops.  
+# civ %>% filter(missing_abrv) %>% nrow()
+# civ %>% filter(missing_full) %>% nrow()
+# 
+# # Where there's no abrv name, give the full name
+# civ0 <- civ
+# civ <- 
+#   civ %>% 
+#   group_by(SUPPLIER_FULLNAME, DISTRICT_GEOCODE) %>% 
+#   mutate(
+#     SUPPLIER_ABRVNAME = case_when(
+#       all(missing_abrv) & !is.na(SUPPLIER_FULLNAME) ~ SUPPLIER_FULLNAME, 
+#       TRUE ~ SUPPLIER_ABRVNAME
+#     )
+#   ) %>% 
+#   ungroup()
+# # civ %>% filter(missing_abrv) %>% arrange(SUPPLIER_FULLNAME, LONGITUDE) %>% View()
+# civ %>% filter(is.na(SUPPLIER_ABRVNAME)) %>% nrow()
+# 
+# civ <- 
+#   civ %>% 
+#   group_by(SUPPLIER_ABRVNAME, DISTRICT_GEOCODE) %>% 
+#   mutate(
+#     SUPPLIER_FULLNAME = case_when(
+#       all(missing_full) & !is.na(SUPPLIER_ABRVNAME) ~ SUPPLIER_ABRVNAME, 
+#       TRUE ~ SUPPLIER_FULLNAME
+#     )
+#   ) %>% 
+#   ungroup()
+# 
+# civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% nrow()
 
 ### Differentiate coops ---------------------------------
 
