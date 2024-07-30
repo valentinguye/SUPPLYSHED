@@ -58,6 +58,13 @@ jrc_buyer_roster = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain
                               generate.factors=TRUE,
                               nonint.factors = TRUE) 
 
+pro_itm <- read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "section_3a_UCLouvain.dta"),
+                      convert.factors = TRUE, # we want those labels. this is the default. 
+                      generate.factors=TRUE,
+                      nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
+
+# it's only different variables in there.
+intersect(names(jrc), names(pro_itm))
 
 # PREPARE --------
 
@@ -103,7 +110,29 @@ for(VAR in names(jrc_buyer_roster)){
 }
 
 
+# repeat for producer-intermediary 
+pro_itm$i04aq15 %>% class()
+
+for(VAR in names(pro_itm)){
+  if(is.factor(pro_itm[,VAR])){
+    pro_itm = pro_itm %>% mutate(
+      !!as.symbol(VAR) := as.character(!!as.symbol(VAR))
+    ) 
+  }
+  pro_itm = pro_itm %>% mutate(
+    !!as.symbol(VAR) := case_when(
+      !!as.symbol(VAR) == "Ne sait pas" ~ NA,
+      TRUE ~ !!as.symbol(VAR)
+    )
+  )
+}
+
+
 ### Rename -------
+
+# terminology: 
+# buyer = the company that eventually buys cocoa (e.g. Cargill)
+# itm = the intermediary between the producer and the buyer
 
 # Rename PRODUCER variables.
 jrc = 
@@ -128,8 +157,8 @@ jrc =
     s02aq5__plot_access_type = s02aq5,
     s02aq6__km_nearest_cp = Salepoint_km, # this is the second s02aq4 in questionnaire pdf. 
     s02aq301__km_home_plot = Cocoa_plot_distance,
-    s02dq30__main_buyer_type = s02dq30,
-    s02dq31__main_buyer_type_oth = s02dq31
+    s02dq30__main_itm_type = s02dq30,
+    s02dq31__main_itm_type_oth = s02dq31
   )
 
 # Rename INTERMEDIARY variables.
@@ -156,7 +185,7 @@ jrc =
     i00q24__altitude_cp = i00q24__Altitude,
     i00q25__cp_type = i00q25,
     
-    # INTERMEDIARY IDENTIFICATION
+    # INTERMEDIARY TYPE
     i01bq1__is_cocoa_buying = i01bq1,
     i01bq3__type = i01bq3,
     i01bq3_oth__type_oth = i01bq3_oth,
@@ -183,6 +212,9 @@ jrc =
     i03aq17__tonne_per_charg = i03aq17,
     i03aq18__vol_main_season = i03aq18,
     i03aq19__vol_small_season = i03aq19,
+    i03aq18__tonnes_main_season = v_VolCol_ms, # This is in tonnes (cf Katharina's email from July 12 2024)
+    i03aq19__tonnes_small_season = v_VolCol_ls,
+    tonnes_both_season = v_VolCol,
     i03aq20__is_vol_correct = i03aq20,
     i03aq25__vehic_type = str_vehic,
     i03aq25__is_vehic_velo = i03aq25__1,
@@ -250,7 +282,169 @@ jrc_buyer_roster =
     i04aq24_oth__buyer_type_oth = i04aq24_oth,
     i00q10__ID = buyer_id)
 
+# Rename section 3A data 
 
+# qty_buy_inkg is the kg purchased by this intermediary to this producer in the whole year. 
+pro_itm %>% filter(qty_buy_inkg != light_sold_to_this_buy_kg + main_sold_to_this_buy_kg) %>% nrow()
+
+pro_itm = 
+  pro_itm %>% 
+  rename(
+    s03aq1_ID = s03aq1_id, # 'code acheteur'
+    itm_type__s03aq2 = s03aq2,
+    itm_type__s03aq2_oth = s03aq2_oth,
+    
+    # volumes
+    # __s03aq301 = s03aq301,
+    # __s03aq302 = s03aq302,
+    # __s03aq303 = s03aq303,
+    # __s03aq304 = s03aq304,
+    # __s03aq3_1 = s03aq3_1,
+    # __s03aq4_1 = s03aq4_1,
+    # use those instead: 
+    kg_both_season = qty_buy_inkg, # for consistency with the 
+    kg_light_season = light_sold_to_this_buy_kg,
+    kg_main_season = main_sold_to_this_buy_kg,
+    
+    # Weighting 
+    # __s03aq5 = s03aq5,
+    # __s03aq6 = s03aq6,
+    # __s03aq6_oth = s03aq6_oth,
+    # __s03aq7 = s03aq7,
+    # __s03aq7_oth = s03aq7_oth,
+    # __s03aq8 = s03aq8,
+    # __s03aq10 = s03aq10, # PRICE (w/o premium)
+    # __s03aq11 = s03aq11,
+    
+    # Reasons for selling to this buyer
+    motiv_itm_choice__s03aq12__1 = s03aq12__1,
+    motiv_itm_choice__s03aq12__2 = s03aq12__2,
+    motiv_itm_choice__s03aq12__3 = s03aq12__3,
+    motiv_itm_choice__s03aq12__4 = s03aq12__4,
+    motiv_itm_choice__s03aq12__5 = s03aq12__5,
+    motiv_itm_choice__s03aq12__6 = s03aq12__6,
+    motiv_itm_choice__s03aq12__7 = s03aq12__7,
+    motiv_itm_choice__s03aq12__8 = s03aq12__8,
+    motiv_itm_choice__s03aq12__9 = s03aq12__9,
+    motiv_itm_choice__s03aq12__10 = s03aq12__10,
+    motiv_itm_choice__s03aq12__19 = s03aq12__19,
+    motiv_itm_choice__s03aq12_oth = s03aq12_oth,
+    
+    # Trade relationship with the intermediary, incl. in terms of payments
+    tradelink_nature__s03aq13 = s03aq13,
+    agreement_type__s03aq14 = s03aq14,
+    agreement_type_oth__s03aq14_oth = s03aq14_oth,
+    tradelink_frequency__s03aq15 = s03aq15,
+    tradelink_quality__s03aq16 = s03aq16,
+    price_diff__s03aq17 = s03aq17,
+    price_satisfaction__s03aq18 = s03aq18,
+    other_itm_prices__s03aq19 = s03aq19,
+    is_price_qual_dep__s03aq20 = s03aq20, # do you think the price vary with the quality
+    is_itm_ever_late__s03aq21 = s03aq21,
+    frequency_late__s03aq22 = s03aq22,
+    is_itm_indepted__s03aq23 = s03aq23,
+    is_every_reject__s03aq24 = s03aq24,
+    frequency_reject__s03aq25 = s03aq25,
+    
+    # reasons for buyer to ever reject supply - don't rename
+    # __s03aq26__1 = s03aq26__1,
+    # __s03aq26__2 = s03aq26__2,
+    # __s03aq26__3 = s03aq26__3,
+    # __s03aq26__4 = s03aq26__4,
+    # __s03aq26__5 = s03aq26__5,
+    # __s03aq26__6 = s03aq26__6,
+    # __s03aq26__7 = s03aq26__7,
+    # __s03aq26__8 = s03aq26__8,
+    # __s03aq26__9 = s03aq26__9,
+    # __s03aq26__10 = s03aq26__10,
+    # __s03aq26__13 = s03aq26__13,
+    # __s03aq26__12 = s03aq26__12,
+    # __s03aq26__19 = s03aq26__19,
+    # __s03aq26__999 = s03aq26__999,
+    # __s03aq27 = s03aq27,
+    # __s03aq28 = s03aq28,
+    
+    traitant_influence__s03aq30 = s03aq30, # La coopérative était-elle en fait un pisteur ou un acheteur privé, par le passé ? Ou appartient-elle à un pisteur ou à un acheteur privé (traitant) ?
+    is_member__s03aq31 = s03aq31,
+    paid_for_membership__s03aq32 = s03aq32,
+    membership_price__s03aq33 = s03aq33,
+    years_membership__s03aq34 = s03aq34,
+    # __s03aq35 = s03aq35,
+    # __s03aq36 = s03aq36,
+    
+    # decisions on which you could vote at the general assembly - don't rename
+    # __s03aq37__1 = s03aq37__1,
+    # __s03aq37__2 = s03aq37__2,
+    # __s03aq37__3 = s03aq37__3,
+    # __s03aq37__4 = s03aq37__4,
+    # __s03aq37__5 = s03aq37__5,
+    # __s03aq37__6 = s03aq37__6,
+    # __s03aq37__7 = s03aq37__7,
+    # __s03aq37__8 = s03aq37__8,
+    # __s03aq37__9 = s03aq37__9,
+    # __s03aq37_oth = s03aq37_oth,
+    
+    km_itm_hh__s03aq38 = s03aq38,
+    is_role_in_coop__s03aq391 = s03aq391,
+    role_in_coop__s03aq392 = s03aq392,
+    role_in_coop_oth__s03aq393 = s03aq393,
+    is_family_link__s03aq394 = s03aq394,
+    years_tradelink__s03aq399 = s03aq399,
+    
+    # certification
+    # __s03aq40 = s03aq40,
+    # __s03aq41 = s03aq41,
+    # __s03aq42 = s03aq42,
+    # __s03aq42_oth = s03aq42_oth,
+    # __s03aq43 = s03aq43,
+    # __s03aq44 = s03aq44,
+    # __s03aq45 = s03aq45,
+    # __s03aq46 = s03aq46,
+    # __s03aq47 = s03aq47,
+    # __s03aq48 = s03aq48,
+    # __s03aq49 = s03aq49,
+    # __s03aq50 = s03aq50,
+    # __s03aq51 = s03aq51,
+    # __s03aq52 = s03aq52,
+    # __s03aq53 = s03aq53,
+    # __s03aq54 = s03aq54,
+    # __s03aq60 = s03aq60,
+    
+    # Quelles sont ces techniques que vous avez vu dans les champs école ? - don't rename
+    # __s03aq61__1 = s03aq61__1,
+    # __s03aq61__2 = s03aq61__2,
+    # __s03aq61__3 = s03aq61__3,
+    # __s03aq61__4 = s03aq61__4,
+    # __s03aq61__5 = s03aq61__5,
+    # __s03aq61__6 = s03aq61__6,
+    # __s03aq61__7 = s03aq61__7,
+    # __s03aq61__8 = s03aq61__8,
+    # __s03aq61__9 = s03aq61__9,
+    # __s03aq61__19 = s03aq61__19,
+    # __s03aq62 = s03aq62,
+    # __s03aq63 = s03aq63,
+    # __s03aq64 = s03aq64,
+    # __s03aq65 = s03aq65,
+    # __s03aq66 = s03aq66,
+    # __s03aq67 = s03aq67,
+    # __s03aq68 = s03aq68,
+    # __s03aq70 = s03aq70,
+    
+     # "buyer_name"                "prop_main_buy"             "prop_light_buy"            "main_sold_to_this_buy_kg" 
+     # "light_sold_to_this_buy_kg" "qty_buy_inkg"              "main_sold_inunit"          "light_sold_inunit"        
+     # "unit_inkg"                 "prev_main_inkg"            "prev_main_inunit"          "prev_main_left"           
+     # "prev_light_inkg"           "prev_light_inunit"         "prev_light_left"           "buy_sum_share_light"      
+     # "buy_sum_share_main"        "str_second_main_buyer"     "str_second_light_buyer"    "unit_lab"                 
+     # "share_total"               "first_sec"                 "first_sec_short"           "test"                     
+     # "buyer_order"               "cert_name2"                "str_noinput"               "str_ifpro"                
+  ) %>% 
+  mutate(
+    kg_main_all = main_sold_inunit*unit_inkg,
+    kg_light_all = light_sold_inunit*unit_inkg,
+    kh_both_all = kg_main_all + kg_light_all, 
+    # and I don't know what this is below, but make the sum across seasons still
+    prev_both_inkg = prev_main_inkg + prev_light_inkg
+  )
 
 ### Make booleans -------
 jrc = 
@@ -374,7 +568,7 @@ nrow(jrc_coops) # so the JRC data provides info on 47 apparently distinct (at th
 # This is consistent with what Jens Van Hee counts.  
 
 
-### Departmenet and locality names --------
+### Department and locality names --------
 # Attribute departement geocode when available from a departement/district/sbf/village name 
 # Then attribute the ZD name to the locality name to keep this info into the private IC2B
 lvl4 <- departements %>% st_drop_geometry() %>% select(LVL_4_NAME, LVL_4_CODE)
@@ -509,6 +703,9 @@ jrc_coops_merge =
 
 ## For SUPPLY SHED MODEL ------
 # we don't restrict to jrc_coops 
+
+# these are the links
+pro_itm
 
 farm_pt = 
   jrc %>% 

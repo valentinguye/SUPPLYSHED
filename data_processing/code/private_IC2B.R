@@ -2215,6 +2215,8 @@ civ_save2 <- civ
 # 3 - NUM_FARMERS_EXTRAPOLATED has all three kinds of imputations; it is not meant for SEIPCS but for analyses that 
 #     would use the output of this script directly (i.e. not after running the SEIPCS model). 
 
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(DISCL_NUMBER_FARMERS) %>% summary()
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(DISCL_NUMBER_FARMERS) %>% summary()
 
 ##### 1st kind of imputations #####
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(DISCL_NUMBER_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
@@ -2249,6 +2251,8 @@ civ <-
 # (but there almost no common coop id linked to RFA between 2019 and 2022 disclosures...)
 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NB_FARMERS_COMPANY_YEAR, na.rm = T)) %>% arrange(DISCL_YEAR) 
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(NB_FARMERS_COMPANY_YEAR) %>% summary()
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(NB_FARMERS_COMPANY_YEAR) %>% summary()
 
 ##### 2nd kind of imputations #####
 
@@ -2288,6 +2292,11 @@ civ <-
 civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
 civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
 
+# the last step, within the same year, didn't change anything for RFA, which makes sense: 
+# in 2019 all RFA disclosures have a known number of farmers already, and in 2022 none of them have. 
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(NUM_FARMERS) %>% summary()
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(NUM_FARMERS) %>% summary()
+
 # Then, if still not imputed, impute from different years 
 civ <- 
   civ %>%
@@ -2303,6 +2312,9 @@ civ <-
 # civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
+  # this step does change things, adding a value for ~60 rows, and shifting the distribution upwards significantly 
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(NUM_FARMERS) %>% summary()
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(NUM_FARMERS) %>% summary()
 
 
 # this illustrates different kinds of imputations.
@@ -2334,6 +2346,9 @@ civ <-
   ungroup()
 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
+civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
 
 civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
@@ -2377,16 +2392,16 @@ civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
 # For instance, in 2020, we have almost no disclosure from traders:
 # civ %>% filter(DISCL_YEAR == 2020) %>% pull(TRADER_NAME) %>% unique()
 
-# First, handle certification schemes. 
-# - Repeat Fairtrade which is only disclosed per the private data set deemed valid for 2019.
+### Certification schemes ----- 
+# Fairtrade is only disclosed per the private data set deemed valid for 2019.
 civ %>% filter(COMPANY=="FAIRTRADE") %>% select(DISCL_YEAR) %>% table()
+# We want to repeat it. 
 
 # - And handle RFA which discloses several years: 2019 through the CAM, and 2022 through their website, 
 # with suspended coops in 2021 and an additional one in 2023  
-
 rfa_202123 = 
   civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR %in% c(2020, 2021, 2023))
-
+# So remove it from the main data in those years, such that it gets repeated from 2019
 civ = 
   civ %>% filter(!(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR %in% c(2020, 2021, 2023)))
 
@@ -2402,8 +2417,7 @@ for(year in 2020:max(unique(civ$DISCL_YEAR))){
   # companies known to disclose as of past year
   certification_past_year <- unique(civ_past_year$COMPANY)
   # keep only certification schemes
-  certification_past_year <- certification_past_year[certification_past_year %in% c("FAIRTRADE",
-                                                                        "RAINFOREST ALLIANCE")]
+  certification_past_year <- certification_past_year[certification_past_year %in% c("FAIRTRADE", "RAINFOREST ALLIANCE")]
   
   for(scheme in certification_past_year){
     
@@ -2439,7 +2453,7 @@ civ =
   civ %>% 
   rbind(new_rfa)
 
-
+### Companies --------
 # Rationales for company disclosures: 
 # Start from baseline year, 2019, for which and only for which we have near complete coverage of companies. 
 # For every company present a given year, check whether it has made a disclosure the next year. 
@@ -2501,10 +2515,10 @@ civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, n
 # However, the coop existence extrapolation must occur after the coop minimum size, to extrapolate this information over time. 
 
 
-### COOP NB OF FARMERS #### 
+# COOP NB OF FARMERS ------- 
 # Use the most imputed version throughout
 # The goal is to know a minimum number of farmers supplying a cooperative. 
-# This is either the number of members directly reported by the coop, 
+# This is either the number of members directly reported by the coop (e.g. in JRC data), 
 # or the max number of farmers between the sum of disclosed links with traders and 
 # the sum of disclosed links with non-traders, number of farmers disclosed by Fairtrade, and the sum of number of farmers disclosed by Rainforest Alliance (RFA).  
 # in computing either, we don't want to double-count across years or disclosures of the same purchase disclosed by different companies or different sources 
@@ -2516,7 +2530,7 @@ civ <-
   # exclude from the trader category, companies that are not in the cleaned trader list, as well 
   # as companies that are different from the trader, to count only once farmer bases of flows where we left multi-tier info (because the trader did not disclose itself)    
   # (this is what the & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME) does). 
-  mutate(NON_TRADER = !is.na(COMPANY) & !(COMPANY %in% exper_cln) & NOT_RFA_FT & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME)  , 
+  mutate(NON_TRADER = !is.na(COMPANY) & !(COMPANY %in% exper_cln) & NOT_RFA_FT & (is.na(TRADER_NAME) | COMPANY == TRADER_NAME), 
          TRADER     = !is.na(COMPANY) & ((COMPANY %in% exper_cln) | (TRADER_NAME %in% exper_cln)) & NOT_RFA_FT, 
          NO_DISCLOSING = is.na(COMPANY)
          ) %>% 
@@ -2524,46 +2538,55 @@ civ <-
     # NON_TRADER
     group_by(COOP_ID, DISCL_YEAR, NON_TRADER) %>% 
     mutate(unique_company_link = (NON_TRADER & !duplicated(COMPANY)),
-           TOTAL_FARMERS_NONTRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_company_link)) %>% # leave na.rm = F such that coops with only missing info get NA and not 0, but this does not exist anymore, because number of farmers has been extrapolated for all links
+           TOTAL_FARMERS_NONTRADER = sum(NUM_FARMERS*unique_company_link)) %>% # leave na.rm = F such that coops with only missing info get NA and not 0
     # Populate other cells in the column
     group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_NONTRADER = max(TOTAL_FARMERS_NONTRADER, na.rm = T)) %>% 
+    mutate(TOTAL_FARMERS_NONTRADER = max(TOTAL_FARMERS_NONTRADER, na.rm = T),
+           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
+           TOTAL_FARMERS_NONTRADER = na_if(TOTAL_FARMERS_NONTRADER, -Inf)) %>% 
    
-    # if NUM_FARMERS_EXTRAPOLATED had NAs, we would need to add this in the mutate above: TOTAL_FARMERS_FT = na_if(TOTAL_FARMERS_FT, -Inf)
+    # , we would need to add this in the mutate above: 
     
     # TRADER
     group_by(COOP_ID, DISCL_YEAR, TRADER) %>% 
     mutate(unique_trader_link = (TRADER & !duplicated(TRADER_NAME)),
-           TOTAL_FARMERS_TRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_trader_link)) %>% 
+           TOTAL_FARMERS_TRADER = sum(NUM_FARMERS*unique_trader_link)) %>% 
     # Populate other cells in the column
     group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_TRADER = max(TOTAL_FARMERS_TRADER, na.rm = T)) %>% 
-    
+    mutate(TOTAL_FARMERS_TRADER = max(TOTAL_FARMERS_TRADER, na.rm = T),
+           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
+           TOTAL_FARMERS_TRADER = na_if(TOTAL_FARMERS_TRADER, -Inf)) %>% 
+  
     # Rainforest Alliance (RFA)
     group_by(COOP_ID, DISCL_YEAR, NOT_RFA) %>% 
     mutate(unique_rfa_link = (!NOT_RFA & !duplicated(COMPANY)),
-           TOTAL_FARMERS_RFA = sum(NUM_FARMERS_EXTRAPOLATED*unique_rfa_link)) %>% 
+           TOTAL_FARMERS_RFA = sum(NUM_FARMERS*unique_rfa_link)) %>% 
     # Populate other cells in the column
     group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_RFA = max(TOTAL_FARMERS_RFA, na.rm = T)) %>% 
+    mutate(TOTAL_FARMERS_RFA = max(TOTAL_FARMERS_RFA, na.rm = T),
+           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
+           TOTAL_FARMERS_RFA = na_if(TOTAL_FARMERS_RFA, -Inf)) %>% 
     
     # Fairtrade
     group_by(COOP_ID, DISCL_YEAR, NOT_FT) %>% 
     mutate(unique_ft_link = (!NOT_FT & !duplicated(COMPANY)),
-           TOTAL_FARMERS_FT = sum(NUM_FARMERS_EXTRAPOLATED*unique_ft_link)) %>% 
+           TOTAL_FARMERS_FT = sum(NUM_FARMERS*unique_ft_link)) %>% 
     # Populate other cells in the column
     group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T)) %>% 
+    mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T),
+           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
+           TOTAL_FARMERS_FT = na_if(TOTAL_FARMERS_FT, -Inf)) %>% 
   
   # Cette partie permet d'inclure l'info déduite d'autres années, pour les coops qui une année n'ont aucune disclo d'aucune entreprise. 
   # (une 20aine de cas)
     # No disclosing company
     group_by(COOP_ID, DISCL_YEAR, NO_DISCLOSING) %>% 
     mutate(unique_nodiscl_link = (NO_DISCLOSING & !duplicated(COMPANY)), # this works on NAs
-           TOTAL_FARMERS_NODISCL = sum(NUM_FARMERS*unique_nodiscl_link)) %>% # NUM_FARMERS here, not extrapolated
+           TOTAL_FARMERS_NODISCL = sum(NUM_FARMERS*unique_nodiscl_link)) %>% 
     # Populate other cells in the column
     group_by(COOP_ID, DISCL_YEAR) %>% 
     mutate(TOTAL_FARMERS_NODISCL = max(TOTAL_FARMERS_NODISCL, na.rm = T), 
+           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
            TOTAL_FARMERS_NODISCL = na_if(TOTAL_FARMERS_NODISCL, -Inf)) %>% 
     
     # select(-unique_trader_link) %>%NB_FARMERS_COOP_YEAR2
@@ -2596,7 +2619,7 @@ civ %>% filter(TOTAL_FARMERS == 10788) %>% View()
 civ$TOTAL_FARMERS %>% summary()
 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
-civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
+civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
 tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>% 
   mutate(ANYNA = anyNA(COMPANY)) %>% 
@@ -2606,6 +2629,12 @@ tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>%
 tmp$COOP_ID %>% unique() %>%length()
 nrow(tmp)
 
+# Explore what it does in RFA coops
+rfa22 <- civ %>% filter(COMPANY == "RAINFOREST ALLIANCE" & DISCL_YEAR == 2022)
+rfa22$TOTAL_FARMERS_RFA %>% summary()
+rfa22$TOTAL_FARMERS %>% summary()
+
+civ %>% filter(TOTAL_FARMERS_RFA != TOTAL_FARMERS) %>% View()
 
 # civ$TOTAL_FARMERS %>% summary()
 # civ %>% filter(TOTAL_FARMERS > 3000) %>% View()
