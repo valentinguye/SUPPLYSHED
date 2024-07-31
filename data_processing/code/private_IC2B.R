@@ -70,15 +70,7 @@ departements <- s3read_using(
   #skip = 3,
   opts = c("check_region" = T)
 )
-# 
-# # List of cleaned trader group names - not necessary currently
-# trad_nam <-
-#   s3read_using(
-#     FUN = function(object) read.csv2(object, na.strings = "NNN"),
-#     object = "cote_divoire/trade/cd/export/trader_labels/cote_divoire_traders_from_customs_data_2020_2021_2022.csv",
-#     bucket = "trase-storage",
-#     opts = c("check_region" = TRUE)
-#   )
+
 
 # FUNCTIONS ####
 
@@ -1226,37 +1218,18 @@ civ %>% filter(is.na(LATITUDE) & !is.na(LONGITUDE)) %>% nrow()
 # Since we also condition on both abrv and full names being the same, this can extend this constraint to 1-digit rounding: 
 # I.e., we deem two coops different if, despite having the same abrv and full names, they are more than 11.1km apart. 
 
-# Make a long concatenation ID 
-civ <- 
-  civ %>% 
-  mutate(CCTN_COOP_POINT_ID = paste0(SUPPLIER_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
-  arrange(CCTN_COOP_POINT_ID)
 
-civ_save1 <- civ
-
-
-### Buying station IDs -----------------------------
 # Here, we make ids for distinct combinations of geo coordinates and full and abbreviated names. 
 # We call these buying station IDs, because we consider that the same coop can have 
 # several locations when it has several buying stations. 
 
-
-# Don't make stable IDs because stable ids are necessary and built only for the public data set. 
-# here, we just want arbitrary IDs. They don't need to match with the public data set because 
-# we will never merge those, as they are intrinsically built differently by the addition of 
-# private inputs in the process above
-arbitrary_ids = 
-    civ %>% 
-    distinct(CCTN_COOP_POINT_ID) %>%
-    mutate(COOP_POINT_ID = row_number()) # Arbitrary BS id, based on order (arrange above)
-civ = 
+civ <- 
   civ %>% 
-  left_join(arbitrary_ids, 
-            by = "CCTN_COOP_POINT_ID") 
-
-if(length(unique(civ$COOP_POINT_ID)) != nrow(arbitrary_ids)){stop("something wrong")}
-
-rm(arbitrary_ids)
+  mutate(CCTN_COOP_POINT_ID = paste0(SUPPLIER_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
+  arrange(CCTN_COOP_POINT_ID) %>% 
+  group_by(CCTN_COOP_POINT_ID) %>% 
+  mutate(COOP_POINT_ID = cur_group_id()) %>% 
+  ungroup()
 
 
 # this is just to keep track of where the info comes from, at point level. 
@@ -1827,49 +1800,37 @@ civ <-
 # 
 # civ %>% filter(is.na(SUPPLIER_FULLNAME)) %>% nrow()
 
-### Differentiate coops ---------------------------------
+# COOP IDs -----------------------------
 
 # At this point, all NAs that can reasonably be imputed have been so. Thus, remaining NAs are considered as distinct values. 
-# Recall that with 2-digit rounding, points apart from up to 1.1km are deemed to have the same location. 
-# Since we also condition on both abrv and full names being the same, this can extend this constraint to 1-digit rounding: 
-# I.e., we deem two coops different if, despite having the same abrv and full names, they are more than 11.1km apart. 
 
-# Make a long concatenation ID 
-civ <- 
-  civ %>% 
-  mutate(CCTN_COOP_ID = paste0(SUPPLIER_ABRVNAME, "_", DISTRICT_GEOCODE, "_", SUPPLIER_FULLNAME)) %>%
-  arrange(CCTN_COOP_ID)
-
-### Coop IDs -----------------------------
 # Here, we make ids for distinct combinations of DISTRICT and full and abbreviated names. 
 # We call these COOP IDs, because we consider that the same coop can have 
 # several locations within the same district, when it has several buying stations. 
+civ <- 
+  civ %>% 
+  mutate(CCTN_COOP_ID = paste0(SUPPLIER_ABRVNAME, "_", DISTRICT_GEOCODE, "_", SUPPLIER_FULLNAME)) %>%
+  arrange(CCTN_COOP_ID) %>% 
+  group_by(CCTN_COOP_ID) %>% 
+  mutate(COOP_ID = cur_group_id()) %>% 
+  ungroup()
 
 # Don't make stable IDs because stable ids are necessary and built only for the public data set. 
 # here, we just want arbitrary IDs. They don't need to match with the public data set because 
 # we will never merge those, as they are intrinsically built differently by the addition of 
 # private inputs in the process above
-arbitrary_ids = 
-  civ %>% 
-  distinct(CCTN_COOP_ID) %>%
-  mutate(COOP_ID = row_number()) # Arbitrary COOP id, based on order (arrange above)
-civ = 
-  civ %>% 
-  left_join(arbitrary_ids, 
-            by = "CCTN_COOP_ID") 
-
-if(length(unique(civ$COOP_ID)) != nrow(arbitrary_ids)){stop("something wrong")}
-
-rm(arbitrary_ids)
 
 civ$COOP_POINT_ID %>% unique() %>% length()
 civ$COOP_ID %>% unique() %>% length()
 # and the number of distinct coops with identification based on 1-decimal rounded coordinates was 5984
 
 
-# There are several things to handle from here:
-
-# Homogenize - i.e. attribute the mode and store a vector of unique values... 
+#### Buying station IDs -------
+civ <- 
+  civ %>% 
+  group_by(COOP_ID) %>%
+  mutate(COOP_BS_ID = paste0("COOP-",unique(COOP_ID), "_BS-", match(COOP_POINT_ID, unique(COOP_POINT_ID)))) %>% 
+  ungroup()
 
 
 # CLEAN CERTIFICATION -------------------------
@@ -2215,6 +2176,8 @@ civ_save2 <- civ
 # 3 - NUM_FARMERS_EXTRAPOLATED has all three kinds of imputations; it is not meant for SEIPCS but for analyses that 
 #     would use the output of this script directly (i.e. not after running the SEIPCS model). 
 
+# Note that we do still group on COOP level, and not BUYING STATION, as we consider this is the relevant level for the farmer base
+
 civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(DISCL_NUMBER_FARMERS) %>% summary()
 civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(DISCL_NUMBER_FARMERS) %>% summary()
 
@@ -2340,12 +2303,38 @@ civ <-
   # Necessary to name it differently, for SEIPCS to pick up NUM_FARMERS variable untouched by this step; 
   mutate(
     NUM_FARMERS_EXTRAPOLATED = case_when(
-      is.na(NUM_FARMERS) ~ round(mean(NUM_FARMERS, na.rm=TRUE), 0), 
+      # DO NOT EXTRAPOLATE FOR ROWS NOT DISCLOSED BY A COMPANY OR RFA
+      # these are coops only present in the CAM v3, and we have no idea how many links they have, so it would be spurious to 
+      # attribute them all the avg link size as if they all had one link. 
+      # It would inflate the number of farmers quite a lot, because coops disclosed by companies tend to be the largest ones.
+      # These coops never disclosed by a company may well comprise 'paper coops' etc. that only have a couple of members.  
+      !is.na(COMPANY) & is.na(NUM_FARMERS) ~ round(mean(NUM_FARMERS, na.rm=TRUE), 0), 
       TRUE ~ NUM_FARMERS
     )) %>% 
   ungroup()
 
-civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
+# So now, there ARE NAs in NUM_FARMERS_EXTRAPOLATED
+anyNA(civ$NUM_FARMERS_EXTRAPOLATED)
+
+civ %>% 
+  summarise(.by = DISCL_YEAR, 
+            NB_FARMERS = sum(NUM_FARMERS, na.rm = T), 
+            NB_FARMERS_EXTRAPOLATED = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% 
+  arrange(DISCL_YEAR) 
+
+civ %>% 
+  filter(COMPANY != "RAINFOREST ALLIANCE") %>% 
+  summarise(.by = DISCL_YEAR, 
+            NB_FARMERS = sum(NUM_FARMERS, na.rm = T), 
+            NB_FARMERS_EXTRAPOLATED = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% 
+  arrange(DISCL_YEAR) 
+
+civ %>% 
+  filter(COMPANY == "RAINFOREST ALLIANCE") %>% 
+  summarise(.by = DISCL_YEAR, 
+            NB_FARMERS = sum(NUM_FARMERS, na.rm = T), 
+            NB_FARMERS_EXTRAPOLATED = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% 
+  arrange(DISCL_YEAR) 
 
 civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE")) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
 civ %>% filter(COMPANY %in% c("RAINFOREST ALLIANCE") & DISCL_YEAR==2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
@@ -2358,24 +2347,11 @@ civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
 civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% pull(COMPANY) %>% unique()
 civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% View()
 
-if(civ %>% filter(is.na(NUM_FARMERS_EXTRAPOLATED)) %>% pull(COMPANY) %>% unique() == "RAINFOREST ALLIANCE"){
-  civ <- 
-    civ %>%
-    group_by(NOT_RFA, NOT_FT) %>% 
-    mutate(
-      NUM_FARMERS_EXTRAPOLATED = case_when(
-        is.na(NUM_FARMERS_EXTRAPOLATED) ~ round(mean(NUM_FARMERS_EXTRAPOLATED, na.rm=TRUE), 0), 
-        TRUE ~ NUM_FARMERS_EXTRAPOLATED
-      )) %>% 
-    ungroup()
-}
-
 civ %>% filter(NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 civ %>% filter(!NOT_RFA_FT) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = T)
 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
-if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not complete")}
 
 # civ %>% summarise(.by = DISCL_YEAR, 
 #                   AVG_NUM_FARM_PER_COOP = mean(NUM_FARMERS_EXTRAPOLATED, na.rm = TRUE)) %>% 
@@ -2391,6 +2367,11 @@ civ$NUM_FARMERS_EXTRAPOLATED %>% summary()
 
 # For instance, in 2020, we have almost no disclosure from traders:
 # civ %>% filter(DISCL_YEAR == 2020) %>% pull(TRADER_NAME) %>% unique()
+
+# It is important that this repetition of whole disclosures comes before the next step, and not after, as was the case in IC2B v1.0, 
+# because then, links counted in the min coop size process are not omitted just because a company did not disclose in a given year. 
+# However, the coop existence extrapolation must occur after the coop minimum size, to extrapolate this information over time. 
+
 
 ### Certification schemes ----- 
 # Fairtrade is only disclosed per the private data set deemed valid for 2019.
@@ -2434,7 +2415,6 @@ for(year in 2020:max(unique(civ$DISCL_YEAR))){
       rm(to_stack)
     }
   }
-
   rm(scheme, civ_year, civ_past_year, certification_past_year)
 }
 
@@ -2452,6 +2432,9 @@ civ =
 civ = 
   civ %>% 
   rbind(new_rfa)
+
+civ %>% filter(COOP_ID %in% rfa_suspended$COOP_ID)
+
 
 ### Companies --------
 # Rationales for company disclosures: 
@@ -2502,7 +2485,6 @@ for(year in 2020:max(unique(civ$DISCL_YEAR))){
   
   rm(civ_year, civ_past_year, companies_past_year)
 }
-if(anyNA(civ$NUM_FARMERS_EXTRAPOLATED)){stop("Farmer number extrapolation not complete")}
 
 summary(civ$NUM_FARMERS_EXTRAPOLATED)
 civ %>% filter(NUM_FARMERS_EXTRAPOLATED==0) %>% nrow()
@@ -2510,9 +2492,6 @@ civ %>% filter(NUM_FARMERS_EXTRAPOLATED==0) %>% nrow()
 civ %>% filter(COMPANY != "RAINFOREST ALLIANCE") %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
-# It is important that this repetition of whole disclosures comes before the next step, and not after, as was the case in IC2B v1.0, 
-# because then, links counted in the min coop size process are not omitted just because a company did not disclose in a given year. 
-# However, the coop existence extrapolation must occur after the coop minimum size, to extrapolate this information over time. 
 
 
 # COOP NB OF FARMERS ------- 
@@ -2523,6 +2502,8 @@ civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS_EXTRAPOLATED, n
 # the sum of disclosed links with non-traders, number of farmers disclosed by Fairtrade, and the sum of number of farmers disclosed by Rainforest Alliance (RFA).  
 # in computing either, we don't want to double-count across years or disclosures of the same purchase disclosed by different companies or different sources 
 # Hence the unique_* variables
+# Note that this aggregates as well the number of farmers across buying stations of the same coop. 
+
 civ0_minsize <- civ
 
 civ <- 
@@ -2535,91 +2516,114 @@ civ <-
          NO_DISCLOSING = is.na(COMPANY)
          ) %>% 
   
-    # NON_TRADER
-    group_by(COOP_ID, DISCL_YEAR, NON_TRADER) %>% 
-    mutate(unique_company_link = (NON_TRADER & !duplicated(COMPANY)),
-           TOTAL_FARMERS_NONTRADER = sum(NUM_FARMERS*unique_company_link)) %>% # leave na.rm = F such that coops with only missing info get NA and not 0
-    # Populate other cells in the column
-    group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_NONTRADER = max(TOTAL_FARMERS_NONTRADER, na.rm = T),
-           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
-           TOTAL_FARMERS_NONTRADER = na_if(TOTAL_FARMERS_NONTRADER, -Inf)) %>% 
-   
-    # , we would need to add this in the mutate above: 
-    
-    # TRADER
-    group_by(COOP_ID, DISCL_YEAR, TRADER) %>% 
-    mutate(unique_trader_link = (TRADER & !duplicated(TRADER_NAME)),
-           TOTAL_FARMERS_TRADER = sum(NUM_FARMERS*unique_trader_link)) %>% 
-    # Populate other cells in the column
-    group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_TRADER = max(TOTAL_FARMERS_TRADER, na.rm = T),
-           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
-           TOTAL_FARMERS_TRADER = na_if(TOTAL_FARMERS_TRADER, -Inf)) %>% 
+  # NON_TRADER
+  group_by(COOP_ID, DISCL_YEAR, NON_TRADER) %>% 
+  mutate(unique_company_link = (NON_TRADER & !duplicated(COMPANY)),
+         TOTAL_FARMERS_NONTRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_company_link)) %>% # leave na.rm = F such that coops with only missing info get NA and not 0, but this does not exist anymore, because number of farmers has been extrapolated for all links
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_NONTRADER = max(TOTAL_FARMERS_NONTRADER, na.rm = T),
+         TOTAL_FARMERS_NONTRADER = na_if(TOTAL_FARMERS_NONTRADER, -Inf)) %>% 
   
-    # Rainforest Alliance (RFA)
-    group_by(COOP_ID, DISCL_YEAR, NOT_RFA) %>% 
-    mutate(unique_rfa_link = (!NOT_RFA & !duplicated(COMPANY)),
-           TOTAL_FARMERS_RFA = sum(NUM_FARMERS*unique_rfa_link)) %>% 
-    # Populate other cells in the column
-    group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_RFA = max(TOTAL_FARMERS_RFA, na.rm = T),
-           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
-           TOTAL_FARMERS_RFA = na_if(TOTAL_FARMERS_RFA, -Inf)) %>% 
-    
-    # Fairtrade
-    group_by(COOP_ID, DISCL_YEAR, NOT_FT) %>% 
-    mutate(unique_ft_link = (!NOT_FT & !duplicated(COMPANY)),
-           TOTAL_FARMERS_FT = sum(NUM_FARMERS*unique_ft_link)) %>% 
-    # Populate other cells in the column
-    group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T),
-           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
-           TOTAL_FARMERS_FT = na_if(TOTAL_FARMERS_FT, -Inf)) %>% 
+  # if NUM_FARMERS_EXTRAPOLATED had NAs, we would need to add this in the mutate above: TOTAL_FARMERS_NONTRADER = na_if(TOTAL_FARMERS_NONTRADER, -Inf)
+  
+  # TRADER
+  group_by(COOP_ID, DISCL_YEAR, TRADER) %>% 
+  mutate(unique_trader_link = (TRADER & !duplicated(TRADER_NAME)),
+         TOTAL_FARMERS_TRADER = sum(NUM_FARMERS_EXTRAPOLATED*unique_trader_link)) %>% 
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_TRADER = max(TOTAL_FARMERS_TRADER, na.rm = T),
+         TOTAL_FARMERS_TRADER = na_if(TOTAL_FARMERS_TRADER, -Inf)) %>% 
+  
+  # Rainforest Alliance (RFA)
+  group_by(COOP_ID, DISCL_YEAR, NOT_RFA) %>% 
+  mutate(unique_rfa_link = (!NOT_RFA & !duplicated(COMPANY)),
+         TOTAL_FARMERS_RFA = sum(NUM_FARMERS_EXTRAPOLATED*unique_rfa_link)) %>% 
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_RFA = max(TOTAL_FARMERS_RFA, na.rm = T),
+         TOTAL_FARMERS_RFA = na_if(TOTAL_FARMERS_RFA, -Inf)) %>% 
+  
+  # Fairtrade
+  group_by(COOP_ID, DISCL_YEAR, NOT_FT) %>% 
+  mutate(unique_ft_link = (!NOT_FT & !duplicated(COMPANY)),
+         TOTAL_FARMERS_FT = sum(NUM_FARMERS_EXTRAPOLATED*unique_ft_link)) %>% 
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_FT = max(TOTAL_FARMERS_FT, na.rm = T),
+         TOTAL_FARMERS_FT = na_if(TOTAL_FARMERS_FT, -Inf)) %>% 
   
   # Cette partie permet d'inclure l'info déduite d'autres années, pour les coops qui une année n'ont aucune disclo d'aucune entreprise. 
-  # (une 20aine de cas)
-    # No disclosing company
-    group_by(COOP_ID, DISCL_YEAR, NO_DISCLOSING) %>% 
-    mutate(unique_nodiscl_link = (NO_DISCLOSING & !duplicated(COMPANY)), # this works on NAs
-           TOTAL_FARMERS_NODISCL = sum(NUM_FARMERS*unique_nodiscl_link)) %>% 
-    # Populate other cells in the column
-    group_by(COOP_ID, DISCL_YEAR) %>% 
-    mutate(TOTAL_FARMERS_NODISCL = max(TOTAL_FARMERS_NODISCL, na.rm = T), 
-           # this is because NUM_FARMERS has NAs, and then TOTAL_FARMERS_ is -Inf when it's only NAs in group. 
-           TOTAL_FARMERS_NODISCL = na_if(TOTAL_FARMERS_NODISCL, -Inf)) %>% 
-    
-    # select(-unique_trader_link) %>%NB_FARMERS_COOP_YEAR2
-    ungroup() %>% 
-    rowwise() %>% 
-    mutate(
-      # the case when is to leave the value unchanged when it's already 
-      # disclosed by the coop itself in that year (e.g. in JRC data).
-      TOTAL_FARMERS = case_when( 
-        is.na(DISCL_TOTAL_FARMERS) ~ max(
-          c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT", "TOTAL_FARMERS_NODISCL"))),
-          na.rm = TRUE),
-        TRUE ~ DISCL_TOTAL_FARMERS),
-      TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf) 
-    ) %>% 
-    ungroup() %>% 
-    # 
-    # !! Very important action here !!
-    # we consider that the total number of farmers for coops that have no link disclosed is NA, and not 0, as is currently attributed by the code above.
-# this is ok now that we have done the last step above.     
-mutate(TOTAL_FARMERS = case_when(
-      is.na(COMPANY) &  TOTAL_FARMERS == 0 ~ NA, 
-      TRUE ~ TOTAL_FARMERS
-    )
-    )
+  # (une 200aine de cas)
+  # No disclosing company
+  group_by(COOP_ID, DISCL_YEAR, NO_DISCLOSING) %>% 
+  mutate(unique_nodiscl_link = (NO_DISCLOSING & !duplicated(COMPANY)), # this works on NAs
+         TOTAL_FARMERS_NODISCL = sum(NUM_FARMERS*unique_nodiscl_link)) %>% # NUM_FARMERS here, not extrapolated
+  # Populate other cells in the column
+  group_by(COOP_ID, DISCL_YEAR) %>% 
+  mutate(TOTAL_FARMERS_NODISCL = max(TOTAL_FARMERS_NODISCL, na.rm = T), 
+         TOTAL_FARMERS_NODISCL = na_if(TOTAL_FARMERS_NODISCL, -Inf)) %>% 
+  
+  # select(-unique_trader_link) %>%NB_FARMERS_COOP_YEAR2
+  ungroup() %>% 
+  rowwise() %>% 
+  mutate(
+    # the case when is to leave the value unchanged when it's already 
+    # disclosed by the coop itself in that year (e.g. in JRC data).
+    TOTAL_FARMERS = case_when( 
+      is.na(DISCL_TOTAL_FARMERS) ~ max(
+        c_across(cols = all_of(c("TOTAL_FARMERS_TRADER", "TOTAL_FARMERS_NONTRADER", "TOTAL_FARMERS_RFA", "TOTAL_FARMERS_FT", "TOTAL_FARMERS_NODISCL"))),
+        na.rm = TRUE),
+      TRUE ~ DISCL_TOTAL_FARMERS),
+    TOTAL_FARMERS = na_if(TOTAL_FARMERS, -Inf) 
+  ) %>% 
+  ungroup() %>% 
+  # !! Very important action here !!
+  # we consider that the total number of farmers for coops that have no link disclosed is NA, and not 0, as is currently attributed by the code above.
+  # this is ok now that we have done the last step above.     
+  mutate(TOTAL_FARMERS = case_when(
+    is.na(COMPANY) &  TOTAL_FARMERS == 0 ~ NA, 
+    TRUE ~ TOTAL_FARMERS
+  )
+  )
 print("The warnings that 'no non-missing arguments to max; returning -Inf' are not problematic.")
 
+if(
+  civ %>% 
+    rowwise() %>% 
+    filter(!(NON_TRADER | TRADER | NO_DISCLOSING | !NOT_RFA | !NOT_FT)) %>% 
+    nrow() > 0 | 
+  civ %>%
+  mutate(
+    IS_RFA = !NOT_RFA,
+    IS_FT = !NOT_FT,
+    test = (NON_TRADER + TRADER + NO_DISCLOSING + IS_RFA + IS_FT)) %>%
+  filter(test != 1) %>% 
+  nrow() > 0
+  ){
+  stop("the grouping categories are incomplete or overlapping")
+}
+
+civ %>% 
+  filter(COMPANY != "RAINFOREST ALLIANCE") %>% 
+  summarise(.by = DISCL_YEAR, 
+            NB_FARMERS = sum(NUM_FARMERS, na.rm = T), 
+            NB_FARMERS_EXTRAPOLATED = sum(NUM_FARMERS_EXTRAPOLATED, na.rm = T),
+            TOTAL_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% 
+  arrange(DISCL_YEAR) 
+
+
+civ %>% filter(NO_DISCLOSING & !is.na(TOTAL_FARMERS)) %>% nrow()
+civ %>% filter(NO_DISCLOSING) %>% View()
 civ %>% filter(TOTAL_FARMERS == 10788) %>% View()
 # the one with 10788 farmers is a lot, but it soundly derives from the estimation rule, as expected.  
 civ$TOTAL_FARMERS %>% summary()
 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(NUM_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
+
+civ %>% summarise(.by = DISCL_YEAR, N_COOPS = length(unique(COOP_ID))) %>% arrange(DISCL_YEAR) 
 
 tmp <- civ %>% group_by(COOP_ID, DISCL_YEAR) %>% 
   mutate(ANYNA = anyNA(COMPANY)) %>% 
@@ -2692,9 +2696,10 @@ civ %>%
 
 
 
-# EXTRAPOLATE COOP EXISTENCE FROM PAST TO FUTURE ####
+# EXTRAPOLATE BUYING STATION EXISTENCE FROM PAST TO FUTURE ####
 # This DOES NOT produce a balanced panel. 
 # But it implies that the number of coops is only growing. 
+civ_save_noextr <- civ
 
 # generic row, with variable names - see below
 values <- rep(NA, ncol(civ))
@@ -2703,33 +2708,33 @@ gen_row <- data.frame(variables, values) %>%
   pivot_wider(names_from = variables, values_from = values)
 gen_row <- 
   gen_row %>% 
-  # leave COOP_ID
-  select(-DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
+  # leave COOP_POINT_ID but remove COOP_ID
+  select(-COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
          -contains("ABRVNAME"), -contains("FULLNAME"), -contains("LONGITUDE"), -contains("LATITUDE"), -contains("TOTAL_FARMERS"))
 
 for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
   # coops that existed in the previous year: 
-  coops_past_year <- civ %>% filter(DISCL_YEAR == year-1) %>% pull(COOP_ID) %>% unique()
+  coops_past_year <- civ %>% filter(DISCL_YEAR == year-1) %>% pull(COOP_POINT_ID) %>% unique()
   # coops disclosed the current year
-  coops_year <- civ %>% filter(DISCL_YEAR == year) %>% pull(COOP_ID) %>% unique()
+  coops_year <- civ %>% filter(DISCL_YEAR == year) %>% pull(COOP_POINT_ID) %>% unique()
   
   # coops that existed, but do not appear anymore in the current year, bc no one disclosed them 
   # but they most likely still exist!
   coops_disappeared <- coops_past_year[!(coops_past_year %in% coops_year)]
   
-  # take one row for each of these, to keep its coop-level information
+  # take one row for each of these, to keep its buying station-level information
   disappeared <- 
     civ %>% 
-    filter(COOP_ID %in% coops_disappeared & DISCL_YEAR == year-1) %>% 
-    select(COOP_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, DISTRICT_GEOCODE, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
+    filter(COOP_POINT_ID %in% coops_disappeared & DISCL_YEAR == year-1) %>% 
+    select(COOP_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, DISTRICT_GEOCODE, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
            contains("ABRVNAME"), contains("FULLNAME"), contains("LONGITUDE"), contains("LATITUDE"), contains("TOTAL_FARMERS")) %>% 
-    distinct(COOP_ID, DISCL_YEAR, .keep_all = TRUE) %>% 
+    distinct(COOP_POINT_ID, DISCL_YEAR, .keep_all = TRUE) %>% 
     mutate(DISCL_YEAR = year) # and change the year to the current one
   
   # add NA values for all other variables. 
   disappeared_full <- 
     disappeared %>% 
-    left_join(gen_row, by = "COOP_ID") %>% 
+    left_join(gen_row, by = "COOP_POINT_ID") %>% 
     # flag 
     mutate(REPEATED_FROM_PAST_YEAR = TRUE)
   
@@ -2741,41 +2746,51 @@ for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
   rm(coops_past_year, coops_year, coops_disappeared, disappeared, disappeared_full)
 }
 
-# verify that the number of coops is growing
+# check that the number of BUYING STATIONS is growing
+print("Buying stations cumulatively disclosed were: ")
+for(year in sort(unique(civ$DISCL_YEAR))){
+  civ %>% filter(DISCL_YEAR == year) %>%  pull(COOP_POINT_ID) %>% unique() %>% length() %>% paste0(" in ", year) %>% print()
+}
+
+# and that the number of coops is therefore growing too 
 print("Coops cumulatively disclosed were: ")
 for(year in sort(unique(civ$DISCL_YEAR))){
   civ %>% filter(DISCL_YEAR == year) %>%  pull(COOP_ID) %>% unique() %>% length() %>% paste0(" in ", year) %>% print()
 }
+
+civ %>% summarise(.by = DISCL_YEAR, N_COOPS = length(unique(COOP_ID))) %>% arrange(DISCL_YEAR) 
+
 summary(civ$TOTAL_FARMERS)
 civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(DISCL_YEAR) 
 
 
 # REMOVE DUPLICATES -----------------------------
-# At this point, within a year, several rows can reflect the same coop obviously 
-# (as several companies may have disclosed to buy from the same coop), 
+# At this point, within a year, several rows can reflect the same coop buying station obviously 
+# (as several companies may have disclosed to buy from the same buying station), 
 # but also the same link can come from different sources of disclosure data - typically, the previous CAM and data scraped by UCLouvain team). 
 
 # We thus remove duplicates (i.e. make row ids) in 2 different ways: 
-# 1- one row per coop per year (aggregating across links) - which is what we publish 
+# 1- one row per buying station per year (aggregating across links) - which is what we publish 
 # 2- one row per actual link (aggregating across sources) - which is what is inputed in SEI-PCS. 
 
 # (we DON'T try to make one row per sourcing flow (links to several companies that are on different stages of the supply chain are merged))
 
-civ_coopyear <- 
+civ_coop_bs_year <- 
   civ %>% 
-  group_by(COOP_ID, DISCL_YEAR) %>% 
+  group_by(COOP_ID, DISCL_YEAR) %>% # GROUP AT COOP LEVEL, TO HARMONIZE THESE INFO ACROSS BUYING STATIONS...
   mutate(DISCLOSURE_SOURCES = paste0(na.omit(unique(COMPANY)), collapse = " + "), 
          TRADER_NAMES = paste0(na.omit(unique(TRADER_NAME)), collapse = " + "), 
-         CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + ")) %>% 
+         CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + "), 
+         BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>% 
   ungroup() %>% 
-  distinct(COOP_ID, DISCL_YEAR, .keep_all = TRUE) %>% 
+  distinct(COOP_POINT_ID, DISCL_YEAR, .keep_all = TRUE) %>% # BUT KEEP DISTINCT ROWS AT  BUYING STATION LEVEL
   # remove variables that make no sense at this level of aggregation
   select(-COMPANY, -TRADER_NAME, -DISCL_TRADER_NAME,
          -LOCALITY_NAME, 
          -starts_with("CERT_"),
          -DISCL_NUMBER_FARMERS, -CAM_BUYERS, -BUYER, -NOT_RFA, -NOT_FT,
          -NUM_FARMERS, -NUM_FARMERS_EXTRAPOLATED, -NON_TRADER,-TRADER, -unique_company_link, -unique_trader_link) %>%
-  select(COOP_ID, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
+  select(COOP_ID, COOP_POINT_ID, BUYING_STATION_IDS, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
          DISTRICT_NAME, DISTRICT_GEOCODE,
          DISCLOSURE_SOURCES, TRADER_NAMES, CERTIFICATIONS, 
          TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS_FT, TOTAL_FARMERS, 
@@ -2795,10 +2810,11 @@ civ_seipcs <-
       TRUE ~ TRADER_NAME
     )
   ) %>%
-  group_by(COOP_ID, DISCL_YEAR, BUYER) %>%
-  mutate(CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + ")) %>%
+  group_by(COOP_ID, DISCL_YEAR, BUYER) %>% # GROUP AT COOP LEVEL, TO HARMONIZE THESE INFO ACROSS BUYING STATIONS...
+  mutate(CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + "), 
+         BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>%
   ungroup() %>%
-  distinct(COOP_ID, DISCL_YEAR, BUYER,
+  distinct(COOP_ID, DISCL_YEAR, BUYER, # AND *KEEP* DISTINCT ROWS AT *COOP* LEVEL BECAUSE THIS IS THE LEVEL FOR SEI-PCS (v1.1 at least)
            .keep_all = TRUE) %>%
   # Make a flow-level ID
   group_by(DISCL_YEAR) %>%
@@ -2810,7 +2826,7 @@ civ_seipcs <-
          # flow, and there might be small differences (if two companies don't disclose the same info on certification about the same flow).
          -CAM_BUYERS, -NOT_RFA, -NOT_FT,
          -unique_company_link, -unique_trader_link) %>% # -NON_TRADER,-TRADER, 
-  select(FLOW_ID, COOP_ID, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE,
+  select(FLOW_ID, COOP_ID, BUYING_STATION_IDS, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE,
          DISTRICT_NAME, DISTRICT_GEOCODE,
          BUYER, COMPANY, TRADER_NAME, # KEEP TRACK OF TRADER_NAME, for SEI-PCS
          CERTIFICATIONS,
@@ -2818,10 +2834,14 @@ civ_seipcs <-
          TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS_FT, TOTAL_FARMERS,
          everything()) %>%
   rename(YEAR = DISCL_YEAR,
-         DISCLOSURE_SOURCE = COMPANY, # note that this is not the same variable as DISCLOSURE_SOURCE*S* in civ_coopyear above. This one is always length 1.
+         DISCLOSURE_SOURCE = COMPANY, # note that this is not the same variable as DISCLOSURE_SOURCE*S* in civ_coop_bs_year above. This one is always length 1.
          IS_TRADER = TRADER) 
 
-civ_coopyear %>% summarise(.by = YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% arrange(YEAR) 
+civ_coop_bs_year %>% 
+  distinct(COOP_ID, YEAR, .keep_all = TRUE) %>% 
+  summarise(.by = YEAR, 
+            NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) %>% 
+  arrange(YEAR) 
 
 
 civ_seipcs %>%
@@ -2837,8 +2857,8 @@ civ_seipcs %>%
 # EXPORT ---------------------
 dir.create(here("temp_data/private_IC2B"))
 
-write_csv(civ_coopyear,
-          file = here("temp_data/private_IC2B/IC2B_v2_coop.csv"),
+write_csv(civ_coop_bs_year,
+          file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"),
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)

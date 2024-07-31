@@ -1,0 +1,1348 @@
+---
+title: "SEI_PCS model for Ivory Coast cocoa 2022"
+subttitle: "Estimates the volumes of cocoa beans sourced by traders from cooperatives"
+date: "11-08-2023"
+author: Valentin Guye
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = F, warning = F, fig.align = 'center', fig.width = 16, dpi = 300)
+
+library(tidyverse)
+library(readxl)
+library(sf)
+library(stringi)
+library(ggpubr)
+library(aws.s3)
+library(RPostgres)
+library(dbplyr)
+library(DBI)
+library(here)
+
+# devtools::install_github("sei-international/TRASE/trase/tools/traseviz", auth_token = Sys.getenv("PAT_TRASE"))
+# library(traseviz)
+
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
+ts <- "trase-storage"
+
+db_username <- "valentin" # Change this to your username
+
+source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+
+
+# Set seed to ensure random sampling is reproducible
+set.seed(5)
+```
+
+Script adapted from the one used for Renier et al. 2023 'Transparency, Traceability And Deforestation In The Ivorian Cocoa Supply Chain'.
+
+We use the Spatially Explicit Information on Production to Consumption Systems (SEI-PCS) approach to link exports of agricultural commodities back to the jurisdiction of production. 
+
+We followed five steps (detailed in SI text S1). The three first steps are included in this script, aiming at linking cooperatives and acheteurs agréés (AA) to traders, and estimating volumes of cocoa beans equivalent (BEQ) sourced by each trader to each cooperative or AA: 
+
+- We first calculated total exports per trader and imports per importing countries. 
+- Second, we identified the intermediaries (cooperatives and ‘acheteurs agréés’) from which traders source from, and their location. 
+- Third, we estimated the volumes sourced from these intermediaries by the different traders, providing a map of the subnational origin of the cocoa traced to cooperatives. 
+
+The two following steps can be found in the other provided scripts: Fourth, we estimated the cocoa production per department, allowing to geographically distribute the cocoa indirectly sourced (see script on cocoa production). Finally, we used remote sensing-based cocoa and deforestation maps to estimate deforestation due to cocoa (see GEE scripts) across the country and link cocoa supplies with deforestation exposure (see script with analysis and plots).
+
+NOTE: 'direct' sourcing = sourcing traced to cooperatives and licensed buyers
+
+# Preliminary 
+### Step 0: Load input data
+
+```{r load input data}
+
+# INPUT DATA
+s3load(
+  object = "cote_divoire/cocoa/sei_pcs/v1.1.0/DATA_FOR_SEIPCS_2022.rdata",
+  bucket = "trase-storage"
+)
+
+# cam_long: Cocoa accountability map (list of geolocalised cooperatives with - when available - information disclosed by companies on the number of farmers), FOR THE YEAR 2022, in a long format where the row level is the link between a coop and a company (not necessarily a trader, and possibly missing). 
+
+# cam: the 'not long' version of above, i.e. 1 row = 1 coop, in the year 2022. 
+
+# AA: 2022 list of Acheteurs Agréés (licensed buyers), with the department in which they operate
+
+# trade_data: 2022 shipment data with volume (BEQ) and value (**CIF_USD**, not FOB this year) per trader and country of destination. 
+
+# cef_cocoa is just the cocoa equivalent factors for conversion, queried from database by fn_load_bean_equivalent() written in TRASE/trase/data/cote_divoire/cocoa/USEFUL_STUFF.R
+
+# kit_farm_production: KIT farm production observations (Bymolt et al 2018)
+
+# # civ_departments: shapefile for departements of Côte d'Ivoire
+
+
+# NOTES: 
+# On CIF vs. FOB: across years, either or both is available in trade data. For consistency, as of 2k20, "fob" and "FOB" strings EMBEDDED in names of objects and variables are replaced with "val" and "VAL" respectively. The variable FOB itself (in 2019 script) is CIF_USD here in 2022, but can be different again in other years. 
+
+# On flow vs. link terminology: I leave the "link" terminology throughout the script, although what is called a link here corresponds to a "flow" in the terminology of  CAM_V4.R
+
+```
+
+### Step 0.1 Integrate information from importer variable
+This is available from customs data as of 2k20. 
+Hence, the code chunk below features essential changes to the SEI-PCS model wrt. model on 2k19. 
+
+```{r}
+
+# mutate below aims to count shipments from non-disclosing exporter to disclosing importer in the total volume of the latter, rather than of the former.
+  # This extra volume will add to the indirect sourcing of the disclosing importer, since this does not affect its direct sourcing which is estimated from its disclosure, in cam_long. 
+  # The volume is removed from the unknown volume of the exporter. 
+
+cd_exporters <- trade_data$EXPORTER_GROUP_CLEAN 
+
+trade_data <- 
+  trade_data %>% 
+  mutate(EXP_EQ_IMP = EXPORTER_GROUP_CLEAN == IMPORTER_GROUP_CLEAN, 
+         
+         EXP_DISCL = EXPORTER_GROUP_CLEAN %in% cam_long$BUYER[cam_long$BUYER != "ECOOKIM"], # i.e., will there be a match with coops (/cam_long, cocoa_producers). BUYER is formerly named FLOW_FIRST_BUYER, i.e. any company disclosed as the first buyer of a flow. It includes manufacturers and ECOOKIM. Here, we want Ecookim to be treated as an exporting coop and not a disclosing exporter. 
+         IMP_DISCL_TRADER = IMPORTER_GROUP_CLEAN %in% cam_long$TRADER_NAME, # Is the importer a disclosing **TRADER**, i.e. manually recognized as such in CAM.V4.R. This condition ensures that we do not add as traders, companies making disclosures but which volumes spotted in customs data do not reflect total sourcing from Ivory Coast. 
+         
+         # Assign flows from exporter name to importer name if importer is CFI signatory and is among the list of cd exporters (to make sure we don't add back the )
+         IMP_CFI_TRADER = fn_is_cfi_signatory_civ(IMPORTER_GROUP_CLEAN) & IMPORTER_GROUP_CLEAN %in% cd_exporters,
+         
+         IS_EXP_COOP = grepl("[(]COOPERATIVE[)]", EXPORTER_GROUP_CLEAN) | EXPORTER_GROUP_CLEAN == "ECOOKIM", 
+         
+         # If the first line of the case_when below evalutates as TRUE, then the corresponding shipment's volume will contribute to the total volume 
+         # of the trader named by the IMPORTER_GROUP_CLEAN, instead of the trader named by the EXPORTER_GROUP_CLEAN.
+         # We do such transfers of volumes attribution when the exporter did not disclose and the importer disclosed or is a CFI signatory. 
+         # We allow such transfers including in cases where the exporter is a coop - i.e.,we don't add '& !IS_EXP_COOP' in the condition.
+         # Then, if these coops are disclosed by traders, these volumes will be recognized as direct sourcing, 
+         # while if they are not disclosed, the volume won't. 
+         # Since this changes the variable that is used in the remainder of the script to identify buyers, including exporting coops, these flows will not be counted in the total volumes of exporting coops (essentially, we don't add volumes here, we only change the name of who we attribute them to). 
+         EXPORTER_GROUP_CLEAN = case_when(
+           !EXP_DISCL & (IMP_DISCL_TRADER | IMP_CFI_TRADER) ~ IMPORTER_GROUP_CLEAN, #  
+           TRUE ~ EXPORTER_GROUP_CLEAN
+         ), 
+         
+         # Then we flag to every shipment whether it is eligible for direct sourcing. 
+         # EXP_DISCL counts in cases where the exporter disclosed, whether the importer is the same or another one that doesn't disclose. 
+         # (replacing EXP_DISCL by EXP_EQ_IMP would exclude from potential direct volumes, cases where a disclosing trader sells to 
+         # a non-disclosing one. But this would be incorrect. Such cases should be counted as potential direct volumes.) 
+         # IS_EXP_COOP counts in cases where the original exporter is a cooperative, and in this case it is possible (but not necessary) that this is direct sourcing. 
+         POTENTIAL_DIRECT_VOL = case_when(
+           EXP_DISCL | IS_EXP_COOP ~ BEAN_EQUIVALENT_VOLUME, 
+           TRUE ~ 0
+         ), 
+         
+          POTENTIAL_DIRECT_VAL = case_when(
+           EXP_DISCL | IS_EXP_COOP ~ CIF_USD, 
+           TRUE ~ 0
+         )
+  ) 
+
+# check CFI signatories identified as traders
+trade_data %>% filter(  !EXP_DISCL & IMP_CFI_TRADER) %>% pull(IMPORTER_GROUP_CLEAN) %>% unique() %>% sort
+
+# volume of beans equivalent (BEQ) per trader
+trader_bean_eq_vol <- 
+  trade_data %>%
+  group_by(YEAR, EXPORTER_GROUP_CLEAN) %>% 
+  summarise(TRADER_BEQ_VOLUME_EXPORTED = sum(BEAN_EQUIVALENT_VOLUME), 
+            TRADER_BEQ_VOLUME_EXPORTED_CAPPED = sum(POTENTIAL_DIRECT_VOL)) %>%
+  ungroup()
+
+# cost insurance and freight (CIF) value per trader
+trader_val <- 
+  trade_data %>%
+  group_by(YEAR, EXPORTER_GROUP_CLEAN) %>%
+  summarise(CIF_USD = sum(CIF_USD), 
+            TRADER_CIF_USD_EXPORTED_CAPPED = sum(POTENTIAL_DIRECT_VAL)) %>%
+  ungroup()
+
+# total value and volume_BEQ to check along the way whether still consistent
+trade_data_volume <- sum(trade_data$BEAN_EQUIVALENT_VOLUME)
+trade_data_val <- sum(trade_data$CIF_USD)
+
+fn_numeric_check <- function(original_data, manipulated_data) {
+  if(
+  !isTRUE(
+    all.equal(
+      original_data, 
+      manipulated_data,
+      tolerance = 0.0001
+    )
+  )
+){stop("Error in lag - go back and check")}
+}
+
+```
+
+
+
+- Create long format dataframe with Cocoa Accountability Map (CAM) and Acheteurs Agréés (AA) with links between coops/AA and traders
+
+### Step 1-2: Filter the CAM to keep only coop-trader links. 
+
+```{r 1. filter cam}
+
+# The level of cam_long is one row per coop-trader link, but with coop-NA rows that need to be removed
+
+# Notes on difference between this section and Step 1. and Step 2. in 2019 model script. 
+# This section does not do the same thing.
+# cam_buyers_long, as it was previously produced from the initial cam, has essentially one row per *link* with either a trader or a manufacturer, so its strict equivalent is cote_divoire/cocoa/logistics/out/CAM_V4/CAM_link.csv. It was then appended a NUM_FARMERS column, which gave, for each link, the number of farmers disclosed by the same company (concretrely, it was left_joined with a format of the cam that had one row per disclosed number of farmers)
+
+# But it's more straightforward to use cam_flow, which already has one row per flow, and the variable FLOW_FIRST_BUYER that tells the name of the 1st disclosed actor that buys this flow. 
+
+# FILTER 
+# In 2019 script, the cam is never filtered by buyers being in the list of exporters from trade data. Such matching is performed by mutating joins only (at end of Step 8 to be precise). The only filter applied to cam based on BUYER is according to whether it's NA or not. 
+cam_long <- 
+  cam_long %>% 
+  filter(!is.na(BUYER))
+
+```
+
+
+```{r plot distribution coop sizes}
+
+ggplot(cam_long, aes(x=NUM_FARMERS)) + 
+  geom_histogram() +
+  # theme_trase() +
+  theme(axis.title.y = element_blank()) + 
+  labs(x = "Cooperative-trader flow size (number of farmers)") 
+
+```
+
+### Step 3: Adding Acheteurs Agréés having links with traders 
+Void in 2022 because no acheteur agréé can be linked to a trader. 
+Keep it in the model though, for consistency 
+
+```{r 3. AA meaningful links}
+
+AA_links <- AA %>%
+  #select those which overlap with the exporters in the customs data
+  # filter(COOPNAME_AADENOMINATION %in% c("BIOPARTENAIRE", "CAP", "CYRIAN COTE D'IVOIRE")) %>%
+  filter(COOPNAME_AADENOMINATION %in% c(trade_data$EXPORTER_CLEAN, trade_data$EXPORTER_GROUP_CLEAN)) %>%
+  #create "buyers" column in which the name is as the exporter group name in the customs data
+  mutate(BUYER = case_when(
+    COOPNAME_AADENOMINATION %in% trade_data$EXPORTER_GROUP_CLEAN ~ trade_data$EXPORTER_GROUP_CLEAN[match(COOPNAME_AADENOMINATION, trade_data$EXPORTER_GROUP_CLEAN)],
+    COOPNAME_AADENOMINATION == "BIOPARTENAIRE" ~ "BARRY CALLEBAUT",
+    COOPNAME_AADENOMINATION == "CAP" ~ "CAP",
+    COOPNAME_AADENOMINATION == "CYRIAN COTE D'IVOIRE" ~ "CYRIAN INTERNATIONAL"
+  )) 
+
+```
+
+### Step 4: Combine these three dataframes and add rows to accomodate Unknown/Indirect flows
+
+```{r 4. combining long cam, AA and unknown flows}
+
+# Give names that encompass AA values in comparable variables, to have common columns to row bind. 
+# certification-related variables are not necessary in the model. I don't select them, to lighten the objects throughout (matters for large unnested monte carlo data frames). Rather, I merge them back at the end of this script (that's a purpose of FLOW_ID)
+cam_long <- cam_long %>%
+  rename(COOPACRONYM_AANAME = COOPACRONYM,
+         COOPNAME_AADENOMINATION = COOPNAME) 
+
+unknown_flows <- tibble(
+  BUYER = unique(trade_data$EXPORTER_GROUP_CLEAN)
+) %>%
+  mutate(
+    SUPPLIER_ID = "UNKNOWN",
+    FLOW_ID = "UNKNOWN",
+    GEOCODE = "UNKNOWN",
+    COOPACRONYM_AANAME = "UNKNOWN",
+    COOPNAME_AADENOMINATION = "UNKNOWN"
+  )
+
+# until the end of the script, GEOCODE == "UNKNOWN" will be used for both indirect and unknown sourcing. Only at the end is the distinction made. 
+
+cocoa_producers <- bind_rows(cam_long, AA_links, unknown_flows) %>% 
+  # remove rows for which the geocode is unknown. Important step, otherwise step 10 does not work, because quantities would be computed throughout accounting for rows with missing GEOCODE (but possibly info on num of farmers), while such rows are removed by the GEOCODE == / != "UNKNOWN" filters in step 10. 
+  filter(!is.na(GEOCODE))
+
+```
+
+# Estimate volumes supplied by coop/AA
+
+### Step 5: Assign sizes (number of farmers) to each producer (coop/AA) which do not have size 
+
+We assign 1000 sizes for each producer-trader flow (see text SI 1.3.1):
+
+- where the size is disclosed by the trader: 1000 times the disclosed value (stored in NUM_FARMERS)
+
+- where the size is not disclosed but other traders disclosed for this producer: 1000 times the mean of these disclosed values (this mean, produced is stored in advance in the same variable, NUM_FARMERS). This is the equivalent to: "Where a company did not report the number of farmers they purchased from for a given cooperative, but the number was reported by other companies, the sourcing from that cooperative was assigned the mean value of the sizes disclosed by these other companies." in Renier et al. 
+**It is done in CAM_V4.R already, in order to leverage better imputations, across years but within the same coop**
+
+- where no size is disclosed by any of the producer's traders : 1000 sizes drawn from the set of disclosed cooperative sizes
+
+```{r 5. assign sizes where not disclosed}
+# The inclusion of coop size information from RA and the extrapolation by average are handled in the scripts building the CAM data as of 2k20. 
+
+# The part done here deals with monte carlo simulating sizes of coop-trader flows 
+
+# make list to sample from; just a list of all disclosed **coop-trader flow** sizes
+# (DON'T remove the disclosures of "0 farmers" from the list anymore, because it has been verified that these are not spurious).
+# Note that, as of 2k20, we restrict this list to be flows disclosed between a coop and a company which is NOT notoriously sourcing more than what it is found to be trading in customs data (i.e. which is likely a manufacturer rather than a trader). This is slightly more rigorous, as manufacturers may source from the same coop through different traders, and thus get higher numbers of farmers than those we wish to reflect (i.e. coop-traders). 
+farmer_disclosures <- na.omit(cam_long %>%
+                              mutate(NUM_FARMERS = na_if(cam_long$NUM_FARMERS, 0)) %>% # still discard these 0, not to attribute them 
+                              filter(!is.na(TRADER_NAME)) %>% 
+                              select(NUM_FARMERS)
+                            )
+
+# Sample from the known disclosed coop sizes, to assign a size to every coop for which no size was disclosed. 
+cocoa_producers <- cocoa_producers %>%
+  # mutate(NUM_FARMERS = na_if(NUM_FARMERS, 0)) %>% # Handles spurious disclosures of 0 farmers (-> replaced by a sampled estimate)
+  # This above is commented out, because actually disclosures of 0 farmers have already been checked, and they are credible, that's only two coops for Cargill, for which 0 farmer is consistent across the company's annual disclosures. 
+  # Hence, rather remove them (otherwise code crashes)
+  filter(NUM_FARMERS > 0 | is.na(NUM_FARMERS)) %>% 
+  mutate(NUM_FARMERS = case_when(
+    GEOCODE == "UNKNOWN" ~ 0, # Before line, it was all NAs for unknown links. Turn to 0 for these not to get a sampled estimate # KEY: UNKNOWN_NA_OR_0? (c'est bon en fait)
+    TRUE ~ as.double(NUM_FARMERS) 
+  )) %>%
+  rowwise() %>%
+  mutate(NUM_FARMERS_list = case_when(
+    # where not disclosed nor extrapolated: sample 1000 values from the disclosed set:
+    is.na(NUM_FARMERS) ~ list(sample(farmer_disclosures$NUM_FARMERS, size = 1000, replace = TRUE)),
+    # where disclosed or extrapolated from disclosed: repeat the number 1000 times:
+    TRUE ~ list(rep(NUM_FARMERS, 1000))
+    )) %>%
+  # somehow it is necessary to include unnesting, grouping, re-nesting and re-ungrouping for it to work
+  unnest(cols = c(NUM_FARMERS_list)) %>%
+  group_by() %>%
+  nest(NUM_FARMERS_list = NUM_FARMERS_list) %>%
+  ungroup() %>%
+  #transform it into the actual tibble with a column of row numbers
+  mutate(NUM_FARMERS_distribution = map(NUM_FARMERS_list, ~ .x %>%
+                                          mutate(NUM_NUM_FARMERS_est = row.names(.)) %>%
+                                          rename(NUM_FARMERS_est = NUM_FARMERS_list))) %>%
+  select(-NUM_FARMERS_list)
+```
+
+### Step 6: Calculate the proportional sourcing from each of the coops for each of the traders
+
+- sum up the total number of farmers per trader (df of 1000 values per trader)
+- divide each of the coop-flows' number of farmers (df of 1000 values) by these total number of farmers per trader = proportional sourcing per trader per coop (df of 1000 values ranging from 0 to 1)
+
+! Set the proportional sourcing as 1 for those rows representing the unknown flows
+
+```{r 6. proportional sourcing per coop-trader}
+
+farmers_per_trader <- cocoa_producers %>%
+  unnest(NUM_FARMERS_distribution) %>%
+  group_by(BUYER, NUM_NUM_FARMERS_est) %>%
+  summarise(TOTAL_FARMERS_PER_TRADER = sum(NUM_FARMERS_est)) %>%
+  rename(NUM_NUM_FARMERS_TRADER = NUM_NUM_FARMERS_est) %>%
+  arrange(as.integer(NUM_NUM_FARMERS_TRADER)) %>%
+  nest() %>%
+  rename(NUM_FARMERS_TRADER_distribution = data)
+
+cocoa_producers <- left_join(cocoa_producers, farmers_per_trader, by = "BUYER") %>%
+  unnest(cols = c(NUM_FARMERS_distribution, NUM_FARMERS_TRADER_distribution)) %>%
+  mutate(
+    COOP_FARMER_PROPORTION = case_when(
+      GEOCODE == "UNKNOWN" ~ 1,
+      TRUE ~ NUM_FARMERS_est / TOTAL_FARMERS_PER_TRADER
+      ),
+    NUM_COOP_FARMER_PROPORTION = NUM_NUM_FARMERS_est) %>%
+  nest(
+    NUM_FARMERS_distribution = c(NUM_FARMERS_est, NUM_NUM_FARMERS_est),
+    NUM_FARMERS_TRADER_distribution = c(TOTAL_FARMERS_PER_TRADER, NUM_NUM_FARMERS_TRADER),
+    COOP_FARMER_PROPORTION_distribution = c(COOP_FARMER_PROPORTION, NUM_COOP_FARMER_PROPORTION)
+  )
+# so this is how much every cooperative ('producer') represents in the total direct sourcing of every trader
+```
+
+### Step 7: Estimate the cocoa volume for each coop/AA based on their size
+
+- Create 1000 estimates of cocoa volume for each coop/AA-trader flow based on KIT data (df of 1000 values)
+   
+```{r 7. assigning volumes to each coop/AA}
+
+# function to retrieve n kit farms and sum their production 
+sample_kit_farms <- function(n) {
+  sample <- sample(
+    kit_farm_production$cocoa_prod_total_kgs,
+    size = n,
+    replace = TRUE
+  )
+  sum(sample)
+}
+
+# Assign cocoa volumes to each coop using this function
+cocoa_producers <- cocoa_producers %>%
+  unnest(cols = c(NUM_FARMERS_distribution)) %>%
+  #no need to use the sample_kit_farms 1000 times per row, we already have 1000 rows per coop
+  rowwise() %>%
+  mutate(
+    EST_COCOA_VOLUME = sample_kit_farms(NUM_FARMERS_est),
+    NUM_EST_COCOA_VOLUME = NUM_NUM_FARMERS_est
+  ) %>%
+  nest(
+    NUM_FARMERS_distribution = c(NUM_FARMERS_est, NUM_NUM_FARMERS_est),
+    EST_COCOA_VOLUME_distribution = c(EST_COCOA_VOLUME, NUM_EST_COCOA_VOLUME)
+  )
+
+```
+
+# Estimate direct volumes exported by traders per importing country
+
+### Step 8. Calculate direct volumes per trader in total and per coop-trader flow (volume and value)
+
+- sum cocoa_volume_per_coop per trader (df of 1000 summed values)
+- link to trade data's total_BEQ_volume per trader (shipment data with total exports per trader)
+- calculate proportion of direct trade per trader (summed_volume/BEQ_volume; df of 1000 values)
+- To get volume direct trade per coop: proportion of farmers * direct volume
+- To get value direct trade per trader: proportion of direct trade * total value per trader (1000 values)
+- value of direct trade per coop; proportion of farmers * direct value per trader
+
+As of 2k20, we cap trader's direct sourcing to trader's total export. Otherwise, we would allow for indirect sourcing flows of negative sizes, in the case of traders (Barry Callebaut and Olam in 2k20 for instance) for which we miss some shipments in customs data, and/or disclose a too high number of farmers, and/or for which the estimated number of farmers and their productivity is just off by chance. 
+ 
+```{r 8. direct volumes}
+
+# Calculate direct volume per trader
+direct_per_trader <- cocoa_producers %>%
+  unnest(EST_COCOA_VOLUME_distribution) %>%
+  group_by(BUYER, NUM_EST_COCOA_VOLUME) %>%
+  summarise(DIRECT_VOLUME_TRADER = sum(EST_COCOA_VOLUME)) %>%
+  rename(NUM_DIRECT_VOLUME_TRADER = NUM_EST_COCOA_VOLUME) %>%
+  arrange(as.integer(NUM_DIRECT_VOLUME_TRADER)) %>%
+  nest() %>%
+  rename(DIRECT_VOLUME_TRADER_distribution = data)
+
+# Link this to the bean equivalent volumes in the trade data (per trader, not per flow)
+# Calculate the proportion of the trade that was direct, use this to calculate direct value (CIF)
+direct_per_trader <- 
+  full_join(direct_per_trader, 
+            trader_bean_eq_vol, by = c("BUYER" = "EXPORTER_GROUP_CLEAN")) %>%
+  full_join(trader_val, by= c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>%
+  filter(!is.na(TRADER_BEQ_VOLUME_EXPORTED)) %>%
+  unnest(DIRECT_VOLUME_TRADER_distribution) %>%
+  
+  # CAP DIRECT VOLUME TO TOTAL TRADER'S VOLUME THAT CAN POTENTIALLY BE DIRECT 
+  # (i.e., that is not a shipment where the exporter is another group than the disclosing importer.)
+  mutate(
+    # the direct volume estimated from disclosed links with coops vs. the volume in customs data that is exported and imported by the same trader group, or imported from an exporting coop. 
+    DIRECT_VOLUME_TRADER = case_when(
+      DIRECT_VOLUME_TRADER > TRADER_BEQ_VOLUME_EXPORTED_CAPPED ~ TRADER_BEQ_VOLUME_EXPORTED_CAPPED,
+      TRUE ~ DIRECT_VOLUME_TRADER
+    )
+  ) %>%
+  # calculate proportion of direct sourcing per trader 
+  # ... by dividing the direct volume (according to disclosed numbers of farmers and to kit yields) 
+  # ... by the trader's total volumes, and total volumes potentially direct
+  
+  mutate(PROPORTION_DIRECT_TRADER = DIRECT_VOLUME_TRADER / TRADER_BEQ_VOLUME_EXPORTED,
+         # the ratio to potential direct shipments is 0 if potential direct is zero. 
+         PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS = case_when(
+           TRADER_BEQ_VOLUME_EXPORTED_CAPPED > 0 ~ DIRECT_VOLUME_TRADER / TRADER_BEQ_VOLUME_EXPORTED_CAPPED,
+           TRUE ~ 0), 
+         
+         NUM_PROPORTION_DIRECT_TRADER = NUM_DIRECT_VOLUME_TRADER)  %>%
+  
+  # ... and recover the direct CIF_USD with the proportion of direct
+  mutate(DIRECT_VAL_TRADER = CIF_USD * PROPORTION_DIRECT_TRADER,
+         NUM_DIRECT_VAL_TRADER = NUM_DIRECT_VOLUME_TRADER) %>%
+  nest(
+    DIRECT_VOLUME_TRADER_distribution = c(DIRECT_VOLUME_TRADER, NUM_DIRECT_VOLUME_TRADER),
+    PROPORTION_DIRECT_TRADER_distribution = c(PROPORTION_DIRECT_TRADER,
+                                              PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS, 
+                                              NUM_PROPORTION_DIRECT_TRADER),
+    DIRECT_VAL_TRADER_distribution = c(DIRECT_VAL_TRADER, NUM_DIRECT_VAL_TRADER)
+  )
+
+# Link the direct volumes back to cocoa_producers and calculate indirect volume 
+# !! for the unknown rows, we need to manually replace the direct volume (0) by the indirect volume
+cocoa_producers <- 
+  full_join(cocoa_producers,
+            direct_per_trader %>% 
+              select(BUYER, YEAR, DIRECT_VOLUME_TRADER_distribution,
+                     DIRECT_VAL_TRADER_distribution),
+            by = "BUYER") %>% # This leaves NAs in the 3 variables from direct_per_trader, in rows where buyer is not a trader (i.e. no match btw. x and y by BUYER)
+  unnest(cols = c(COOP_FARMER_PROPORTION_distribution, DIRECT_VOLUME_TRADER_distribution,
+                  DIRECT_VAL_TRADER_distribution)) %>%
+  #exchange direct by indirect volume for unknown flows
+  left_join(trader_bean_eq_vol, by = c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>% # joining by YEAR here prevents links (rows) in cocoa_producers with missing year to be matched with a trader BEQ vol. These rows are links with non-traders, so it's ok.  
+  mutate(
+    INDIRECT_TRADED_VOLUME = TRADER_BEQ_VOLUME_EXPORTED - DIRECT_VOLUME_TRADER,
+    DIRECT_VOLUME_TRADER = case_when(
+      GEOCODE == "UNKNOWN" ~ INDIRECT_TRADED_VOLUME,
+      TRUE ~ DIRECT_VOLUME_TRADER
+      )
+    ) %>%
+  select(-INDIRECT_TRADED_VOLUME, -TRADER_BEQ_VOLUME_EXPORTED) %>%
+  #exchange direct by indirect value (CIF) for unknown flows
+  left_join(trader_val, by = c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>%
+  mutate(
+    INDIRECT_VAL = CIF_USD - DIRECT_VAL_TRADER,
+    DIRECT_VAL_TRADER = case_when(
+      GEOCODE == "UNKNOWN" ~ INDIRECT_VAL,
+      TRUE ~ DIRECT_VAL_TRADER
+    )
+  ) %>%
+  select(-INDIRECT_VAL, -CIF_USD) %>%
+  #calculate values per coop
+  mutate(COOP_DIRECT_VOLUME = COOP_FARMER_PROPORTION * DIRECT_VOLUME_TRADER,
+         NUM_COOP_DIRECT_VOLUME = NUM_DIRECT_VOLUME_TRADER,
+         COOP_DIRECT_VAL = COOP_FARMER_PROPORTION * DIRECT_VAL_TRADER,
+         NUM_COOP_DIRECT_VAL = NUM_DIRECT_VOLUME_TRADER) %>%
+  nest(
+    COOP_FARMER_PROPORTION_distribution = c(COOP_FARMER_PROPORTION, NUM_COOP_FARMER_PROPORTION),
+    DIRECT_VOLUME_TRADER_distribution = c(DIRECT_VOLUME_TRADER, NUM_DIRECT_VOLUME_TRADER),
+    COOP_DIRECT_VOLUME_distribution = c(COOP_DIRECT_VOLUME, NUM_COOP_DIRECT_VOLUME),
+    DIRECT_VAL_TRADER_distribution = c(DIRECT_VAL_TRADER, NUM_DIRECT_VAL_TRADER),
+    COOP_DIRECT_VAL_distribution = c(COOP_DIRECT_VAL, NUM_COOP_DIRECT_VAL)
+  )
+```
+
+
+**8.2 quality check, volumes and value still consistent with trade data?**
+
+```{r QC whether volumes and values still same as in beginning}
+# Using summed mean values of COOP_DIRECT_VOLUME and COOP_DIRECT_VAL
+
+# volumes
+volume_check <- cocoa_producers %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_DIRECT_VOLUME_distribution$COOP_DIRECT_VOLUME))) %>%
+  drop_na(MEAN)
+volume_check <- sum(volume_check$MEAN)
+
+fn_numeric_check(trade_data_volume, volume_check)
+
+# value
+val_check <- cocoa_producers %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_DIRECT_VAL_distribution$COOP_DIRECT_VAL))) %>%
+  drop_na(MEAN)
+val_check <- sum(val_check$MEAN)
+
+fn_numeric_check(trade_data_val, val_check)
+
+# tidy up
+rm(volume_check, val_check)
+```
+
+### Step 9: trade data: calculate direct volumes per trader and per destination
+
+Group by exporter & destination & product & year -> sum BEQ_volume & CIF_USD across shipments into "links".  
+
+- traced (trade_links_direct) : potentially directly sourced shipments (link level) * proportion of est. direct volumes in these shipments (trader level)
+
+- untraced (trade_link_unknown) : potentially directly sourced shipments * proportion est. indirect volumes in these + non-potentially directly sourced shipments (i.e. total - potentially direct) * proportion indirect in these (i.e. 1)
+
+
+```{r 9. trade links direct volumes}
+# why we group by EXPORTER_ORIGINAL? It's a dirty variable to says nothing clearly. 
+# It occurs in another place in script, for exporting coops.
+# key: WHY_EXPORTER_ORIGINAL?
+# Explanation: 
+# First, it is the only way to keep all the information from this variable in the final output. 
+# Indeed, this grouping determines what is the smallest flow in the sankey
+# So, if we were to group on EXPORTER_GROUP_CLEAN or EXPORTER_TAX_ID, we could not have the smaller flow level at the
+# EXPORTER_ORIGINAL level (there are several values of this within a single value of tax id or group name)
+# It does not matter that this level determined here doesn't have sense really, because flows can be aggregated after database ingestion. The spirit is to keep as much info in the database.  
+
+# THIS IS WHERE THE MINIMUM LEVEL OF FLOW INFORMATION IS SET (the level at which we aggregate individual shipments from customs data)   
+trade_links <- trade_data %>%
+  group_by(EXPORTER_ORIGINAL, EXPORTER_GROUP_CLEAN, COUNTRY_OF_DESTINATION, PRODUCT_B_CODE, YEAR) %>% # IMPORTER_GROUP_CLEAN, IMPORTER_ORIGINAL, 
+  summarise(TRADE_LINK_BEQ_VOLUME = sum(BEAN_EQUIVALENT_VOLUME), 
+            TRADE_LINK_VAL = sum(CIF_USD),
+            TRADE_LINK_BEQ_VOLUME_POTENTIAL_DIRECT = sum(POTENTIAL_DIRECT_VOL), 
+            TRADE_LINK_VAL_POTENTIAL_DIRECT = sum(POTENTIAL_DIRECT_VAL)) #, 
+            # EXPORTER_ORIGINALS = paste0(na.omit(unique(EXPORTER_ORIGINAL)), collapse = " + ")) 
+
+# Direct
+trade_links_direct <- 
+  inner_join(direct_per_trader %>%
+               select(BUYER, YEAR, PROPORTION_DIRECT_TRADER_distribution),
+             trade_links,
+             by = c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>%
+  unnest(cols = c(PROPORTION_DIRECT_TRADER_distribution)) %>%
+  # multiply only potentially directly sourced shipments, but by the proportion of direct within these shipments ONLY 
+  mutate(TRADE_LINK_DIRECT_VOLUME = TRADE_LINK_BEQ_VOLUME_POTENTIAL_DIRECT * PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS,
+         NUM_TRADE_LINK_DIRECT_VOLUME = NUM_PROPORTION_DIRECT_TRADER,
+         TRADE_LINK_DIRECT_VAL = TRADE_LINK_VAL_POTENTIAL_DIRECT * PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS,
+         NUM_TRADE_LINK_DIRECT_VAL = NUM_PROPORTION_DIRECT_TRADER) %>%
+  nest(
+    PROPORTION_DIRECT_TRADER_distribution = c(PROPORTION_DIRECT_TRADER, # this is not used further but keep it for now...
+                                              PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS, 
+                                              NUM_PROPORTION_DIRECT_TRADER),
+    TRADE_LINK_DIRECT_VOLUME_distribution = c(TRADE_LINK_DIRECT_VOLUME, NUM_TRADE_LINK_DIRECT_VOLUME),
+    TRADE_LINK_DIRECT_VAL_distribution = c(TRADE_LINK_DIRECT_VAL, NUM_TRADE_LINK_DIRECT_VAL)
+  )
+
+# Unknown
+trade_links_unknown <- 
+  inner_join(direct_per_trader %>%
+               select(BUYER, YEAR, PROPORTION_DIRECT_TRADER_distribution),
+             trade_links,
+             by = c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>%
+  unnest(cols = c(PROPORTION_DIRECT_TRADER_distribution)) %>%
+  # Although it's INdirect here, it is called TRADE_LINK_DIRECT_VOLUME to allow bind_row below in the making of trade_links_full. 
+  # See above codee chunk for explanation of the formula
+  mutate(TRADE_LINK_DIRECT_VOLUME = TRADE_LINK_BEQ_VOLUME_POTENTIAL_DIRECT * (1 - PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS) + (TRADE_LINK_BEQ_VOLUME - TRADE_LINK_BEQ_VOLUME_POTENTIAL_DIRECT),
+         NUM_TRADE_LINK_DIRECT_VOLUME = NUM_PROPORTION_DIRECT_TRADER,
+         
+         TRADE_LINK_DIRECT_VAL = TRADE_LINK_VAL_POTENTIAL_DIRECT * (1 - PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS) + (TRADE_LINK_VAL - TRADE_LINK_VAL_POTENTIAL_DIRECT),
+         NUM_TRADE_LINK_DIRECT_VAL = NUM_PROPORTION_DIRECT_TRADER) %>%
+  nest(
+    PROPORTION_DIRECT_TRADER_distribution = c(PROPORTION_DIRECT_TRADER, 
+                                              PROPORTION_DIRECT_POTENTIAL_DIRECT_SHIPMENTS,
+                                              NUM_PROPORTION_DIRECT_TRADER),
+    TRADE_LINK_DIRECT_VOLUME_distribution = c(TRADE_LINK_DIRECT_VOLUME, NUM_TRADE_LINK_DIRECT_VOLUME),
+    TRADE_LINK_DIRECT_VAL_distribution = c(TRADE_LINK_DIRECT_VAL, NUM_TRADE_LINK_DIRECT_VAL)
+  )
+
+```
+
+**9.2 quality check, volumes and values still consistent with trade data?**
+
+```{r more QC }
+trade_links_full <- bind_rows(trade_links_direct, trade_links_unknown)
+
+# volumes
+volume_check <- trade_links_full %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(TRADE_LINK_DIRECT_VOLUME_distribution$TRADE_LINK_DIRECT_VOLUME))) %>%
+  drop_na(MEAN)
+volume_check <- sum(volume_check$MEAN)
+
+fn_numeric_check(trade_data_volume, volume_check)
+
+# value
+val_check <- trade_links_full %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(TRADE_LINK_DIRECT_VAL_distribution$TRADE_LINK_DIRECT_VAL))) %>%
+  drop_na(MEAN)
+val_check <- sum(val_check$MEAN)
+
+fn_numeric_check(trade_data_val, val_check)
+
+# tidy up
+rm(volume_check, val_check, trade_links_full)
+```
+
+
+### Step 10: calculate direct volumes per cooperative/AA supplied to each trader and destination
+
+- Link direct exported volumes per trader per destination back to the CAM, to get the volume & value per coop that went to each of these direct trade-links.
+
+```{r 10 trade links to cam, include = FALSE}
+
+# calculate the direct volume & value sourced from each PRODUCER for each trade link (buyer-country)
+# ... split this for the known and the unknown flows, then merge again
+
+# known/direct flows: GEOCODE =/= "UNKNOWN"; use trade_links_direct
+volume_val_buyer_country_producer_direct <- 
+  inner_join(cocoa_producers %>%
+               filter(!GEOCODE == "UNKNOWN") %>%
+               select(GEOCODE, SUPPLIER_ID, COOPACRONYM_AANAME, COOPNAME_AADENOMINATION, FLOW_ID, CERTIFICATIONS,
+                      BUYER, YEAR, 
+                      COOP_FARMER_PROPORTION_distribution),
+             trade_links_direct %>% # all the other nodes (BUYER is EXPORTER_GROUP_CLEAN since it was common key)
+               select(EXPORTER_ORIGINAL, BUYER, # IMPORTER_GROUP_CLEAN, IMPORTER_ORIGINAL
+                      YEAR,  COUNTRY_OF_DESTINATION, PRODUCT_B_CODE, #PROVENANCE_COUNTRY,
+                      # TRADE_LINK_BEQ_VOLUME, TRADE_LINK_VAL,
+                      TRADE_LINK_DIRECT_VOLUME_distribution, TRADE_LINK_DIRECT_VAL_distribution),
+             by = c("BUYER", "YEAR")) %>% # again, joining by YEAR leaves NAs in vars of trade_links_direct selected above, for non-trader rows. 
+  unnest(cols = c(COOP_FARMER_PROPORTION_distribution, TRADE_LINK_DIRECT_VOLUME_distribution,
+                  TRADE_LINK_DIRECT_VAL_distribution)) %>%
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = COOP_FARMER_PROPORTION * TRADE_LINK_DIRECT_VOLUME, # unlike in 2k19 model script, name this with *_BEQ suffix already, to make code more efficient below
+         NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ = NUM_TRADE_LINK_DIRECT_VOLUME,
+         COOP_SOURCED_DIRECT_VAL = COOP_FARMER_PROPORTION * TRADE_LINK_DIRECT_VAL,
+         NUM_COOP_SOURCED_DIRECT_VAL = NUM_COOP_FARMER_PROPORTION) %>%
+  nest(
+    COOP_FARMER_PROPORTION_distribution = c(COOP_FARMER_PROPORTION, NUM_COOP_FARMER_PROPORTION),
+    TRADE_LINK_DIRECT_VOLUME_distribution = c(TRADE_LINK_DIRECT_VOLUME, NUM_TRADE_LINK_DIRECT_VOLUME),
+    COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution = 
+      c(COOP_SOURCED_DIRECT_VOLUME_BEQ, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
+    TRADE_LINK_DIRECT_VAL_distribution = c(TRADE_LINK_DIRECT_VAL, NUM_TRADE_LINK_DIRECT_VAL),
+    COOP_SOURCED_DIRECT_VAL_distribution = c(COOP_SOURCED_DIRECT_VAL, NUM_COOP_SOURCED_DIRECT_VAL)
+  )
+
+# unknown/indirect flows: GEOCODE == "UNKNOWN"; use trade_links_unknown
+volume_val_buyer_country_producer_unknown <- 
+  inner_join(cocoa_producers %>%
+               filter(GEOCODE == "UNKNOWN") %>%
+               select(GEOCODE, SUPPLIER_ID, COOPACRONYM_AANAME, COOPNAME_AADENOMINATION, FLOW_ID, CERTIFICATIONS,
+                      BUYER, YEAR, 
+                      COOP_FARMER_PROPORTION_distribution),
+             trade_links_unknown %>%
+               select(EXPORTER_ORIGINAL, BUYER, # IMPORTER_GROUP_CLEAN, IMPORTER_ORIGINAL, 
+                      YEAR, COUNTRY_OF_DESTINATION, PRODUCT_B_CODE, # PROVENANCE_COUNTRY,
+                      # TRADE_LINK_BEQ_VOLUME, TRADE_LINK_VAL,
+                      TRADE_LINK_DIRECT_VOLUME_distribution, TRADE_LINK_DIRECT_VAL_distribution),
+             by = c("BUYER", "YEAR")) %>%
+  unnest(cols = c(COOP_FARMER_PROPORTION_distribution, TRADE_LINK_DIRECT_VOLUME_distribution,
+                  TRADE_LINK_DIRECT_VAL_distribution)) %>%
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = COOP_FARMER_PROPORTION * TRADE_LINK_DIRECT_VOLUME,
+         NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ = NUM_TRADE_LINK_DIRECT_VOLUME,
+         COOP_SOURCED_DIRECT_VAL = COOP_FARMER_PROPORTION * TRADE_LINK_DIRECT_VAL,
+         NUM_COOP_SOURCED_DIRECT_VAL = NUM_COOP_FARMER_PROPORTION) %>%
+  nest(
+    COOP_FARMER_PROPORTION_distribution = c(COOP_FARMER_PROPORTION, NUM_COOP_FARMER_PROPORTION),
+    TRADE_LINK_DIRECT_VOLUME_distribution = c(TRADE_LINK_DIRECT_VOLUME, NUM_TRADE_LINK_DIRECT_VOLUME),
+    COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution = 
+      c(COOP_SOURCED_DIRECT_VOLUME_BEQ, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
+    TRADE_LINK_DIRECT_VAL_distribution = c(TRADE_LINK_DIRECT_VAL, NUM_TRADE_LINK_DIRECT_VAL),
+    COOP_SOURCED_DIRECT_VAL_distribution = c(COOP_SOURCED_DIRECT_VAL, NUM_COOP_SOURCED_DIRECT_VAL)
+  )
+
+# bind together
+volume_val_buyer_country_producer <-
+  bind_rows(volume_val_buyer_country_producer_direct, volume_val_buyer_country_producer_unknown)
+
+# tidy up
+rm(volume_val_buyer_country_producer_direct, volume_val_buyer_country_producer_unknown)
+```
+
+**10.2 quality check, volumes and values still consistent with trade data?**
+
+```{r QC again}
+# Using summed mean values of COOP_DIRECT_VOLUME and COOP_DIRECT_VAL
+
+# volumes
+volume_check <- volume_val_buyer_country_producer %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution$COOP_SOURCED_DIRECT_VOLUME_BEQ))) %>%
+  drop_na(MEAN)
+volume_check <- sum(volume_check$MEAN)
+
+fn_numeric_check(trade_data_volume, volume_check)
+
+# value
+val_check <- volume_val_buyer_country_producer %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_SOURCED_DIRECT_VAL_distribution$COOP_SOURCED_DIRECT_VAL))) %>%
+  drop_na(MEAN)
+val_check <- sum(val_check$MEAN)
+
+fn_numeric_check(trade_data_val, val_check)
+
+# tidy up
+rm(volume_check, val_check)
+```
+
+
+# Adding exporting cooperatives
+
+### Step 11: cleaning up dataset of exporting cooperatives
+
+Also add the exporting coops for which you know the geocode(s) they work in, through the AA or the CAM
+
+As of 2k20, information about ECOOKIM is already embedded in the CAM. 
+
+As of 2k20, exporting coops are identified from customs data, not from the list of authorized coops for export (which may be challenging to find, can have been amended, and requires another matching step, between names in this list and the CAM). 
+Steps to update the list of exporting coops: 
+- Look at all the names in trade_data (see code below how to do it)
+- Already known exporting coops have a name in the format 'ABBREVIATED-NAME (COOPERATIVE)' 
+- Find other trader names that seem to be a coop (the list of authorized exporting coops may help)
+- Decide what is the correct abbreviated names for those. Add lines at the bottom of the fn_exporting_coop_names function in USEFUL_STUFF.R. For instance, the trader name "COOPERATIVE AGRICOLE ADZOPE NO" most likely is the COOPERATIVE AGRICOLE ADZOPE NORD, of which the abbreviated name in the CAM is SOCAAN, and so there is a line grepl("ADZOPE NO", col_name) ~ "SOCAAN (COOPERATIVE)" in USEFUL_STUFF.R. 
+- For cases where in the CAM, the same abbreviated name refers to distinct coops: if it is the case of a coop that exported since 2k20, this is normally already handled in the code chunk below. If it is a newly exporting coop, it should be investigated by the updater whether it matches distinct coops in the CAM, and handled in consequence with an additional grepl condition (see code below). 
+
+- When all newly exporting coops have been handled below and added in USEFUL_STUFF.R (two previous steps), save it and re-run DATA_FOR_SEIPCS_*.R for the current year. The current script should then integrate exporting coops correctly. 
+
+Note from 2019 script on how it's done: 
+We added double geocodes to spread the volume more easily over all geocodes. In case a geocode is entered twice, it will get the double volume of a geocode that's entered only once (within the same exporting coop).
+Assume these exporting coops' direct trade is equal to their export volumes and values in the customs data; spread this over multiple geocodes where needed.
+
+```{r exporting coops}
+
+# ECOOKIM coops are handled separately. 
+ecookim_coops <- 
+  cam_long %>% 
+  select(SUPPLIER_ID, GEOCODE, COOPACRONYM_AANAME, COOPNAME_AADENOMINATION, BUYER, FLOW_ID, 
+         CERTIFICATIONS) %>% # , starts_with("CERT_")
+  filter(BUYER=="ECOOKIM" & COOPACRONYM_AANAME!="ECOOKIM") %>%
+  distinct(COOPACRONYM_AANAME, .keep_all = TRUE)
+# Note: in other years, other coop networks (like Wagajaca perhaps) must be handled similarly to Ecookim, not as one row in exporting_coops below, to be correctly handled.  
+
+
+# ALL OTHER EXPORTING COOPS
+# Prepare where to store them
+exporting_coops_0 <- 
+  cam %>% 
+  select(SUPPLIER_ID,
+         GEOCODE = DISTRICT_GEOCODE, 
+         COOPACRONYM_AANAME = SUPPLIER_ABRVNAME, 
+         COOPNAME_AADENOMINATION = SUPPLIER_FULLNAME, 
+         CERTIFICATIONS) %>%
+  mutate(FLOW_ID = "EXPORT_COOP") 
+
+
+# Could not find the official list of coops entitled for export this year. 
+# Could only find reported by Reuters here: https://www.reuters.com/article/cocoa-ivorycoast-licenses-idAFL8N2H31ZO
+# It provides acronyms only (as the official list other years) 
+
+# Acronyms of exporting coops (should include newly exporting ones after they have been spotted and added in USEFUL_STUFF.R)
+# note that this excludes ECOOKIM coops
+known_exporting_coop_abrvname <- 
+  trade_data %>% filter(grepl("[(]COOPERATIVE[)]", EXPORTER_GROUP_CLEAN)) %>% 
+  pull(EXPORTER_GROUP_CLEAN) %>% 
+  gsub(x = ., pattern = " [(]COOPERATIVE[)]", replacement = "") %>% 
+  unique() %>% sort()
+
+
+# TO SPOT NEWLY EXPORTING COOPS this year 
+potentially_new_exporting_coop <- 
+  trade_data %>% filter(!grepl("[(]COOPERATIVE[)]", EXPORTER_GROUP_CLEAN) & 
+                        !(EXPORTER_GROUP_CLEAN %in% cam_long$BUYER)) %>% 
+  pull(EXPORTER_GROUP_CLEAN) %>% 
+  unique() %>% sort()
+
+# to find a pattern in this list: e.g. SOCAT is in the official list, but it is not to be found in the customs data names
+# (nor associated strings in associated full names in CAM) 
+# potentially_new_exporting_coop %>% grep(pattern = "SOCAT", value = T)
+
+# To find the coop info corresponding to a charecterizing string in a trader name  
+# cam %>% filter(grepl("GUIGLO", SUPPLIER_FULLNAME)) %>% View()
+#  & grepl("GUIGLO", SUPPLIER_FULLNAME)
+
+
+short <- known_exporting_coop_abrvname # just for readability
+exporting_coops_0 <- 
+    exporting_coops_0 %>% 
+    mutate(BUYER = case_when(
+      COOPACRONYM_AANAME %in% short ~ paste0(short[match(COOPACRONYM_AANAME, short)], " (COOPERATIVE)"), 
+      # add back (COOPERATIVE) for BUYER to match EXPORTING_GROUP_CLEAN in trade_data
+     TRUE ~ NA     
+    )
+  )
+
+
+# To check whether an exporting coop newly spotted in trade data refers to clearly distinct coops in the CAM
+# (it may refer to rows that the coop identification algorithm in CAM_V4.R did not recognize as the same coop, but that could appear clearly the same under manual inspection here. In such case, do nothing special, the code below will group them as one coop.)
+# cam %>% filter(grepl("SOCACI", SUPPLIER_ABRVNAME)) 
+
+# to check the original name in customs data (read raw_trade_data from cote_divoire/cocoa/trade/cd/out/preprocessed_civ_cocoa_trade_*.csv for the current year, without preprocessing it)
+# c(raw_trade_data20$EXPORTER, raw_trade_data$EXPORTER) %>% grep(pattern = "UPRAD", value = T) %>% unique()
+
+# Manually resolve cases where distinct coops have this acronym, after case investigation. 
+# for loop above gave a EXPORTING_GROUP_CLEAN value to all of them, switch back the spurious ones to NA
+exporting_coops_0 <- 
+  exporting_coops_0 %>% 
+  mutate(BUYER = case_when(
+      COOPACRONYM_AANAME == "CAADA" & !grepl("AWANE", COOPNAME_AADENOMINATION) ~ NA,
+      COOPACRONYM_AANAME == "CASB" & !grepl("DE BONON", COOPNAME_AADENOMINATION) ~ NA, # this is the only among all CASB coops, which raw abbreviated name was CASB SCOOPS
+       COOPACRONYM_AANAME == "CADESA" & !grepl("AGRICOLE", COOPNAME_AADENOMINATION) ~ NA, # this one features "agricole", like in trade data 
+      # ECAKOOG has no conflict. There are ECAKOG but it may really be a different coop.  
+       
+       COOPACRONYM_AANAME == "ECAMOM" & !grepl("MEAGUI", COOPNAME_AADENOMINATION) ~ NA,
+       COOPACRONYM_AANAME == "COOPAGA" & !grepl("GAGNY", COOPNAME_AADENOMINATION) ~ NA,
+       COOPACRONYM_AANAME == "SOPLAD" & !grepl("DJIBOUA", COOPNAME_AADENOMINATION) ~ NA,
+       COOPACRONYM_AANAME == "WAGAJACA" & !grepl("GUIGLO", COOPNAME_AADENOMINATION) ~ NA, # I restrict to the one in Guiglo here, because of info in trade data. The one in DueJkoue exports too apparently, but only coffee. https://www.pamdagro.ci/filieres-agricoles/cafe-cacao?tla=3&Px2ZaaCBoL=46&typeSearch=20&gLimit=TS96380s
+
+      COOPACRONYM_AANAME == "SCAT" & !grepl("TOUIH", COOPNAME_AADENOMINATION) ~ NA, # only SCAT has a disclosed full name featuring 'SOCIETE' and 'COOPERATIVE' and 'TOUIH', the key words corresponding to STE COOP AGRI DE TOUIH in customs data
+      
+      TRUE ~ BUYER
+    )) %>% 
+  
+  filter(!is.na(BUYER)) %>% # those coops not matched to an exporting coops
+  filter(!is.na(GEOCODE)) %>% # those that match but cannot be linked to a district. 
+  # The CAM_V4.R algorithm has identified several of these coops as distinct ones although they have the same acronyms. 
+  # For this subset of exporting coops that I have manually inspected, those remaining at this stage can be considered the same coop within their acronym
+  distinct(COOPACRONYM_AANAME, .keep_all = TRUE)
+
+# STE COOP AGR ENTENTE DE GUIGLO is in official lists but the corresponding coop in CAM cannot be found 
+# (even with this https://business.abidjan.net/annonces-legales/1-avis-de-constitution-de-societe/41596-cooperative-agricole-entente-de-guiglo-sococoop-a-e-g-coop-ca)
+
+# COOPAAHS, COOPARM, ECPAD, SCAEDA, SOCAT, UIINTERCC CI, YAWOUBE, UISCA, UPRAD are in official lists but cannot be found in trade data
+
+
+exporting_coops <- bind_rows(
+  exporting_coops_0, 
+  
+  # AA %>%
+  #   mutate(BUYER = case_when(
+  #     COOPNAME_AADENOMINATION == "STE ACC" ~ "SACC (COOPERATIVE)"
+  #     )
+  #   ),
+  
+  ecookim_coops
+  
+) %>%
+  filter(!is.na(BUYER)) %>% # (condition on buyer removes all other AAs than STE ACC, and all other coops in the CAM than those exporting but these are already removed above)
+  # filter(!is.na(GEOCODE)) %>% 
+  mutate(MULTIPLE_GEOCODES_MULTIPLIER = 1) %>%
+  group_by(SUPPLIER_ID, BUYER) %>%
+  mutate(MULTIPLE_GEOCODES_MULTIPLIER = sum(MULTIPLE_GEOCODES_MULTIPLIER)) %>% # as of 2k20, this operation is done with mutate instead of summarise, to keep non-grouping variables like coop names 
+  mutate(COOP_FARMER_PROPORTION = case_when(
+    # ADJUST REPS IN CASE YOU WANT MORE ROWS PER ENTRY
+    # note: we don't consider SACC a cooperative (or network thereof) as of 2k20 (it's not, see USEFUL_STUFF.R).
+    # BUYER == "WAGAJACA" ~ list(rep(MULTIPLE_GEOCODES_MULTIPLIER * 1, 1000)), #has 1 GEOCODE
+    BUYER == "ECOOKIM" ~ list(rep(MULTIPLE_GEOCODES_MULTIPLIER * 1/nrow(ecookim_coops), 1000)), # has 23 GEOCODES/coops as of 2k20
+    TRUE ~ list(rep(1, 1000))
+  )) %>%
+  select(-MULTIPLE_GEOCODES_MULTIPLIER) %>% 
+  unnest(COOP_FARMER_PROPORTION) %>%
+  group_by() %>%
+  nest(COOP_FARMER_PROPORTION = COOP_FARMER_PROPORTION) %>%
+  ungroup() %>%
+  mutate(COOP_FARMER_PROPORTION_distribution = map(COOP_FARMER_PROPORTION, ~ .x 
+                                                   %>% mutate(NUM_COOP_FARMER_PROPORTION =
+                                                                row.names(.)))) %>%
+  select(-COOP_FARMER_PROPORTION) 
+
+# the total direct volume == the traded volume; total direct value == traded value
+# spread it over multiple geocodes where needed
+
+# *************************************
+# The implication of the previous approach was that it removed exporting coop flows from direct supply of traders. 
+# Now volumes exported to a trader in customs data is on the account of the latter, not of the coops. 
+
+exporting_coops <- 
+  exporting_coops %>% 
+  left_join(trader_bean_eq_vol, by = c("BUYER" = "EXPORTER_GROUP_CLEAN")) %>%
+  left_join(trader_val, by = c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>%
+  # left_join(exporting_coops_direct_2discl, by = "COOPACRONYM_AANAME") %>%
+  unnest(cols = c(COOP_FARMER_PROPORTION_distribution)) %>% # , COOP_DIRECT_VOLUME_2DISCL_TRADERS_distribution, COOP_DIRECT_VAL_2DISCL_TRADERS_distribution
+  rowwise() %>%
+  mutate(COOP_DIRECT_VOLUME = COOP_FARMER_PROPORTION * TRADER_BEQ_VOLUME_EXPORTED, # - COOP_DIRECT_VOLUME_2DISCL_TRADERS,
+         # COOP_DIRECT_VOLUME = if_else(
+         #    COOP_DIRECT_VOLUME < 0, 0, COOP_DIRECT_VOLUME
+         # ),
+         COOP_DIRECT_VAL = COOP_FARMER_PROPORTION * CIF_USD, # - COOP_DIRECT_VAL_2DISCL_TRADERS,
+         # COOP_DIRECT_VAL = if_else(
+         #    COOP_DIRECT_VAL < 0, 0, COOP_DIRECT_VAL
+         # ),
+         # Make proportion again, to weight flows from exporting coops to countries
+         # COOP_FARMER_PROPORTION = COOP_DIRECT_VOLUME / TRADER_BEQ_VOLUME_EXPORTED,
+         
+         NUM_COOP_DIRECT_VOLUME = NUM_COOP_FARMER_PROPORTION,
+         NUM_COOP_DIRECT_VAL = NUM_COOP_FARMER_PROPORTION,
+         NUM_DIRECT_VOLUME_TRADER = NUM_COOP_FARMER_PROPORTION,
+         NUM_DIRECT_VAL_TRADER = NUM_COOP_FARMER_PROPORTION) %>%
+  rename(DIRECT_VOLUME_TRADER = TRADER_BEQ_VOLUME_EXPORTED,
+         DIRECT_VAL_TRADER = CIF_USD) %>%
+  nest(
+    COOP_FARMER_PROPORTION_distribution = c(COOP_FARMER_PROPORTION, NUM_COOP_FARMER_PROPORTION),
+    # COOP_DIRECT_VOLUME_2DISCL_TRADERS_distribution = c(COOP_DIRECT_VOLUME_2DISCL_TRADERS, NUM_COOP_DIRECT_VOLUME), 
+    # COOP_DIRECT_VAL_2DISCL_TRADERS_distribution = c(COOP_DIRECT_VAL_2DISCL_TRADERS, NUM_COOP_DIRECT_VAL),
+    COOP_DIRECT_VOLUME_distribution = c(COOP_DIRECT_VOLUME, NUM_COOP_DIRECT_VOLUME),
+    COOP_DIRECT_VAL_distribution = c(COOP_DIRECT_VAL, NUM_COOP_DIRECT_VAL),
+    DIRECT_VOLUME_TRADER_distribution = c(DIRECT_VOLUME_TRADER, NUM_DIRECT_VOLUME_TRADER),
+    DIRECT_VAL_TRADER_distribution = c(DIRECT_VAL_TRADER, NUM_DIRECT_VAL_TRADER)
+  )
+
+# LINK TO TRADE LINKS (buyer-country) 
+
+trade_links_expcoop <- trade_data %>%
+  group_by(EXPORTER_ORIGINAL, EXPORTER_GROUP_CLEAN, COUNTRY_OF_DESTINATION, PRODUCT_B_CODE, YEAR) %>% # 
+  summarise(TRADE_LINK_DIRECT_VOLUME = sum(BEAN_EQUIVALENT_VOLUME),
+            TRADE_LINK_DIRECT_VAL = sum(CIF_USD)) #, 
+            # EXPORTER_ORIGINALS = paste0(na.omit(unique(EXPORTER_ORIGINAL)), collapse = " + ")) 
+
+# calculate the direct volume & value sourced from each PRODUCER for each trade link (expcoop-country)
+volume_val_expcoop_country_producer <-
+  inner_join(exporting_coops %>%
+               select(GEOCODE, SUPPLIER_ID, COOPACRONYM_AANAME, COOPNAME_AADENOMINATION, 
+                      FLOW_ID, CERTIFICATIONS,
+                      BUYER, YEAR, 
+                      COOP_FARMER_PROPORTION_distribution), # , COOP_DIRECT_VOLUME_distribution, COOP_DIRECT_VAL_distribution
+             trade_links_expcoop %>%
+               select(EXPORTER_ORIGINAL, EXPORTER_GROUP_CLEAN, YEAR, COUNTRY_OF_DESTINATION, PRODUCT_B_CODE, 
+                      TRADE_LINK_DIRECT_VOLUME, TRADE_LINK_DIRECT_VAL),
+             by = c("BUYER" = "EXPORTER_GROUP_CLEAN", "YEAR")) %>%
+  unnest(cols = c(COOP_FARMER_PROPORTION_distribution)) %>% # , COOP_DIRECT_VOLUME_distribution, COOP_DIRECT_VAL_distribution
+  
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = COOP_FARMER_PROPORTION * TRADE_LINK_DIRECT_VOLUME,
+         COOP_SOURCED_DIRECT_VAL = COOP_FARMER_PROPORTION * TRADE_LINK_DIRECT_VAL,
+         
+         NUM_TRADE_LINK_DIRECT_VOLUME   = NUM_COOP_FARMER_PROPORTION,
+         NUM_TRADE_LINK_DIRECT_VAL      = NUM_COOP_FARMER_PROPORTION,
+         NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ = NUM_COOP_FARMER_PROPORTION,
+         NUM_COOP_SOURCED_DIRECT_VAL    = NUM_COOP_FARMER_PROPORTION) %>%
+  nest(
+    COOP_FARMER_PROPORTION_distribution = c(COOP_FARMER_PROPORTION, NUM_COOP_FARMER_PROPORTION),
+    TRADE_LINK_DIRECT_VOLUME_distribution = c(TRADE_LINK_DIRECT_VOLUME, NUM_TRADE_LINK_DIRECT_VOLUME),
+    TRADE_LINK_DIRECT_VAL_distribution = c(TRADE_LINK_DIRECT_VAL, NUM_TRADE_LINK_DIRECT_VAL),
+    COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution = c(COOP_SOURCED_DIRECT_VOLUME_BEQ, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
+    COOP_SOURCED_DIRECT_VAL_distribution = c(COOP_SOURCED_DIRECT_VAL, NUM_COOP_SOURCED_DIRECT_VAL)
+  )
+```
+
+### Step 12: Joining cam-links and exporting coops
+
+!! the GEOCODE == UNKNOWN rows include some of the exporting coops -> filter these out before binding the calculated values for exporting coops; otherwise their exported volumes will be double counted. As we assume the complete exported volume of exporting coops to be traced back to a specific geocode, it is legit to remove the UNKNOWN links for these exporting coops (i.e. there are simply no unknown/indirect volumes left) (not very elegant, but given the different treatment for exporting cooperatives compared to other exporters, this is the most convenient way).
+
+```{r}
+cocoa_providers <- bind_rows(cocoa_producers  %>%
+                               filter(!BUYER %in% unique(exporting_coops$BUYER)) %>% 
+                               select(-NUM_FARMERS,
+                                      -NUM_FARMERS_TRADER_distribution),
+                             exporting_coops)
+
+volume_val_buyer_country_producer_save <- volume_val_buyer_country_producer
+
+volume_val_buyer_country_producer <- bind_rows(volume_val_buyer_country_producer %>% filter(!BUYER %in% unique(exporting_coops$BUYER)),
+                                               volume_val_expcoop_country_producer)
+
+
+rem_buy <- volume_val_buyer_country_producer %>% filter(!BUYER %in% unique(exporting_coops$BUYER)) %>% pull(BUYER) %>% unique() %>% sort()
+rem_buy
+# STE COOP AGR ENTENTE DE GUIGLO and, STE COOP MENIANSOU SAN P are in customs data (and in official lists)  but the corresponding coop in CAM cannot be found 
+# (even with this https://business.abidjan.net/annonces-legales/1-avis-de-constitution-de-societe/41596-cooperative-agricole-entente-de-guiglo-sococoop-a-e-g-coop-ca)
+
+
+#tidy up
+# rm(exporting_coops, volume_val_expcoop_country_producer) # cocoa_producers, 
+
+```
+
+**12.2 quality check, volumes and values still consistent with trade data?**
+
+```{r QC again again}
+# Using summed mean values of COOP_DIRECT_VOLUME and COOP_DIRECT_VAL
+
+#volumes
+volume_check <- volume_val_buyer_country_producer %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution$COOP_SOURCED_DIRECT_VOLUME_BEQ))) %>%
+  drop_na(MEAN)
+volume_check <- sum(volume_check$MEAN)
+
+(volume_check - trade_data_volume)/1000
+fn_numeric_check(trade_data_volume, volume_check)
+
+# value
+val_check <- volume_val_buyer_country_producer %>%
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_SOURCED_DIRECT_VAL_distribution$COOP_SOURCED_DIRECT_VAL))) %>%
+  drop_na(MEAN)
+val_check <- sum(val_check$MEAN)
+
+fn_numeric_check(trade_data_val, val_check)
+
+#tidy up
+rm(volume_check, val_check)
+
+
+# Additional check 
+if(
+  cocoa_providers %>% 
+  filter(grepl("COOPERATIVE", BUYER)) %>% 
+  rowwise() %>% 
+  mutate(MEAN = mean(unlist(COOP_FARMER_PROPORTION_distribution$COOP_FARMER_PROPORTION))) %>%
+  pull(MEAN) %>% 
+  mean(na.rm = TRUE) != 1
+){stop()}
+
+```
+
+
+# Finalising dataframe
+
+As of 2k20, BEQ volumes are converted to raw only in the summarized version (used in Trase), not additionally in every monte carlo draw. 
+This is indeed not used in QA script but adds ~15 min of run time. *_BEQ suffix was given above already.    
+```{r combining all data fragments}
+# Then, save the final model output (this takes ~10-15 minutes)
+volume_val_exporteroriginal_country_producer <-
+  volume_val_buyer_country_producer %>%
+  rename(EXPORTER_GROUP_CLEAN = BUYER, # this was lost because of the merge by BUYER = EXPORTER_GROUP_CLEAN
+         GEOCODE_COCOA = GEOCODE) %>%
+  mutate(COUNTRY_OF_ORIGIN = "COTE D'IVOIRE",
+         HS6 = substr(PRODUCT_B_CODE, 0, 6),
+         GEOCODE_PROVIDER = GEOCODE_COCOA) %>% 
+  #reorder logically - NOTICE MANY DIFFERENCES WITH 2019 SCRIPT
+  select(YEAR, GEOCODE_COCOA, GEOCODE_PROVIDER, SUPPLIER_ID, COOPACRONYM_AANAME, COOPNAME_AADENOMINATION, FLOW_ID, 
+         EXPORTER_ORIGINAL, EXPORTER_GROUP_CLEAN, COUNTRY_OF_ORIGIN, COUNTRY_OF_DESTINATION, HS6, PRODUCT_B_CODE,
+         # IMPORTER_ORIGINAL, PROVENANCE_COUNTRY, # if we are to add these nodes
+         CERTIFICATIONS,
+         COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution, #COOP_SOURCED_DIRECT_VOLUME_RAW_distribution, 
+         COOP_SOURCED_DIRECT_VAL_distribution)
+
+```
+
+## Formating to Trase conventions 
+```{r}
+### Here, we add back some information that was not kept by the model, rename some variables and format some trade ids. 
+
+# Prepare departments data the 2019 script style;
+#will need to add names of the geocoded departments, use the following (bind_cols to remove "geometry" from civ_departments)
+departments <- bind_cols(LVL_4_CODE = civ_departments$LVL_4_CODE, LVL_4_NAME = civ_departments$LVL_4_NAME) %>%
+  #add row to accommodate the unknown flows
+  bind_rows(c(LVL_4_CODE = "UNKNOWN", LVL_4_NAME = "UNKNOWN")) #%>%
+  #match with trase-ids
+  # left_join(trase_ids, by = c("LVL_4_NAME" = "name"))
+
+# Traders' tax ids are now readily in trade_data.
+
+
+# and get product names from DB
+con <- dbConnect(
+  Postgres(),
+  dbname = "trase",
+  host = "trase-db-instance.c6jsbtgl0u2s.eu-west-1.rds.amazonaws.com",
+  port = 5432,
+  user = db_username 
+)
+data <- tbl(con, "commodity_code_values") %>% collect()
+product_names <- data %>% 
+  filter(grepl("^180", value)) %>% 
+  distinct(com_id, value) %>%
+  mutate(PRODUCT = case_when(
+    grepl("^1801", value) ~ "COCOA BEANS",
+    grepl("^1802", value) ~ "COCOA WASTE",
+    grepl("^1803", value) ~ "COCOA PASTE",
+    grepl("^1804", value) ~ "COCOA BUTTER",
+    grepl("^1805", value) ~ "COCOA POWDER",
+    TRUE ~ NA_character_)) %>%
+  mutate(HS6 = str_sub(value, start = 1, end = 6)) %>%
+  distinct(HS6, PRODUCT) %>%
+  mutate(COMMODITY = "COCOA")
+stopifnot(!any(is.na(product_names$PRODUCT)))
+  
+
+volume_val_exporteroriginal_country_producer_summarised <-
+  volume_val_exporteroriginal_country_producer %>%
+  rowwise() %>%
+  mutate(
+    MEAN_COOP_SOURCED_DIRECT_VOLUME_BEQ =
+      mean(unlist(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution$COOP_SOURCED_DIRECT_VOLUME_BEQ)),
+    MEAN_COOP_SOURCED_DIRECT_VAL =
+      mean(unlist(COOP_SOURCED_DIRECT_VAL_distribution$COOP_SOURCED_DIRECT_VAL))
+    ) %>%
+  left_join(cef_cocoa, by = "HS6") %>%
+  mutate(
+    MEAN_COOP_SOURCED_DIRECT_VOLUME_RAW = MEAN_COOP_SOURCED_DIRECT_VOLUME_BEQ / EQ_FACTOR,
+  ) %>% 
+  dplyr::select(-EQ_FACTOR) %>% 
+  left_join(departments,
+            by = c("GEOCODE_COCOA" = "LVL_4_CODE")) %>%
+  # # add back original and cleaned names of subsidiaries
+  left_join(trade_data %>%
+              distinct(EXPORTER_ORIGINAL, EXPORTER_CLEAN, EXPORTER_TAX_ID),
+             by = "EXPORTER_ORIGINAL") %>%
+  left_join(product_names, by = "HS6") %>%
+  # # make trase IDs 
+  mutate(
+    GEOCODE_COCOA = geocode_to_trase_id(GEOCODE_COCOA), # this function also converts UNKNOWN to trase format
+    GEOCODE_PROVIDER = geocode_to_trase_id(GEOCODE_PROVIDER),
+    LOGISTICS_HUB_COOP = gsub(pattern = "UNKNOWN", replacement = "CI-COFFEE-COCOA-COOPERATIVE-XXXX", SUPPLIER_ID)
+  ) %>% 
+  #   # there is no UNKNOWN tax id anyway... 
+  #   EXPORTER_TAX_ID = case_when(
+  #     EXPORTER_TAX_ID == "UNKNOWN" ~ "CI-TRADER-XXXXXXXX", # original tax id is width 8
+  #     TRUE ~ EXPORTER_TAX_ID
+  #   )
+  # this is replaced by PROVIDER_ID now 
+  # mutate(
+    # LOGISTICS_HUB_COOP = case_when(
+      # COOPACRONYM_AANAME == "UNKNOWN" ~ "UNKNOWN",
+      # !is.na(COOPACRONYM_AANAME) & !is.na(COOPNAME_AADENOMINATION) ~ paste(COOPACRONYM_AANAME, COOPNAME_AADENOMINATION, sep = " - "),
+      # is.na(COOPACRONYM_AANAME)  & !is.na(COOPNAME_AADENOMINATION) ~ COOPNAME_AADENOMINATION,
+      # !is.na(COOPACRONYM_AANAME) & is.na(COOPNAME_AADENOMINATION)  ~ COOPACRONYM_AANAME
+    # )
+  # ) %>%
+  select(-COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution,
+         -COOP_SOURCED_DIRECT_VAL_distribution 
+         ) %>%
+  select(
+    COUNTRY_OF_ORIGIN,
+    COUNTRY_OF_DESTINATION,
+    # IMPORTER = IMPORTER_ORIGINAL, 
+    # IMPORTER_GROUP_CLEAN, 
+    ORIGIN = LVL_4_NAME,
+    EXPORTER = EXPORTER_ORIGINAL,
+    EXPORTER_CLEAN,
+    EXPORTER_TAX_ID,
+    EXPORTER_GROUP_CLEAN,
+    YEAR,
+    HS6,
+    PRODUCT_B_CODE,
+    VOLUME_RAW = MEAN_COOP_SOURCED_DIRECT_VOLUME_RAW, 
+    VOLUME_BEAN_EQUIVALENT = MEAN_COOP_SOURCED_DIRECT_VOLUME_BEQ, 
+    CIF_USD = MEAN_COOP_SOURCED_DIRECT_VAL,
+    LVL4_TRASE_ID_PROD = GEOCODE_COCOA,
+    LVL4_NAME_PROD = LVL_4_NAME,
+    LVL4_TRASE_ID_LH = GEOCODE_PROVIDER,
+    LVL4_NAME_LH = LVL_4_NAME,
+    PRODUCT,
+    COMMODITY,
+    LOGISTICS_HUB_COOP,
+    COOPACRONYM = COOPACRONYM_AANAME,
+    COOPNAME = COOPNAME_AADENOMINATION,
+    CERTIFICATIONS
+  )
+
+# these two variables are identical
+# volume_val_exporteroriginal_country_producer_summarised %>% 
+#   filter(LVL4_GEOCODE_LH != LVL4_GEOCODE_PROD)
+
+if(
+anyNA(volume_val_exporteroriginal_country_producer_summarised$VOLUME_RAW) | 
+anyNA(volume_val_exporteroriginal_country_producer_summarised$VOLUME_BEAN_EQUIVALENT) | 
+anyNA(volume_val_exporteroriginal_country_producer_summarised$CIF_USD)
+){stop("unexpected missing values in flows")}
+
+
+#QC volume
+volume_check <- sum(volume_val_exporteroriginal_country_producer_summarised$VOLUME_BEAN_EQUIVALENT)
+fn_numeric_check(trade_data_volume, volume_check)
+
+#QC value
+val_check <- sum(volume_val_exporteroriginal_country_producer_summarised$CIF_USD)
+fn_numeric_check(trade_data_val, val_check)
+
+
+# Differentiate between UNKNOWN flows and 'INDIRECT SOURCING'
+# ... UNKNOWN flows are handled by traders who disclose nothing
+# ... Indirect is not-direct flows by companies that did disclose some sourcing
+transparent_traders <-
+  volume_val_exporteroriginal_country_producer_summarised %>%
+  filter(LVL4_TRASE_ID_PROD != "CI-XXXXXX") %>%
+  distinct(EXPORTER_GROUP_CLEAN) %>%
+  pull(EXPORTER_GROUP_CLEAN)
+
+volume_val_exporteroriginal_country_producer_summarised <- 
+  volume_val_exporteroriginal_country_producer_summarised %>%
+  ungroup() %>%
+  mutate(
+    LVL4_TRASE_ID_PROD = case_when(
+      LVL4_TRASE_ID_PROD == "CI-XXXXXX" & EXPORTER_GROUP_CLEAN %in% transparent_traders ~ "CI-INDRCT",
+      TRUE ~ LVL4_TRASE_ID_PROD
+    ),
+    LVL4_NAME_PROD = case_when(
+      LVL4_NAME_PROD == "UNKNOWN" & EXPORTER_GROUP_CLEAN %in% transparent_traders ~ "INDIRECT SOURCING",
+      TRUE ~ LVL4_NAME_PROD
+    ),
+    LVL4_TRASE_ID_LH = case_when(
+      LVL4_TRASE_ID_LH == "CI-XXXXXX" & EXPORTER_GROUP_CLEAN %in% transparent_traders ~ "CI-INDRCT",
+      TRUE ~ LVL4_TRASE_ID_LH
+    ),
+    LVL4_NAME_LH = case_when(
+      LVL4_NAME_LH == "UNKNOWN" & EXPORTER_GROUP_CLEAN %in% transparent_traders ~ "INDIRECT SOURCING",
+      TRUE ~ LVL4_NAME_LH
+    )
+  )
+
+
+# Check volumes which are direct/indirect/unknown
+#   LVL4_NAME_PROD     PERC
+#   <chr>             <dbl>
+# 1 DIRECT SOURCING    35.3
+# 2 INDIRECT SOURCING  47.5
+# 3 UNKNOWN            17.2
+
+volume_val_exporteroriginal_country_producer_summarised %>%
+  mutate(LVL4_NAME_PROD = case_when(
+    !LVL4_NAME_PROD %in% c("UNKNOWN", "INDIRECT SOURCING") ~ "DIRECT SOURCING",
+    TRUE ~ LVL4_NAME_PROD)
+    ) %>%
+  mutate(TOTAL_TONS = sum(VOLUME_BEAN_EQUIVALENT)) %>%
+  group_by(LVL4_NAME_PROD) %>%
+  summarise(PERC = sum(VOLUME_BEAN_EQUIVALENT) / unique(TOTAL_TONS) * 100)
+
+# This was before integrating info from importer variable: 
+#   LVL4_NAME_PROD     PERC
+# 1 DIRECT SOURCING    57.4
+# 2 INDIRECT SOURCING  13.7
+# 3 UNKNOWN            28.9
+
+# In 2019 it was: 
+#   LVL4_NAME_PROD     PERC
+# 1 DIRECT SOURCING    43.6
+# 2 INDIRECT SOURCING  23.9
+# 3 UNKNOWN            32.4
+
+
+# VOLUME_BEAN_EQUIVALENT = 0 is the indirect sourcing of traders for which direct sourcing is estimated to be as large as total export. In 2022, this is only Cemoi.
+volume_val_exporteroriginal_country_producer_summarised %>% 
+  filter(VOLUME_BEAN_EQUIVALENT==0) %>% 
+  View()
+
+# Remove these rows as they are meaningless. --- NOTE THIS IS GOING TO BE A (minor) SOURCE OF STRUCTURE DIFFERENCE WITH cocoa_providers and volume_val_exporteroriginal_country_producer but it makes more sense to do it on summarized data than on the level of every estimate 
+volume_val_exporteroriginal_country_producer_summarised <- 
+  volume_val_exporteroriginal_country_producer_summarised %>% 
+  filter(VOLUME_BEAN_EQUIVALENT > 0)
+
+# Fill in NA names 
+volume_val_exporteroriginal_country_producer_summarised %>% 
+  filter(is.na(COOPNAME)) %>% pull(LOGISTICS_HUB_COOP) %>% unique()
+
+volume_val_exporteroriginal_country_producer_summarised <- 
+  volume_val_exporteroriginal_country_producer_summarised %>% 
+  mutate(COOPNAME = case_when(
+    is.na(COOPNAME) ~ "UNKNOWN COOPERATIVE NAME", 
+    TRUE ~ COOPNAME
+  ))
+
+#tidy up
+rm(volume_check, val_check, departments, product_names)
+```
+
+
+# Export 
+```{r}
+# First, save these two objects for personal purpose (i.e. research), to replicate 2019 QA scripts
+saveRDS(cocoa_providers,
+          file = here("temp_data/SEIPCS_adapted_to_IC2B_V2/cocoa_providers_2022.rds"))
+
+saveRDS(volume_val_exporteroriginal_country_producer,
+          file = here("temp_data/SEIPCS_adapted_to_IC2B_V2/volume_val_exporteroriginal_country_producer_2022.rds"))
+
+write_csv(volume_val_exporteroriginal_country_producer_summarised,
+          file = here("temp_data/SEIPCS_adapted_to_IC2B_V2/SEI_PCS_COTE_DIVOIRE_COCOA_2022.csv"),
+          na = "NA", 
+          append = FALSE, 
+          col_names = TRUE)
+
+stop()
+
+
+# tidy up
+rm(cocoa_providers, cocoa_producers, exporting_coops, exporting_coops_0, trade_data, trade_links, trade_links_direct, trade_links_expcoop, trade_links_unknown,
+   volume_val_buyer_country_producer, volume_val_expcoop_country_producer, volume_val_exporteroriginal_country_producer, volume_val_exporteroriginal_country_producer_summarised, volume_val_buyer_country_producer_save, tmp_save)
+
+```
+
+```{r}
+# some checks below
+# volume_val_exporteroriginal_country_producer <-
+# s3load(
+#   object = "cote_divoire/cocoa/sei_pcs/OUT/volume_val_exporteroriginal_country_producer_2022.rds",
+#   bucket = "trase-storage"
+# )
+# 
+# 
+# volume_val_exporteroriginal_country_producer_read <-
+#   s3readRDS(object = unserialize(memDecompress(get_object("cote_divoire/cocoa/sei_pcs/OUT/volume_val_exporteroriginal_country_producer_2022.rds"), "gzip")),
+#               bucket = "trase-storage",
+#               opts = c("check_region" = T)
+# )
+
+# volume_val_exporteroriginal_country_producer_summarised <- 
+# s3read_using(object = "cote_divoire/cocoa/sei_pcs/v1.1.0/SEI_PCS_COTE_DIVOIRE_COCOA_2022.csv",
+#               bucket = "trase-storage",
+#               FUN = read_delim, delim = ";",
+#               opts = c("check_region" = T)
+# )
+# 
+# 
+# volume_val_exporteroriginal_country_producer_summarised %>% 
+#   pull(VOLUME_BEAN_EQUIVALENT) %>% summary()
+# 
+# 
+# volume_val_exporteroriginal_country_producer_summarised %>% 
+#   mutate(DIRECT = case_when(
+#     LVL4_NAME_PROD %in% c("UNKNOWN", "INDIRECT SOURCING") ~ FALSE,
+#     TRUE ~ TRUE)
+#     ) %>%
+#   filter(!DIRECT) %>% 
+#   pull(VOLUME_BEAN_EQUIVALENT) %>% summary()
+#   
+# 
+# # VOLUME_BEAN_EQUIVALENT = 0 is the indirect sourcing of BARRY CALLEBAUT.
+# volume_val_exporteroriginal_country_producer_summarised %>% 
+#   filter(LVL4_NAME_PROD != "INDIRECT SOURCING") %>%
+#   pull(VOLUME_BEAN_EQUIVALENT) %>% summary()
+#   
+# 
+# volume_val_exporteroriginal_country_producer_summarised %>% 
+#   filter(VOLUME_BEAN_EQUIVALENT==0) %>% 
+#   View()
+# 
+# cocoa_providers %>%
+#   rowwise() %>%
+#   mutate(MEAN = mean(unlist(DIRECT_VOLUME_TRADER_distribution$DIRECT_VOLUME_TRADER))) %>%
+#   drop_na(MEAN) %>% pull(MEAN) %>% summary()
+
+
+# ORG_volume_val_exporteroriginal_country_producer_summarised %>% 
+#   filter(LVL4_NAME_PROD == "UNKNOWN") %>% View()
+```
+

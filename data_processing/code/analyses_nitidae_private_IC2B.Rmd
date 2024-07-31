@@ -32,62 +32,300 @@ source(here("code", "theme_trase.R"))
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+cef_cocoa <- fn_load_bean_equivalent()
 
 ## Assets
-camcy = read.csv(
-  file = here("temp_data/private_IC2B/IC2B_coop.csv"))
-# keep it named like this for consistency with earlier script version. 
-# Elsewhere, this object is called cam_long.  
-camlink = read.csv(
-  file = here("temp_data/private_IC2B/IC2B_link.csv"))
+kit_farm_production <- 
+  read_delim(
+    get_object("cote_divoire/cocoa/production_estimates/kit_farm_yield_observations.csv",
+               bucket = "trase-storage",
+               check_region = T),
+    delim = ";"
+  ) %>%
+  select(cocoa_prod_total_kgs)
 
-departements <- s3read_using(
-  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson", 
-  bucket = "trase-storage",
-  FUN = read_sf,
-  #sheet = "Cacao", 
-  #skip = 3,
-  opts = c("check_region" = T)
+ # /!\/!\/!\ IMPORTANT *NOT* TO FILTER BY YEAR 
+link <- 
+  read.csv(
+    file = here("temp_data/private_IC2B/IC2B_v2_link.csv")) %>% 
+  # Variables needed in model
+  # this is in trase standard format. width = 4 because the max number of coop_id is 5734 currently, so far from being larger than 9999. 
+  mutate(SUPPLIER_ID = paste0("CI-COFFEE-COCOA-COOPERATIVE-", str_pad(COOP_ID, width=4, pad = "0"))) %>% 
+  # Keep all variables in there, just rename some 
+  rename(COOPACRONYM = SUPPLIER_ABRVNAME, 
+         COOPNAME = SUPPLIER_FULLNAME)
+# Names of top actors
+disclosing_trader_names <- link$TRADER_NAME %>% unique() %>% sort()
+
+
+# The cam at coop level is also needed for the exporting coop part (step 12)
+coopbsy <- 
+  read.csv(
+    file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) %>% 
+    distinct(COOP_ID, .keep_all = TRUE) %>%
+    mutate(SUPPLIER_ID = paste0("CI-COFFEE-COCOA-COOPERATIVE-", str_pad(COOP_ID, width=4, pad = "0")))
+
+
+# output summarized **AND POST TRASE FORMATTING*
+outsum22 <- read_delim(file = here("temp_data/SEIPCS_adapted_to_IC2B_V2/SEI_PCS_COTE_DIVOIRE_COCOA_2022.csv"), 
+                       delim = ",",
+                       col_types = cols(HS6 = col_character(),
+                                        PRODUCT_B_CODE = col_character()))
+
+# all volumes exported per exporter, per destination country, per cocoa seller  
+# it is quite different because it has not been standardized for Trase. 
+out22 <- readRDS(here("temp_data/SEIPCS_adapted_to_IC2B_V2/volume_val_exporteroriginal_country_producer_2022.rds")) 
+out22 <- 
+  out22 %>%
+  rename(GEOCODE = GEOCODE_PROVIDER) %>%
+  filter(! GEOCODE == "UNKNOWN") %>%
+  select(-GEOCODE_COCOA)
+
+
+# ADDING USEFUL VARIABLES --------------------
+link = 
+  link %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         # this removes NAs because grepl("RA", NA) -> FALSE
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+         UTZ = grepl("UTZ", CERTIFICATIONS),
+         FT = grepl("FAIRTRADE", CERTIFICATIONS),
+         ONLY_RFA = RFA & !UTZ & !FT,
+         ONLY_UTZ = !RFA & UTZ & !FT,
+         ONLY_FT  = !RFA & !UTZ & FT,
+         RFA_AND_UTZ = RFA & UTZ & !FT,
+         RFA_AND_FT  = RFA & !UTZ & FT,
+         UTZ_AND_FT  = !RFA & UTZ & FT,
+         RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+         CERTIFICATION = case_when(
+           ONLY_RFA ~ "RFA",
+           ONLY_UTZ ~ "UTZ",
+           ONLY_FT ~ "FT",
+           RFA_AND_UTZ ~ "RFA & UTZ",
+           RFA_AND_FT ~ "RFA & FT",
+           UTZ_AND_FT ~ "UTZ & FT",
+           RFA_AND_UTZ_AND_FT ~ "RFA & UTZ & FT",
+           TRUE ~ ""
+         ),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+coopbsy = 
+  coopbsy %>% 
+  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCES %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
+         # this removes NAs because grepl("RA", NA) -> FALSE
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+         UTZ = grepl("UTZ", CERTIFICATIONS),
+         FT = grepl("FAIRTRADE", CERTIFICATIONS),
+         ONLY_RFA = RFA & !UTZ & !FT,
+         ONLY_UTZ = !RFA & UTZ & !FT,
+         ONLY_FT  = !RFA & !UTZ & FT,
+         RFA_AND_UTZ = RFA & UTZ & !FT,
+         RFA_AND_FT  = RFA & !UTZ & FT,
+         UTZ_AND_FT  = !RFA & UTZ & FT,
+         RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+         CERTIFICATION = case_when(
+           ONLY_RFA ~ "RFA",
+           ONLY_UTZ ~ "UTZ",
+           ONLY_FT ~ "FT",
+           RFA_AND_UTZ ~ "RFA & UTZ",
+           RFA_AND_FT ~ "RFA & FT",
+           UTZ_AND_FT ~ "UTZ & FT",
+           RFA_AND_UTZ_AND_FT ~ "RFA & UTZ & FT",
+           TRUE ~ ""
+         ),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
+         )
+
+out22 <- 
+  out22 %>% 
+  mutate(IS_EXPCOOP = grepl(pattern = "[(]COOPERATIVE[)]", EXPORTER_GROUP_CLEAN),
+         IS_DEST_EU = fn_is_in_eu(COUNTRY_OF_DESTINATION),
+
+         # this removes NAs because grepl("RA", NA) -> FALSE
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+         UTZ = grepl("UTZ", CERTIFICATIONS),
+         FT = grepl("FAIRTRADE", CERTIFICATIONS),
+         ONLY_RFA = RFA & !UTZ & !FT,
+         ONLY_UTZ = !RFA & UTZ & !FT,
+         ONLY_FT  = !RFA & !UTZ & FT,
+         RFA_AND_UTZ = RFA & UTZ & !FT,
+         RFA_AND_FT  = RFA & !UTZ & FT,
+         UTZ_AND_FT  = !RFA & UTZ & FT,
+         RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+         CERTIFICATION = case_when(
+           ONLY_RFA ~ "RFA",
+           ONLY_UTZ ~ "UTZ",
+           ONLY_FT ~ "FT",
+           RFA_AND_UTZ ~ "RFA & UTZ",
+           RFA_AND_FT ~ "RFA & FT",
+           UTZ_AND_FT ~ "UTZ & FT",
+           RFA_AND_UTZ_AND_FT ~ "RFA & UTZ & FT",
+           TRUE ~ ""
+         ),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         # this has NAs however
+         CERTIFIED_OR_SSI = CERTIFICATIONS != "")
+
+outsum22 <- 
+  outsum22 %>% 
+  mutate(IS_EXPCOOP = grepl(pattern = "[(]COOPERATIVE[)]", EXPORTER_GROUP_CLEAN),
+         IS_INDIRECT = (LVL4_NAME_PROD == "INDIRECT SOURCING"),
+         IS_UNKNOWN  = (LVL4_NAME_PROD == "UNKNOWN"),
+         IS_DIRECT = !IS_INDIRECT & !IS_UNKNOWN, 
+         IS_UNTRACED = !IS_DIRECT,
+         IS_DEST_EU = fn_is_in_eu(COUNTRY_OF_DESTINATION), 
+         IS_BEANS = (PRODUCT == "COCOA BEANS"),
+         IS_PASTE = (PRODUCT == "COCOA PASTE"),
+         IS_BUTTER = (PRODUCT == "COCOA BUTTER"),
+         IS_POWDER = (PRODUCT == "COCOA POWDER"),
+         
+         # this removes NAs because grepl("RA", NA) -> FALSE
+         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+         UTZ = grepl("UTZ", CERTIFICATIONS),
+         FT = grepl("FAIRTRADE", CERTIFICATIONS),
+         ONLY_RFA = RFA & !UTZ & !FT,
+         ONLY_UTZ = !RFA & UTZ & !FT,
+         ONLY_FT  = !RFA & !UTZ & FT,
+         RFA_AND_UTZ = RFA & UTZ & !FT,
+         RFA_AND_FT  = RFA & !UTZ & FT,
+         UTZ_AND_FT  = !RFA & UTZ & FT,
+         RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+         CERTIFICATION = case_when(
+           ONLY_RFA ~ "RFA",
+           ONLY_UTZ ~ "UTZ",
+           ONLY_FT ~ "FT",
+           RFA_AND_UTZ ~ "RFA & UTZ",
+           RFA_AND_FT ~ "RFA & FT",
+           UTZ_AND_FT ~ "UTZ & FT",
+           RFA_AND_UTZ_AND_FT ~ "RFA & UTZ & FT",
+           TRUE ~ ""
+         ),
+         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         # this has NAs however
+         CERTIFIED_OR_SSI = CERTIFICATIONS != "")
+
+
+flow_sum_22 <- 
+  outsum22 %>% 
+    summarise(.by = YEAR, 
+              VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT) / 1e6,
+              CIF_MILLION_USD = sum(CIF_USD) / 1e6, 
+              VOLUME_BEQ_BEANS_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_BEANS) / 1e6,
+              VOLUME_BEQ_PASTE_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_PASTE) / 1e6,
+              VOLUME_BEQ_BUTTER_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_BUTTER) / 1e6,
+              VOLUME_BEQ_POWDER_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_POWDER) / 1e6,
+              
+              VOL_DIRECT_THOUSAND_TONNES =   sum(VOLUME_BEAN_EQUIVALENT*IS_DIRECT) / 1e6, 
+              VOL_INDIRECT_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_INDIRECT) / 1e6, 
+              VOL_UNKNOWN_THOUSAND_TONNES =  sum(VOLUME_BEAN_EQUIVALENT*IS_UNKNOWN) / 1e6, 
+              VOL_UNTRACED_THOUSAND_TONNES =  sum(VOLUME_BEAN_EQUIVALENT*IS_UNTRACED) / 1e6,
+              
+              PCT_DIRECT = 100 * VOL_DIRECT_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES, 
+              PCT_INDIRECT = 100 * VOL_INDIRECT_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES,
+              PCT_UNKNOWN = 100 * VOL_UNKNOWN_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES,
+              PCT_UNTRACED = 100 * VOL_UNTRACED_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES, 
+              
+              VOLUME_BEQ_EU_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_DEST_EU)/1e6,
+              PCT_EU = 100 * VOLUME_BEQ_EU_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES 
+
 )
 
-# to plot coordinate axis labels in (with geom_sf) correctly 
-xlabs = seq(-8, -4, 2)
-ylabs = seq(5, 11, 2)
 ```
 
-## Pre-processing
+
+# CERTIFIED VOLUMES IN TRASE DIRECT SOURCING 
+
+## Breaking down by destination
 ```{r}
 
-# At LINK LEVEL
-camlink = 
-  camlink %>% 
-  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
-         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
-         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
-         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
-         )
+out22 %>% filter(is.na(CERTIFICATIONS)) %>% nrow() 
+out22$CERTIFICATIONS %>% unique()
+out22$CERTIFICATION %>% unique()
 
+# This is only direct supply flows
+eu_certif0 <-
+  out22 %>% 
+  unnest(cols = c(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution, 
+                  COOP_SOURCED_DIRECT_VAL_distribution)) %>%
+  #sum over the different traders, destinations and HS codes to obtain 1000 values per geocode
+  summarise(.by = c(IS_DEST_EU, CERTIFICATION, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ, NUM_COOP_SOURCED_DIRECT_VAL),
+            COOP_SOURCED_DIRECT_VAL = sum(COOP_SOURCED_DIRECT_VAL),
+            COOP_SOURCED_DIRECT_VOLUME_BEQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ), 
+            PRICE_BEQ = COOP_SOURCED_DIRECT_VAL / COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
+  # this averages across monte carlo simulations
+  summarise(.by = c(IS_DEST_EU, CERTIFICATION),
+            DIRECT_KTONNES_BEAN_EQ = 1e-6 * mean(COOP_SOURCED_DIRECT_VOLUME_BEQ)#,
+            # CI_VOLUME_BEQ = qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) * 
+            #   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))),
+            
+            # MEAN_PRICE_BEQ = mean(PRICE_BEQ),
+            # CI_PRICE_BEQ = qt(0.95/2+0.5, length(PRICE_BEQ)-1) * 
+            #   (sd(PRICE_BEQ)/sqrt(length(PRICE_BEQ)))
+            ) %>% 
+  arrange(IS_DEST_EU, CERTIFICATION) 
 
-# At COOP YEAR LEVEL
-camcy = 
-  camcy %>% 
-  mutate(CERTIFICATION_DISCLOSURE = DISCLOSURE_SOURCES %in% c("RAINFOREST ALLIANCE", "FAIRTRADE"), 
-         CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE|FAIR FOR LIFE|BIOLOGIQUE", CERTIFICATIONS),
-         HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
-         CERTIFIED_OR_SSI = CERTIFICATIONS != ""
-         )
+eu_certif <- 
+  eu_certif0 %>% 
+  mutate(YEAR = 2022) %>% 
+  inner_join(flow_sum_22 %>% select(YEAR, 
+                                    VOL_DIRECT_THOUSAND_TONNES), by = "YEAR") %>% 
+  mutate(TOTAL_DIRECT_KTONNES_BEAN_EQ = VOL_DIRECT_THOUSAND_TONNES,
+         SHARE_OF_DIRECT = DIRECT_KTONNES_BEAN_EQ / TOTAL_DIRECT_KTONNES_BEAN_EQ) %>% 
+  select(-VOL_DIRECT_THOUSAND_TONNES)
+
+direct_ktonnes_2022 <-
+  flow_sum_22 %>% filter(YEAR == 2022) %>% pull(VOL_DIRECT_THOUSAND_TONNES)
+
+# Checks: 
+if(eu_certif$SHARE_OF_DIRECT %>% sum() != 1){stop("problem")}
+if(eu_certif$DIRECT_KTONNES_BEAN_EQ %>% sum() != direct_ktonnes_2022){ stop() }
+  
+direct_certified_ktonnes <-   
+  eu_certif %>% filter(CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) %>% sum() 
+
+direct_certified_noneu_ktonnes <- 
+  eu_certif %>% filter(!IS_DEST_EU & CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) 
+# corresponding pct 
+pct_direct_being_certified_noneu <- 
+  eu_certif %>% filter(!IS_DEST_EU & CERTIFIED) %>% pull(SHARE_OF_DIRECT) * 100
+
+direct_certified_eu_ktonnes <- 
+  eu_certif %>% filter(IS_DEST_EU & CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) 
+pct_direct_being_certified_eu <- 
+  eu_certif %>% filter(IS_DEST_EU & CERTIFIED) %>% pull(SHARE_OF_DIRECT) * 100
+  
+
+# The answer to Nitidae's question of how much directly sourced cocoa is certified? 
+pct_direct_certified <- 
+  100 * direct_certified_ktonnes / direct_ktonnes_2022
+
+# Comparing with certification bodies figures: 
+
+eu_certif %>% 
+  select(YEAR, TOTAL_DIRECT_KTONNES_BEAN_EQ, CERTIFICATION, IS_DEST_EU, DIRECT_KTONNES_BEAN_EQ, SHARE_OF_DIRECT)
 
 ```
 
+In the `r round(direct_ktonnes_2022, 0)` thousand tonnes directly sourced in Côte d'Ivoire in 2022, we estimate that certified cooperatives supply `r round(direct_certified_ktonnes, 0)` thousand tonnes, i.e. `r round(pct_direct_certified, 1)`%. 
+
+The EU imports `r round(direct_certified_eu_ktonnes,0)` thousand tonnes of cocoa directly sourced from a certified cooperative, while the rest of the worlds imports `r round(direct_certified_noneu_ktonnes,0)` thousand tonnes. 
+Hence, the EU imports `r round(100 * direct_certified_eu_ktonnes / direct_certified_ktonnes, 1)`% of the cocoa directly sourced from certified cooperatives in Côte d'Ivoire. 
 
 # Private IC2B descriptives 
 ```{r}
 camcy22 <- 
-  camcy %>% 
+  coopbsy %>% 
   filter(YEAR==2022)
 
 camlink22 <- 
-  camlink %>% 
+  link %>% 
   filter(YEAR==2022) 
 
 # distinct coops identified
@@ -95,7 +333,7 @@ nb_dst_coops_civ22 <-
   nrow(camcy22)
 
 # distinct disclosing companies 
-# camlink$DISCLOSURE_SOURCE %>% unique() 
+# link$DISCLOSURE_SOURCE %>% unique() 
 
 
 # coop-company links identified
@@ -167,36 +405,36 @@ compar_tbl
 # Total number of farmers 
 
 # Total minimum number of farmers supplying a coop in 2022 and 2023
-camcy %>% filter(YEAR == 2019) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
-camcy %>% filter(YEAR == 2019) %>% pull(TOTAL_FARMERS) %>% summary()
+coopbsy %>% filter(YEAR == 2019) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+coopbsy %>% filter(YEAR == 2019) %>% pull(TOTAL_FARMERS) %>% summary()
 
-camcy %>% filter(YEAR == 2020) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
-camcy %>% filter(YEAR == 2020) %>% pull(TOTAL_FARMERS) %>% summary()
+coopbsy %>% filter(YEAR == 2020) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+coopbsy %>% filter(YEAR == 2020) %>% pull(TOTAL_FARMERS) %>% summary()
 
-camcy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
-camcy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS) %>% summary()
+coopbsy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+coopbsy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS) %>% summary()
 
-camcy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
-camcy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% summary()
+coopbsy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+coopbsy %>% filter(YEAR == 2022) %>% pull(TOTAL_FARMERS) %>% summary()
 
-camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
-camcy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% summary()
+coopbsy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+coopbsy %>% filter(YEAR == 2023) %>% pull(TOTAL_FARMERS) %>% summary()
 
 camcy22 %>% filter(is.na(TOTAL_FARMERS)) %>% View()
 
-camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
-camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
+link %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
+link %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
 
-camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
-camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
+link %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% sum(na.rm = TRUE)
+link %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS_EXTRAPOLATED) %>% summary()
 
-camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
-camlink %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% summary()
+link %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
+link %>% filter(YEAR == 2022) %>% pull(NUM_FARMERS) %>% summary()
 
-camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
-camlink %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% summary()
+link %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% sum(na.rm = TRUE)
+link %>% filter(YEAR == 2023) %>% pull(NUM_FARMERS) %>% summary()
 
-# camlink %>% filter(YEAR == 2022) %>% distinct(COOP_ID, .keep_all = T) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
+# link %>% filter(YEAR == 2022) %>% distinct(COOP_ID, .keep_all = T) %>% pull(TOTAL_FARMERS) %>% sum(na.rm = TRUE)
 
 # Number of farmers with at least one certification 
 ## At least RFA
@@ -209,7 +447,7 @@ camcy22$TOTAL_FARMERS_RFA %>% sum(na.rm = T)
 # HOWEVER, PB THAT IN 2021 IT IS NOT THE SAME AT ALL, 
 
 
-camcy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS_RFA) %>% sum(na.rm = T)
+coopbsy %>% filter(YEAR == 2021) %>% pull(TOTAL_FARMERS_RFA) %>% sum(na.rm = T)
 
 ## At least FT
 camlink22 %>% filter(DISCLOSURE_SOURCE == "FAIRTRADE") %>% pull(NUM_FARMERS) %>% sum(na.rm = T)
@@ -243,7 +481,7 @@ Just
 ```{r, fig.width = 12, fig.height = 5}
 # Plot the number of coops certified by certification program
 ssi_2023 <- 
-  camcy %>% 
+  coopbsy %>% 
   mutate(CERT1 = str_split(CERTIFICATIONS, " [+] ")) %>% 
   unnest(cols = c(CERT1)) %>%
   filter(!is.na(CERT1) & CERT1 != "" & CERT1 != "NA" & CERT1 != "9999") %>% 
@@ -323,7 +561,7 @@ fn_is_certif <- function(x){
 unique(ssi_2023$CERT1)[fn_is_ssi(unique(ssi_2023$CERT1))]
 
 camcy23_ssidumm <- 
- camcy %>% 
+ coopbsy %>% 
   filter(YEAR == 2023) %>% 
   mutate(CERT1 = str_split(CERTIFICATIONS, " [+] ")) %>% 
   unnest(cols = c(CERT1)) %>%
