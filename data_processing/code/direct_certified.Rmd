@@ -32,7 +32,6 @@ source(here("code", "theme_trase.R"))
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
-cef_cocoa <- fn_load_bean_equivalent()
 
 ## Assets
 kit_farm_production <- 
@@ -98,7 +97,7 @@ link =
          RFA_AND_FT  = RFA & !UTZ & FT,
          UTZ_AND_FT  = !RFA & UTZ & FT,
          RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         CERTIFICATION = case_when(
+         CERTIFICATION_DETAIL = case_when(
            ONLY_RFA ~ "RFA",
            ONLY_UTZ ~ "UTZ",
            ONLY_FT ~ "FT",
@@ -127,7 +126,7 @@ coopbsy =
          RFA_AND_FT  = RFA & !UTZ & FT,
          UTZ_AND_FT  = !RFA & UTZ & FT,
          RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         CERTIFICATION = case_when(
+         CERTIFICATION_DETAIL = case_when(
            ONLY_RFA ~ "RFA",
            ONLY_UTZ ~ "UTZ",
            ONLY_FT ~ "FT",
@@ -158,7 +157,7 @@ out22 <-
          RFA_AND_FT  = RFA & !UTZ & FT,
          UTZ_AND_FT  = !RFA & UTZ & FT,
          RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         CERTIFICATION = case_when(
+         CERTIFICATION_DETAIL = case_when(
            ONLY_RFA ~ "RFA",
            ONLY_UTZ ~ "UTZ",
            ONLY_FT ~ "FT",
@@ -197,7 +196,7 @@ outsum22 <-
          RFA_AND_FT  = RFA & !UTZ & FT,
          UTZ_AND_FT  = !RFA & UTZ & FT,
          RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         CERTIFICATION = case_when(
+         CERTIFICATION_DETAIL = case_when(
            ONLY_RFA ~ "RFA",
            ONLY_UTZ ~ "UTZ",
            ONLY_FT ~ "FT",
@@ -244,79 +243,285 @@ flow_sum_22 <-
 
 ## Breaking down by destination
 ```{r}
+direct_ktonnes_2022 <-
+  flow_sum_22 %>% filter(YEAR == 2022) %>% pull(VOL_DIRECT_THOUSAND_TONNES)
 
 out22 %>% filter(is.na(CERTIFICATIONS)) %>% nrow() 
 out22$CERTIFICATIONS %>% unique()
-out22$CERTIFICATION %>% unique()
+out22$CERTIFICATION_DETAIL %>% unique()
 
 # This is only direct supply flows
-eu_certif0 <-
+by_eu_certdet0 <-
   out22 %>% 
   unnest(cols = c(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution, 
                   COOP_SOURCED_DIRECT_VAL_distribution)) %>%
+  # convert here in KTONNES
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = 1e-6 * COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
   #sum over the different traders, destinations and HS codes to obtain 1000 values per geocode
-  summarise(.by = c(IS_DEST_EU, CERTIFICATION, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ, NUM_COOP_SOURCED_DIRECT_VAL),
+  summarise(.by = c(IS_DEST_EU, CERTIFICATION_DETAIL, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
             COOP_SOURCED_DIRECT_VAL = sum(COOP_SOURCED_DIRECT_VAL),
             COOP_SOURCED_DIRECT_VOLUME_BEQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ), 
             PRICE_BEQ = COOP_SOURCED_DIRECT_VAL / COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
   # this averages across monte carlo simulations
-  summarise(.by = c(IS_DEST_EU, CERTIFICATION),
-            DIRECT_KTONNES_BEAN_EQ = 1e-6 * mean(COOP_SOURCED_DIRECT_VOLUME_BEQ)#,
-            # CI_VOLUME_BEQ = qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) * 
-            #   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))),
-            
-            # MEAN_PRICE_BEQ = mean(PRICE_BEQ),
-            # CI_PRICE_BEQ = qt(0.95/2+0.5, length(PRICE_BEQ)-1) * 
-            #   (sd(PRICE_BEQ)/sqrt(length(PRICE_BEQ)))
+  summarise(.by = c(IS_DEST_EU, CERTIFICATION_DETAIL),
+            DIRECT_KTONNES_BEAN_EQ = mean(COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            CI95 = list(c(DIRECT_KTONNES_BEAN_EQ - 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))), 
+                                 DIRECT_KTONNES_BEAN_EQ + 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ)))
+                                 ))
             ) %>% 
-  arrange(IS_DEST_EU, CERTIFICATION) 
+  arrange(IS_DEST_EU, CERTIFICATION_DETAIL) 
 
-eu_certif <- 
-  eu_certif0 %>% 
+by_certdet0 <-
+  out22 %>% 
+  unnest(cols = c(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution, 
+                  COOP_SOURCED_DIRECT_VAL_distribution)) %>%
+  # convert here in KTONNES
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = 1e-6 * COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
+  #sum over the different traders, destinations and HS codes to obtain 1000 values per geocode
+  summarise(.by = c(CERTIFICATION_DETAIL, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            COOP_SOURCED_DIRECT_VOLUME_BEQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ)#, 
+            ) %>% 
+  # this averages across monte carlo simulations
+  summarise(.by = c(CERTIFICATION_DETAIL),
+            DIRECT_KTONNES_BEAN_EQ = mean(COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            CI95 = list(c(DIRECT_KTONNES_BEAN_EQ - 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))), 
+                                 DIRECT_KTONNES_BEAN_EQ + 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ)))
+                                 ))
+            ) %>% 
+  arrange(CERTIFICATION_DETAIL) 
+
+by_eu_certified0 <- 
+  out22 %>% 
+  unnest(cols = c(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution, 
+                  COOP_SOURCED_DIRECT_VAL_distribution)) %>%
+  # convert here in KTONNES
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = 1e-6 * COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
+  #sum over the different traders, destinations and HS codes to obtain 1000 values per geocode
+  summarise(.by = c(IS_DEST_EU, CERTIFIED, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            COOP_SOURCED_DIRECT_VAL = sum(COOP_SOURCED_DIRECT_VAL),
+            COOP_SOURCED_DIRECT_VOLUME_BEQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ), 
+            PRICE_BEQ = COOP_SOURCED_DIRECT_VAL / COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
+  # this averages across monte carlo simulations
+  summarise(.by = c(IS_DEST_EU, CERTIFIED),
+            DIRECT_KTONNES_BEAN_EQ = mean(COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            CI95 = list(c(DIRECT_KTONNES_BEAN_EQ - 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))), 
+                                 DIRECT_KTONNES_BEAN_EQ + 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ)))
+                                 ))
+            ) %>% 
+  arrange(IS_DEST_EU, CERTIFIED) 
+  
+by_certified0 <-
+  out22 %>% 
+  unnest(cols = c(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution, 
+                  COOP_SOURCED_DIRECT_VAL_distribution)) %>%
+  # convert here in KTONNES
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = 1e-6 * COOP_SOURCED_DIRECT_VOLUME_BEQ) %>%
+  #sum over certification status to obtain 1000 values per geocode
+  summarise(.by = c(CERTIFIED, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            COOP_SOURCED_DIRECT_VOLUME_BEQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ)) %>% 
+  # this averages across monte carlo simulations
+  summarise(.by = c(CERTIFIED),
+            DIRECT_KTONNES_BEAN_EQ = mean(COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            CI95 = list(c(DIRECT_KTONNES_BEAN_EQ - 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))), 
+                                 DIRECT_KTONNES_BEAN_EQ + 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ)))
+                                 ))
+            ) %>% 
+  arrange(CERTIFIED)   
+   
+
+df <- by_certdet0
+rm(df, toret)
+
+make_share <- function(df){
+  toret <- 
+  df %>% 
   mutate(YEAR = 2022) %>% 
   inner_join(flow_sum_22 %>% select(YEAR, 
                                     VOL_DIRECT_THOUSAND_TONNES), by = "YEAR") %>% 
   mutate(TOTAL_DIRECT_KTONNES_BEAN_EQ = VOL_DIRECT_THOUSAND_TONNES,
          SHARE_OF_DIRECT = DIRECT_KTONNES_BEAN_EQ / TOTAL_DIRECT_KTONNES_BEAN_EQ) %>% 
   select(-VOL_DIRECT_THOUSAND_TONNES)
-
-direct_ktonnes_2022 <-
-  flow_sum_22 %>% filter(YEAR == 2022) %>% pull(VOL_DIRECT_THOUSAND_TONNES)
-
-# Checks: 
-if(eu_certif$SHARE_OF_DIRECT %>% sum() != 1){stop("problem")}
-if(eu_certif$DIRECT_KTONNES_BEAN_EQ %>% sum() != direct_ktonnes_2022){ stop() }
   
+# Checks: 
+  if(round(sum(toret$SHARE_OF_DIRECT),10) != 1){stop("problem")}
+  if(round(sum(toret$DIRECT_KTONNES_BEAN_EQ), 4) != round(direct_ktonnes_2022,4)){ stop() }
+  return(toret)
+}
+
+by_eu_certdet <- make_share(by_eu_certdet0)
+by_certdet <- make_share(by_certdet0)
+by_eu_certified <- make_share(by_eu_certified0)
+by_certified <- make_share(by_certified0)
+
+by_eu_certdet
+by_certdet
+by_eu_certified
+by_certified
+
+
+by_certdet$DIRECT_KTONNES_BEAN_EQ %>% sum() == sum(by_certified$DIRECT_KTONNES_BEAN_EQ)
+
 direct_certified_ktonnes <-   
-  eu_certif %>% filter(CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) %>% sum() 
+  by_eu_certified %>% filter(CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) %>% sum() 
 
 direct_certified_noneu_ktonnes <- 
-  eu_certif %>% filter(!IS_DEST_EU & CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) 
+  by_eu_certified %>% filter(!IS_DEST_EU & CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) 
 # corresponding pct 
 pct_direct_being_certified_noneu <- 
-  eu_certif %>% filter(!IS_DEST_EU & CERTIFIED) %>% pull(SHARE_OF_DIRECT) * 100
+  by_eu_certified %>% filter(!IS_DEST_EU & CERTIFIED) %>% pull(SHARE_OF_DIRECT) * 100
 
 direct_certified_eu_ktonnes <- 
-  eu_certif %>% filter(IS_DEST_EU & CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) 
+  by_eu_certified %>% filter(IS_DEST_EU & CERTIFIED) %>% pull(DIRECT_KTONNES_BEAN_EQ) 
 pct_direct_being_certified_eu <- 
-  eu_certif %>% filter(IS_DEST_EU & CERTIFIED) %>% pull(SHARE_OF_DIRECT) * 100
+  by_eu_certified %>% filter(IS_DEST_EU & CERTIFIED) %>% pull(SHARE_OF_DIRECT) * 100
   
 
 # The answer to Nitidae's question of how much directly sourced cocoa is certified? 
 pct_direct_certified <- 
   100 * direct_certified_ktonnes / direct_ktonnes_2022
+pct_direct_certified %>% round(0)
+
+# with CI 
+by_certified1 <-
+  out22 %>% 
+  unnest(cols = c(COOP_SOURCED_DIRECT_VOLUME_BEQ_distribution)) %>%
+  # convert here in KTONNES
+  mutate(COOP_SOURCED_DIRECT_VOLUME_BEQ = 1e-6 * COOP_SOURCED_DIRECT_VOLUME_BEQ) %>%
+  #sum over certification status to obtain 1000 values per geocode
+  group_by(NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
+  mutate(TOTAL_DIRECT_KTONNES_BEAN_EQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ)) %>% 
+  
+  group_by(CERTIFIED, NUM_COOP_SOURCED_DIRECT_VOLUME_BEQ) %>% 
+  mutate(
+    COOP_SOURCED_DIRECT_VOLUME_BEQ = sum(COOP_SOURCED_DIRECT_VOLUME_BEQ),
+    SHARE_OF_DIRECT = COOP_SOURCED_DIRECT_VOLUME_BEQ / TOTAL_DIRECT_KTONNES_BEAN_EQ
+    ) %>% 
+  ungroup() %>% 
+  # this averages across monte carlo simulations
+  summarise(.by = c(CERTIFIED),
+            DIRECT_KTONNES_BEAN_EQ = mean(COOP_SOURCED_DIRECT_VOLUME_BEQ),
+            CI95_VOL = list(c(DIRECT_KTONNES_BEAN_EQ - 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))), 
+                                 DIRECT_KTONNES_BEAN_EQ + 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ)))
+                                 )), 
+            SHARE_OF_DIRECT = mean(SHARE_OF_DIRECT),
+            ELMT_CI95_SHARE = qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))),
+            CI95_SHARE = list(c(SHARE_OF_DIRECT - 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ))), 
+                                 SHARE_OF_DIRECT + 
+                                   qt(0.95/2+0.5, length(COOP_SOURCED_DIRECT_VOLUME_BEQ)-1) *
+                                   (sd(COOP_SOURCED_DIRECT_VOLUME_BEQ)/sqrt(length(COOP_SOURCED_DIRECT_VOLUME_BEQ)))
+                                 ))
+            ) %>% 
+  arrange(CERTIFIED)   
 
 # Comparing with certification bodies figures: 
 
-eu_certif %>% 
-  select(YEAR, TOTAL_DIRECT_KTONNES_BEAN_EQ, CERTIFICATION, IS_DEST_EU, DIRECT_KTONNES_BEAN_EQ, SHARE_OF_DIRECT)
+to_share <- 
+  by_eu_certdet %>% 
+    select(YEAR, TOTAL_DIRECT_KTONNES_BEAN_EQ, CERTIFICATION_DETAIL, IS_DEST_EU, DIRECT_KTONNES_BEAN_EQ, SHARE_OF_DIRECT)
+
+write.csv(to_share, 
+          here("temp_data", "direct_certified_breakdown_2022.csv"))
+```
+
+
+# CERTIFIED VOLUMES DISCLOSED BY BODIES
+```{r}
+
+# Tonnes certified produced:
+discl_certif <- 
+  tibble(
+    SCHEME = c("RFA", "UTZ", "FT"),
+    CERTIFIED_PRODUCED_KTONNES = c("RFA" = 162.270, "UTZ" = 485.797, "FT" = 512.033),
+    CERTIFIED_SOLD_KTONNES = c("RFA" = 126.279, "UTZ" = 442.515, 512.0330), # for FT this is NA so replace by production. 
+    # correction factors to remove the amount of RFA that is also UTZ or FT, and remove the amount of UTZ that is FT. 
+    DOUBLE_CERTIF_CORRECTION = c("RFA" = 1-0.12-0.11, "UTZ" = 1-0.13, "FT" = 1),
+  ) %>% 
+  mutate(CORRECTED_CERTIFIED_PRODUCED_KTONNES = CERTIFIED_PRODUCED_KTONNES*DOUBLE_CERTIF_CORRECTION,
+         CORRECTED_CERTIFIED_SOLD_KTONNES = CERTIFIED_SOLD_KTONNES*DOUBLE_CERTIF_CORRECTION
+         )
+           
+# Produce figures that mimic the corrections we applied above: (approximative since it does not correct exactly for triple certif)
+discl_certif$SIMILARLY_CORRECTED_SEIPCS_DIRECT_KTONNES <- 
+  c("RFA" = 
+    by_certdet %>% 
+    # RFA completely corrected
+    filter(CERTIFICATION_DETAIL=="RFA") %>%  
+    pull(DIRECT_KTONNES_BEAN_EQ) %>% 
+    sum(),
+    "UTZ" = 
+    by_certdet %>% 
+    # UTZ corrected from FT but including RFA
+    filter(CERTIFICATION_DETAIL %in% c("UTZ", "RFA & UTZ")) %>%  
+    pull(DIRECT_KTONNES_BEAN_EQ) %>% 
+    sum(),
+    "FT" =
+    by_certdet %>% 
+    # any FT
+    filter(grepl("FT", CERTIFICATION_DETAIL)) %>%  
+    pull(DIRECT_KTONNES_BEAN_EQ) %>% 
+    sum()
+  )
+
+# this is the inherently corrected sei-pcs value, only available aggregated
+direct_certified_ktonnes
+# while this is the one rebuilding and correcting overlapping volumes 
+sum(discl_certif$SIMILARLY_CORRECTED_SEIPCS_DIRECT_KTONNES)
+
+sum(discl_certif$CORRECTED_CERTIFIED_PRODUCED_KTONNES) - sum(discl_certif$SIMILARLY_CORRECTED_SEIPCS_DIRECT_KTONNES)
+sum(discl_certif$CORRECTED_CERTIFIED_SOLD_KTONNES) - sum(discl_certif$SIMILARLY_CORRECTED_SEIPCS_DIRECT_KTONNES)
+
+
+discl_certif$RFA_CORRECTED_CERTIFIED_PRODUCED_TONNES %>% sum() *1e-3
+discl_certif
 
 ```
+
+# CERTIFIED VOLUMES IN IC2B 
+Here, we count the number of farmers disclosed to be certified in 2019 (when we have that number for RFA and FT). 
+```{r}
+link19_cert <-
+  link %>% 
+  filter(YEAR == 2019 & DISCLOSURE_SOURCE %in% c("RAINFOREST ALLIANCE", "FAIRTRADE", "UTZ"))
+
+cert19 <- 
+  link19_cert %>% 
+  summarise(.by = DISCLOSURE_SOURCE, 
+            NB_FARMERS = sum(NUM_FARMERS, na.rm = T)) %>% 
+  mutate(EST_PRODUCTION_KTONNES = NB_FARMERS * 1e-6 * mean(kit_farm_production$cocoa_prod_total_kgs))
+
+```
+
+
 
 In the `r round(direct_ktonnes_2022, 0)` thousand tonnes directly sourced in Côte d'Ivoire in 2022, we estimate that certified cooperatives supply `r round(direct_certified_ktonnes, 0)` thousand tonnes, i.e. `r round(pct_direct_certified, 1)`%. 
 
 The EU imports `r round(direct_certified_eu_ktonnes,0)` thousand tonnes of cocoa directly sourced from a certified cooperative, while the rest of the worlds imports `r round(direct_certified_noneu_ktonnes,0)` thousand tonnes. 
 Hence, the EU imports `r round(100 * direct_certified_eu_ktonnes / direct_certified_ktonnes, 1)`% of the cocoa directly sourced from certified cooperatives in Côte d'Ivoire. 
+
+
 
 # Private IC2B descriptives 
 ```{r}
@@ -474,7 +679,7 @@ RA:
 That's an estimated 530k farmers. 
 `r (162270+485797)/1.222``
 
-Just 
+ 
 
 
 ## The different SSIs and their sizes

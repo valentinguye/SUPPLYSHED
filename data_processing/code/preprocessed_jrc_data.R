@@ -14,6 +14,7 @@ library(rnaturalearth)
 library(here)
 library(readstata13)
 library(sjmisc)
+library(units)
 
 # Will write preprocessed data there
 dir.create(here("temp_data", "preprocessed_jrc_data"))
@@ -58,13 +59,19 @@ jrc_buyer_roster = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain
                               generate.factors=TRUE,
                               nonint.factors = TRUE) 
 
-pro_itm <- read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "section_3a_UCLouvain.dta"),
+section3a <- read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "section_3a_UCLouvain.dta"),
                       convert.factors = TRUE, # we want those labels. this is the default. 
                       generate.factors=TRUE,
                       nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
 
+# Economic activity of the household
+econact = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "econ_act_UCLouvain.dta"),
+                 convert.factors = TRUE, # we want those labels. this is the default. 
+                 generate.factors=TRUE,
+                 nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
+
 # it's only different variables in there.
-intersect(names(jrc), names(pro_itm))
+intersect(names(jrc), names(section3a))
 
 # PREPARE --------
 
@@ -111,15 +118,15 @@ for(VAR in names(jrc_buyer_roster)){
 
 
 # repeat for producer-intermediary 
-pro_itm$i04aq15 %>% class()
+section3a$i04aq15 %>% class()
 
-for(VAR in names(pro_itm)){
-  if(is.factor(pro_itm[,VAR])){
-    pro_itm = pro_itm %>% mutate(
+for(VAR in names(section3a)){
+  if(is.factor(section3a[,VAR])){
+    section3a = section3a %>% mutate(
       !!as.symbol(VAR) := as.character(!!as.symbol(VAR))
     ) 
   }
-  pro_itm = pro_itm %>% mutate(
+  section3a = section3a %>% mutate(
     !!as.symbol(VAR) := case_when(
       !!as.symbol(VAR) == "Ne sait pas" ~ NA,
       TRUE ~ !!as.symbol(VAR)
@@ -285,12 +292,12 @@ jrc_buyer_roster =
 # Rename section 3A data 
 
 # qty_buy_inkg is the kg purchased by this intermediary to this producer in the whole year. 
-pro_itm %>% filter(qty_buy_inkg != light_sold_to_this_buy_kg + main_sold_to_this_buy_kg) %>% nrow()
+section3a %>% filter(qty_buy_inkg != light_sold_to_this_buy_kg + main_sold_to_this_buy_kg) %>% nrow()
 
-pro_itm = 
-  pro_itm %>% 
+section3a = 
+  section3a %>% 
   rename(
-    s03aq1_ID = s03aq1_id, # 'code acheteur'
+    s03aq1_type_code__s03aq1 = s03aq1_id, # 'code acheteur'
     itm_type__s03aq2 = s03aq2,
     itm_type__s03aq2_oth = s03aq2_oth,
     
@@ -446,6 +453,17 @@ pro_itm =
     prev_both_inkg = prev_main_inkg + prev_light_inkg
   )
 
+### Producer ID ------------
+# FOR NOW, SUPPOSE THAT ZD AND HH IDENTIFY THE PRODUCER (pending a reply from Katharina)
+jrc = 
+  jrc %>% 
+  mutate(producer_id = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)) %>% 
+
+jrc$jrcducer_id %>% unique() %>% na.omit() %>% length()
+jrc$interview__key %>% unique() %>% length()
+jrc$s00q10__zd %>% unique() %>% length()
+is.na(jrc$s00q10__zd) %>% sum()
+
 ### Make booleans -------
 jrc = 
   jrc %>% 
@@ -469,16 +487,20 @@ jrc =
 if(nrow(jrc %>% filter(is.na(LATITUDE))) != nrow(jrc %>% filter(is.na(LATITUDE)))){
   stop("pb in missing gps coords")}
 
+### Recognize cooperatives ------------
+jrc = 
+  jrc %>% 
+  mutate(IS_COOP = (grepl("coop", i01bq3__type) | grepl("coop", i01bq3_oth__type_oth)) & 
+           # don't count them as coop, as they will have different values than in coops in scales etc. 
+           i01bq3__type != "délégué de coopérative")
 
-## For IC2B  --------
+
+# IC2B  --------
 
 # filter to coops only 
 jrc_coops = 
   jrc %>% 
-  filter((grepl("coop", i01bq3__type) |
-          grepl("coop", i01bq3_oth__type_oth)) & 
-         i01bq3__type != "délégué de coopérative") # remove them as they will have different values than in coops in scales etc. 
-
+  filter(IS_COOP) 
 
 jrc_coops %>% 
   filter(i03aq1__nb_farmers > 0 | 
@@ -503,7 +525,6 @@ jrc_coops =
 #   filter(grepl("(project financed by Collibri Foundation, Colruyt Group)", i01bq4__name)) %>% 
 #   select(i01bq4__name, i00q20__name_reported, i03fq1__boss_name, everything()) %>% 
 #   View()
-
 
 if(
   jrc_coops %>% 
@@ -688,7 +709,7 @@ jrc_buyer_roster$i04aq17__tonne_supply_2019 %>% summary()
 
 ### Standardize to merge -----
 
-# Prepare for merging with master (called civ here)
+# Prepare for merging with master
 if("Ghana" %in% jrc_coops$s00q4__country){stop()}
 
 
@@ -701,34 +722,147 @@ jrc_coops_merge =
          # NUMBER_FARMERS, 
          TOTAL_FARMERS)  # order does not matter
 
-## For SUPPLY SHED MODEL ------
-# we don't restrict to jrc_coops 
-
-# these are the links
-pro_itm
-
-farm_pt = 
-  jrc %>% 
-  select(starts_with("s0")) %>% 
-  filter(!is.na(s00q12__itw_longitude) & !is.na(s00q12__itw_latitude)) %>% 
-  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"))
-
-itm_pt = 
-  jrc %>% 
-  select(!starts_with("s0")) %>% 
-  filter(!is.na(LONGITUDE) & !is.na(LATITUDE)) %>% 
-  st_as_sf(coords = c("LONGITUDE", "LATITUDE"))
-
-
-
-
-# EXPORT -----
+### Export -----
 
 write_csv(jrc_coops_merge,
           file = here("temp_data", "preprocessed_jrc_data", "jrc_coops_IC2B_standardized.csv"),
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)
+
+
+
+# SUPPLY SHED MODEL ------
+
+# We want 2 sf objects with as many rows, in the same order, to run st_distance(by_element = TRUE) on them. 
+# These objects have one row per actual producer-intermediary link, as per jrc object. 
+# One represents the producer end (and coords), while the other represents the intermediary end (and coords).  
+# In other words, we just want to split the jrc object in two... 
+
+## Filter geo-located links -----------
+# We need spatial info on both ends
+jrc_geo <- 
+  jrc %>% 
+  filter(!is.na(s00q12__itw_longitude) & !is.na(s00q12__itw_latitude) & 
+           !is.na(LONGITUDE) & !is.na(LATITUDE)) 
+
+# this is 662 producers linked with 118 buyers
+jrc_geo$producer_id %>% unique() %>% length()
+jrc_geo$i00q10__ID %>% unique() %>% length()
+# of which 159 producers are linked with 29 cooperatives. 
+jrc_geo %>% 
+  filter(IS_COOP) %>% 
+  pull(producer_id) %>% 
+  unique %>% 
+  length()
+jrc_geo %>% 
+  filter(IS_COOP) %>% 
+  pull(i00q10__ID) %>% 
+  unique %>% 
+  length()
+
+
+jrc_geo$s00q12__itw_longitude %>% summary()
+jrc_geo$s00q12__itw_latitude %>% summary()
+jrc_geo$LONGITUDE %>% summary()
+jrc_geo$LATITUDE %>% summary()
+
+pro_sf <- 
+  jrc_geo %>% 
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326)
+
+itm_sf <- 
+  jrc_geo %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
+# dept4326 <- st_transform(departements, crs = 4326)
+
+ggplot() +
+  geom_sf(data = pro_sf, aes(col = "black")) + 
+  geom_sf(data = itm_sf, aes(col = "red")) +
+  geom_sf(data = dept4326, fill = "transparent") 
+
+if(!all.equal(pro_sf$interview__key, itm_sf$interview__key)){
+  stop()
+}
+
+## Distance producer-intermediary 
+
+# Since the filtering is the same (on the availability of coordinates for both ends), both subsets have the same rows      
+jrc_geo$DISTANCE_PRO_ITM <- 
+  st_distance(pro_sf, itm_sf, by_element = TRUE)
+
+jrc_geo_coops = 
+  jrc_geo %>% 
+  filter(IS_COOP)
+
+jrc_geo$DISTANCE_PRO_ITM %>% summary()
+jrc_geo_coops$DISTANCE_PRO_ITM %>% summary()
+
+ggplot(jrc_geo_coops, aes(x=DISTANCE_PRO_ITM)) + 
+  geom_histogram() +
+  theme(axis.title.y = element_blank()) + 
+  labs(x = "Producer-intermediary distance") 
+
+## Standardize to merge ---------
+
+# Prepare for merging with master (called civ here)
+if("Ghana" %in% jrc_geo$s00q4__country){stop()}
+
+jrc_geo_merge =
+  jrc_geo %>% 
+  mutate(YEAR = 2019) %>% # jrc$i00q21__itw_date %>% unique()
+  # keep only the variables that we can also compute in other data sources than JRC. 
+  select(YEAR, DISTANCE_PRO_ITM)  # order does not matter
+
+# should we add coop identifiers to then match IC2B? 
+
+write_csv(jrc_geo_merge,
+          file = here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"),
+          na = "NA", 
+          append = FALSE, 
+          col_names = TRUE)
+
+
+
+## Merger of link data and intermediary data -------
+# Isolate intermediary data from the jrc join
+itm <- 
+  jrc %>% 
+  filter(!is.na(i00q10__ID)) %>% 
+  # need to do that because jrc is a join and not a stack of producers and interm. 
+  # (so it has several rows for the same interm. when a producer sells to the same guy)
+  distinct(i00q10__ID, .keep_all = TRUE) %>% 
+  filter(!is.na(LONGITUDE) & !is.na(LATITUDE)) %>% 
+  select(!starts_with("s0")) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"))
+
+# Among the 170 distinct intermediaries, 146 have coordinates. 
+jrc$i00q10__ID %>% unique() %>%  na.omit() %>% length() # 170
+nrow(itm) 
+
+## Link variables -------------
+# Merge section3a with producer survey data
+link_itm <- 
+  left_join(section3a, 
+            itm, 
+            by = join_by(""=="i00q10__ID"))
+
+## Producer variables -----------
+
+## Intermediary variables --------------
+
+link_itm <- 
+  left_join(section3a, 
+            itm, 
+            by = join_by(""=="i00q10__ID"))
+
+
+
+
+
+
+
 
 
 
