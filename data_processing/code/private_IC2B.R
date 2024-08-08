@@ -162,12 +162,12 @@ fn_clean_abrvname2 <- function(col_name){
 }
 
 # This function removes generic terms like CA COOP and SCOOPS
+# Functions 
 fn_clean_abrvname3 <- function(col_name){
-  gsub(pattern = "COOP CA | COOP CA$|COOP | COOP$|SCOOP | SCOOP$|SCOOPS | SCOOPS$", 
+  gsub(pattern = "COOP CA | COOP CA$|COOP-CA | COOP-CA$|COOPCA | COOPCA$|COOPCA-|-COOPCA$|COOP-CA-|-COOP-CA$|COOP | COOP$|COOP-|-COOP$|SCOOP | SCOOP$|SCOOP-|-SCOOP$|SCOOPS | SCOOPS$|SCOOPS-|-SCOOPS$", 
        replacement = "", 
        x = col_name)
 }
-
 
 fn_clean_fullname <- function(col_name){
   fn <- gsub(pattern = "SOCIETE COOPERATIVE |STE COOP |COPERATIVE |COOPRATIVE |SOCIETE AGRICOLE COOPERATIVE |ENTREPRISE COOPERATIVE |ENTREPRISE AGRICOLE COOPERATIVE |ENTREP COOPERA ", 
@@ -1066,8 +1066,8 @@ civ <-
   group_by(SUPPLIER_FULLNAME, ROUND_LONGITUDE, ROUND_LATITUDE) %>% 
   mutate(
     SUPPLIER_ABRVNAME = case_when(
-      (missing_abrv & !missing_full & !missing_coords) ~ unique_mode(SIMPLIF_ABRVNAME), 
-      TRUE ~ SIMPLIF_ABRVNAME
+      (missing_abrv & !missing_full & !missing_coords) ~ unique_mode(SUPPLIER_ABRVNAME), 
+      TRUE ~ SUPPLIER_ABRVNAME
     ),
     # Just because it's used in the next step, we also homogenize the simplif name column
     SIMPLIF_ABRVNAME = case_when(
@@ -1225,7 +1225,7 @@ civ %>% filter(is.na(LATITUDE) & !is.na(LONGITUDE)) %>% nrow()
 
 civ <- 
   civ %>% 
-  mutate(CCTN_COOP_POINT_ID = paste0(SUPPLIER_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
+  mutate(CCTN_COOP_POINT_ID = paste0(SIMPLIF_ABRVNAME, "_", ROUND_LONGITUDE, "_", ROUND_LATITUDE, "_", SUPPLIER_FULLNAME)) %>%
   arrange(CCTN_COOP_POINT_ID) %>% 
   group_by(CCTN_COOP_POINT_ID) %>% 
   mutate(COOP_POINT_ID = cur_group_id()) %>% 
@@ -1701,8 +1701,8 @@ civ <-
   group_by(SUPPLIER_FULLNAME, DISTRICT_GEOCODE) %>% 
   mutate(
     SUPPLIER_ABRVNAME = case_when(
-      (missing_abrv & !missing_full & !missing_distr) ~ unique_mode(SIMPLIF_ABRVNAME), 
-      TRUE ~ SIMPLIF_ABRVNAME
+      (missing_abrv & !missing_full & !missing_distr) ~ unique_mode(SUPPLIER_ABRVNAME), 
+      TRUE ~ SUPPLIER_ABRVNAME
     ),
     # Just because it's used in the next step, we also homogenize the simplif name column
     SIMPLIF_ABRVNAME = case_when(
@@ -1809,7 +1809,7 @@ civ <-
 # several locations within the same district, when it has several buying stations. 
 civ <- 
   civ %>% 
-  mutate(CCTN_COOP_ID = paste0(SUPPLIER_ABRVNAME, "_", DISTRICT_GEOCODE, "_", SUPPLIER_FULLNAME)) %>%
+  mutate(CCTN_COOP_ID = paste0(SIMPLIF_ABRVNAME, "_", DISTRICT_GEOCODE, "_", SUPPLIER_FULLNAME)) %>%
   arrange(CCTN_COOP_ID) %>% 
   group_by(CCTN_COOP_ID) %>% 
   mutate(COOP_ID = cur_group_id()) %>% 
@@ -1831,6 +1831,16 @@ civ <-
   group_by(COOP_ID) %>%
   mutate(COOP_BS_ID = paste0("COOP-",unique(COOP_ID), "_BS-", match(COOP_POINT_ID, unique(COOP_POINT_ID)))) %>% 
   ungroup()
+
+# check that if a link to a coop has a known district, then all links from this coop have
+if(
+  civ %>% 
+  group_by(COOP_ID) %>% 
+  mutate(NOT_HOMOGENIZED = !all(is.na(DISTRICT_GEOCODE)) & !all(!is.na(DISTRICT_GEOCODE))) %>% 
+  ungroup() %>% 
+  filter(NOT_HOMOGENIZED) %>% nrow() > 0
+){stop("department info homogenization not complete")}  
+
 
 
 # CLEAN CERTIFICATION -------------------------
@@ -2709,7 +2719,7 @@ gen_row <- data.frame(variables, values) %>%
 gen_row <- 
   gen_row %>% 
   # leave COOP_POINT_ID but remove COOP_ID
-  select(-COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
+  select(-COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -DISTRICT_NAME, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
          -contains("ABRVNAME"), -contains("FULLNAME"), -contains("LONGITUDE"), -contains("LATITUDE"), -contains("TOTAL_FARMERS"))
 
 for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
@@ -2726,7 +2736,7 @@ for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
   disappeared <- 
     civ %>% 
     filter(COOP_POINT_ID %in% coops_disappeared & DISCL_YEAR == year-1) %>% 
-    select(COOP_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, DISTRICT_GEOCODE, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
+    select(COOP_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, DISTRICT_GEOCODE, DISTRICT_NAME, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
            contains("ABRVNAME"), contains("FULLNAME"), contains("LONGITUDE"), contains("LATITUDE"), contains("TOTAL_FARMERS")) %>% 
     distinct(COOP_POINT_ID, DISCL_YEAR, .keep_all = TRUE) %>% 
     mutate(DISCL_YEAR = year) # and change the year to the current one
@@ -2780,8 +2790,9 @@ civ_coop_bs_year <-
   group_by(COOP_ID, DISCL_YEAR) %>% # GROUP AT COOP LEVEL, TO HARMONIZE THESE INFO ACROSS BUYING STATIONS...
   mutate(DISCLOSURE_SOURCES = paste0(na.omit(unique(COMPANY)), collapse = " + "), 
          TRADER_NAMES = paste0(na.omit(unique(TRADER_NAME)), collapse = " + "), 
-         CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + "), 
-         BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>% 
+         CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + ")) %>% 
+  group_by(COOP_ID) %>% 
+  mutate(BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>% 
   ungroup() %>% 
   distinct(COOP_POINT_ID, DISCL_YEAR, .keep_all = TRUE) %>% # BUT KEEP DISTINCT ROWS AT  BUYING STATION LEVEL
   # remove variables that make no sense at this level of aggregation
@@ -2811,8 +2822,9 @@ civ_seipcs <-
     )
   ) %>%
   group_by(COOP_ID, DISCL_YEAR, BUYER) %>% # GROUP AT COOP LEVEL, TO HARMONIZE THESE INFO ACROSS BUYING STATIONS...
-  mutate(CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + "), 
-         BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>%
+  mutate(CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + ")) %>% 
+  group_by(COOP_ID) %>% 
+  mutate(BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>% 
   ungroup() %>%
   distinct(COOP_ID, DISCL_YEAR, BUYER, # AND *KEEP* DISTINCT ROWS AT *COOP* LEVEL BECAUSE THIS IS THE LEVEL FOR SEI-PCS (v1.1 at least)
            .keep_all = TRUE) %>%
