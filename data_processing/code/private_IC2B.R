@@ -180,6 +180,9 @@ fn_clean_fullname <- function(col_name){
   fn <- gsub(pattern = "STD_CAFE_CACAO_STD",
              replacement = "CAFE ET CACAO", 
              x = fn)
+  fn <- gsub(pattern = "-",
+             replacement = " ", 
+             x = fn)
   return(fn)
 }
 
@@ -193,6 +196,7 @@ fn_clean_fullname_manual <- function(col_name){
     grepl("ROBERT", col_name) & grepl("PORTE", col_name) ~ "ENTREPRISE COOPERATIVE AGRICOLE DES PRODUCTEURS CAFE ET CACAO DE ROBERT-PORTE", # note that "CAFE ET CACAO" is to match the output of the above function
     grepl("MAN EDI ANOUANZE", col_name) ~ "SOCIETE COOPERATIVE AGRICOLE MAN EDI ANOUANZE",
     col_name == "CNIBO" ~ "COOPERATIVE AGRICOLE NIBI D'OKROUYO",
+    col_name == "ZATTRY" ~ "COOPERATIVE ANOUANZE DES PRODUCTEURS AGRICOLES DE GRAND ZATTRY",
     TRUE ~ col_name
   )
 }
@@ -644,7 +648,7 @@ civ <-
   civ %>% 
   mutate(SUPPLIER_ABRVNAME = fn_clean_abrvname2(fn_clean_abrvname1(str_trans(str_squish(DISCL_SUPPLIER_ABRVNAME)))), # eyeballed-based cleaning of abrv names
          SUPPLIER_FULLNAME = str_trans(str_squish(DISCL_SUPPLIER_FULLNAME)), # lighter clean of full names
-         SUPPLIER_FULLNAME = fn_clean_fullname_manual(fn_clean_fullname(SUPPLIER_FULLNAME)),  # gsub(pattern="STE COOP ", replacement="SOCIETE COOPERATIVE", x = SUPPLIER_FULLNAME),
+         SUPPLIER_FULLNAME = fn_clean_fullname_manual(str_squish(fn_clean_fullname(SUPPLIER_FULLNAME))),  # gsub(pattern="STE COOP ", replacement="SOCIETE COOPERATIVE", x = SUPPLIER_FULLNAME),
          LONGITUDE = round(as.double(DISCL_LONGITUDE), 3), 
          LATITUDE = round(as.double(DISCL_LATITUDE), 3))
 # We clean but leave generic terms in the main abrv variable (i.e. don't apply fn_clean_abrvname3 yet), 
