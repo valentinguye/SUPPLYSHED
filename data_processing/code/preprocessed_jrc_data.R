@@ -19,6 +19,9 @@ library(units)
 # Will write preprocessed data there
 dir.create(here("temp_data", "preprocessed_jrc_data"))
 
+# this is a geodetic crs, i.e. not projecting to a plan. But I haven't found a proj one. for Côte d'Ivoire for now. 
+civ_crs = 4226 # https://epsg.io/4226 
+
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
 
@@ -457,9 +460,9 @@ section3a =
 # FOR NOW, SUPPOSE THAT ZD AND HH IDENTIFY THE PRODUCER (pending a reply from Katharina)
 jrc = 
   jrc %>% 
-  mutate(producer_id = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)) %>% 
+  mutate(producer_id = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)) 
 
-jrc$jrcducer_id %>% unique() %>% na.omit() %>% length()
+jrc$producer_id %>% unique() %>% na.omit() %>% length()
 jrc$interview__key %>% unique() %>% length()
 jrc$s00q10__zd %>% unique() %>% length()
 is.na(jrc$s00q10__zd) %>% sum()
@@ -475,16 +478,16 @@ jrc =
 jrc =
   jrc %>% 
   mutate(
-    LONGITUDE = case_when(
+    ITM_LONGITUDE = case_when(
       is.na(i00q24__longitude_cp) & !is.na(i00q21__itw_longitude) & i00q22__is_cp ~ i00q21__itw_longitude, 
       TRUE ~ i00q24__longitude_cp
     ),
-    LATITUDE = case_when(
+    ITM_LATITUDE = case_when(
       is.na(i00q24__latitude_cp) & !is.na(i00q21__itw_latitude) & i00q22__is_cp ~ i00q21__itw_latitude, 
       TRUE ~ i00q24__latitude_cp
     )
   ) 
-if(nrow(jrc %>% filter(is.na(LATITUDE))) != nrow(jrc %>% filter(is.na(LATITUDE)))){
+if(nrow(jrc %>% filter(is.na(ITM_LATITUDE))) != nrow(jrc %>% filter(is.na(ITM_LATITUDE)))){
   stop("pb in missing gps coords")}
 
 ### Recognize cooperatives ------------
@@ -560,30 +563,30 @@ jrc_coops %>%
   View()
 
 jrc_coops %>% 
-  filter(is.na(LONGITUDE)) %>% 
-  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, everything()) %>% 
+  filter(is.na(ITM_LONGITUDE)) %>% 
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, ITM_LONGITUDE, ITM_LATITUDE, everything()) %>% 
   View()
 
 
 ### Remove duplicate coops -----
 # Those are from cases where several farmers report to sell to the same coop
 jrc_coops %>% 
-  arrange(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE) %>% 
-  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, everything()) %>% 
+  arrange(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, ITM_LONGITUDE, ITM_LATITUDE) %>% 
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, ITM_LONGITUDE, ITM_LATITUDE, everything()) %>% 
   View()
 
 # if this passes, it means all the heterogeneity between coops is captured by their identifiers.
 if(
 jrc_coops %>% 
-  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE,
+  select(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, ITM_LONGITUDE, ITM_LATITUDE,
          starts_with("i0")) %>% 
   distinct(.keep_all = TRUE) %>% 
-  nrow() != nrow(distinct(jrc_coops, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE))
+  nrow() != nrow(distinct(jrc_coops, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, ITM_LONGITUDE, ITM_LATITUDE))
 ){stop("some info in intermediary survey responses are lost")}
 
 jrc_coops = 
   jrc_coops %>% 
-  distinct(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LONGITUDE, LATITUDE, .keep_all = TRUE)
+  distinct(SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, ITM_LONGITUDE, ITM_LATITUDE, .keep_all = TRUE)
 
 nrow(jrc_coops) # so the JRC data provides info on 47 apparently distinct (at this stage) coops.
 # This is consistent with what Jens Van Hee counts.  
@@ -744,7 +747,7 @@ write_csv(jrc_coops_merge,
 jrc_geo <- 
   jrc %>% 
   filter(!is.na(s00q12__itw_longitude) & !is.na(s00q12__itw_latitude) & 
-           !is.na(LONGITUDE) & !is.na(LATITUDE)) 
+           !is.na(ITM_LONGITUDE) & !is.na(ITM_LATITUDE)) 
 
 # this is 662 producers linked with 118 buyers
 jrc_geo$producer_id %>% unique() %>% length()
@@ -764,23 +767,25 @@ jrc_geo %>%
 
 jrc_geo$s00q12__itw_longitude %>% summary()
 jrc_geo$s00q12__itw_latitude %>% summary()
-jrc_geo$LONGITUDE %>% summary()
-jrc_geo$LATITUDE %>% summary()
+jrc_geo$ITM_LONGITUDE %>% summary()
+jrc_geo$ITM_LATITUDE %>% summary()
 
 pro_sf <- 
   jrc_geo %>% 
-  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326)
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
 
 itm_sf <- 
   jrc_geo %>% 
-  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+  st_as_sf(coords = c("ITM_LONGITUDE", "ITM_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
 
 # dept4326 <- st_transform(departements, crs = 4326)
 
-ggplot() +
-  geom_sf(data = pro_sf, aes(col = "black")) + 
-  geom_sf(data = itm_sf, aes(col = "red")) +
-  geom_sf(data = dept4326, fill = "transparent") 
+# ggplot() +
+#   geom_sf(data = pro_sf, aes(col = "black")) + 
+#   geom_sf(data = itm_sf, aes(col = "red")) +
+#   geom_sf(data = dept4326, fill = "transparent") 
 
 if(!all.equal(pro_sf$interview__key, itm_sf$interview__key)){
   stop()
@@ -804,20 +809,24 @@ ggplot(jrc_geo_coops, aes(x=DISTANCE_PRO_ITM)) +
   theme(axis.title.y = element_blank()) + 
   labs(x = "Producer-intermediary distance") 
 
-## Standardize to merge ---------
+
+## Export --------------------
 
 # Prepare for merging with master (called civ here)
 if("Ghana" %in% jrc_geo$s00q4__country){stop()}
 
-jrc_geo_merge =
-  jrc_geo %>% 
+toexport =
+  jrc_geo_coops %>% 
   mutate(YEAR = 2019) %>% # jrc$i00q21__itw_date %>% unique()
   # keep only the variables that we can also compute in other data sources than JRC. 
-  select(YEAR, DISTANCE_PRO_ITM)  # order does not matter
+  select(YEAR, PRO_ID, DISTANCE_PRO_ITM, 
+         PRO_DEPARTMENT_NAME = s00q7__dst,
+         PRO_LONGITUDE = s00q12__itw_longitude, 
+         PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
 
 # should we add coop identifiers to then match IC2B? 
 
-write_csv(jrc_geo_merge,
+write_csv(toexport,
           file = here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"),
           na = "NA", 
           append = FALSE, 
@@ -833,9 +842,9 @@ itm <-
   # need to do that because jrc is a join and not a stack of producers and interm. 
   # (so it has several rows for the same interm. when a producer sells to the same guy)
   distinct(i00q10__ID, .keep_all = TRUE) %>% 
-  filter(!is.na(LONGITUDE) & !is.na(LATITUDE)) %>% 
+  filter(!is.na(ITM_LONGITUDE) & !is.na(ITM_LATITUDE)) %>% 
   select(!starts_with("s0")) %>% 
-  st_as_sf(coords = c("LONGITUDE", "LATITUDE"))
+  st_as_sf(coords = c("ITM_LONGITUDE", "ITM_LATITUDE"))
 
 # Among the 170 distinct intermediaries, 146 have coordinates. 
 jrc$i00q10__ID %>% unique() %>%  na.omit() %>% length() # 170

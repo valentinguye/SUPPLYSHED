@@ -30,15 +30,28 @@ coopbs =
   distinct(COOP_BS_ID, .keep_all = TRUE)
 
 # Cargill link data
-
+carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv"))
+  
 # JRC link data
+jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))
 
 # Sustain-cocoa link data
-
-## Preprocess ----------------
+sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
 
 
 # CONSOLIDATE LINK DATA ---------------------
+
+# Make template for the data frame master, to frame the consolidation of every specific data set. 
+master <- data.frame(
+  "YEAR" = NA, 
+  "PRO_ID" = NA, 
+  "COOP_BS_ID" = NA, 
+  "DISTANCE_PRO_ITM" = NA, 
+  "PRO_DEPARTMENT_GEOCODE" = NA, 
+  "PRO_DEPARTMENT_NAME" = NA,
+  "PRO_LONGITUDE" = NA, 
+  "PRO_LATITUDE" = NA
+)
 
 # LINK STATS ----------------
 

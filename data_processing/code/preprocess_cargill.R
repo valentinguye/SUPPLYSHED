@@ -61,16 +61,25 @@ coopbsy <-
 
 
 # Farm centroids -------
+carg_pt =
+  carg %>% 
+  # Remove the few farms in Yamoussoukro which otherwise get matched to Socaan which is several departments away
+  # (do it before centroids grouped by farmers)
+  filter(!FID%in%c(1156, 1176, 1181, 3076, 5053, 1173, 1160))
+# those in Yamoussoukro get also filtered with a st_simplify 
+# carg_pt %>%
+#   filter(LVL_4_NAME%in%c("YAMOUSSOUKRO", "AGNIBILEKRO")) %>%
+#   pull(FID)
 
 sf_use_s2(FALSE)
-carg_pt <- 
-  carg %>% 
+carg_pt = 
+  carg_pt %>% 
   st_simplify(dTolerance = 0.0001) %>% # 1 decimal degree = 111.1 km at equator
   summarise(
     .by = FARMER_COD,
-    COOPERATIV = unique(COOPERATIV),  
+    COOPERATIV = unique(COOPERATIV),
     geometry = st_union(geometry)
-    ) %>% 
+    ) %>%
   st_centroid()
 
 carg_pt %>% nrow() == carg$FARMER_COD %>% unique() %>% length()
@@ -83,8 +92,6 @@ ggplot()+
   geom_sf(data = departements, fill = "transparent")
 
 # Attribute a department name to cargill FARM POINT data (not coops)
-# Join by st_within
-sf_use_s2(FALSE)
 carg_pt <- st_join(carg_pt,
                    departements[,c("LVL_4_CODE", "LVL_4_NAME")],
                    join = st_intersects) 
@@ -102,20 +109,18 @@ st_is_longlat(carg$geometry)
 carg_pt = 
   carg_pt %>% 
   rowwise() %>% 
-  mutate(FARM_LONGITUDE = unlist(geometry)[1],
-         FARM_LATITUDE = unlist(geometry)[2]) %>% 
+  mutate(PRO_LONGITUDE = unlist(geometry)[1],
+         PRO_LATITUDE = unlist(geometry)[2]) %>% 
   filter(!st_is_empty(geometry)) %>% 
-  st_drop_geometry() %>% 
-  # also remove the few farms in Yamoussoukro which otherwise get matched to Socaan which is several departments away
-  filter(!LVL_4_NAME%in%c("YAMOUSSOUKRO", "AGNIBILEKRO"))
+  st_drop_geometry()
 
 # carg_pt$geometry[[1]][1]
 
-carg_pt$FARM_LATITUDE %>% summary()
-carg_pt$FARM_LONGITUDE %>% summary() # this is in civ_crs 
+carg_pt$PRO_LATITUDE %>% summary()
+carg_pt$PRO_LONGITUDE %>% summary() # this is in civ_crs 
 
 
-# Join with IC2B to get coop coordinates -----
+# Join with IC2B -----
 
 ## Prepare joining keys ----------
 carg_pt = 
@@ -188,7 +193,7 @@ carg_pt_sfbs =
 # start from the merger, for st_distance to work on same size df. 
 carg_sfpt_bs = 
   carg_pt_bs %>% 
-  st_as_sf(coords = c("FARM_LONGITUDE", "FARM_LATITUDE"), crs = civ_crs) 
+  st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = civ_crs) 
 
 
 ggplot()+
@@ -224,11 +229,11 @@ carg %>%
 toexport = 
   carg_pt_closestbs %>% 
   mutate(YEAR = 2019, 
-         FARM_ID = paste0("CARGILL_",FARMER_COD)) %>% 
-  select(YEAR, FARM_ID, COOP_BS_ID, DISTANCE_PRO_ITM, 
-         FARM_DEPARTMENT_GEOCODE = LVL_4_CODE, 
-         FARM_DEPARTMENT_NAME = LVL_4_NAME,
-         FARM_LONGITUDE, FARM_LATITUDE)
+         PRO_ID = paste0("CARGILL_",FARMER_COD)) %>% 
+  select(YEAR, PRO_ID, COOP_BS_ID, DISTANCE_PRO_ITM, 
+         PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
+         PRO_DEPARTMENT_NAME = LVL_4_NAME,
+         PRO_LONGITUDE, PRO_LATITUDE)
   
 
 write_csv(toexport,

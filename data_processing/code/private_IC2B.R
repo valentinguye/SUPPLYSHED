@@ -1835,6 +1835,9 @@ civ <-
   group_by(COOP_ID) %>%
   mutate(COOP_BS_ID = paste0("COOP-",unique(COOP_ID), "_BS-", match(COOP_POINT_ID, unique(COOP_POINT_ID)))) %>% 
   ungroup()
+if(
+  civ$COOP_POINT_ID %>% unique() %>% length() != length(unique(civ$COOP_POINT_ID))
+){stop("problem in the buying station ids")}
 
 # check that if a link to a coop has a known district, then all links from this coop have
 if(
@@ -2722,8 +2725,8 @@ gen_row <- data.frame(variables, values) %>%
   pivot_wider(names_from = variables, values_from = values)
 gen_row <- 
   gen_row %>% 
-  # leave COOP_POINT_ID but remove COOP_ID
-  select(-COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -DISTRICT_NAME, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
+  # leave COOP_POINT_ID to work with, but remove COOP_ID and COOP_BS_ID
+  select(-COOP_BS_ID, -COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -DISTRICT_NAME, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
          -contains("ABRVNAME"), -contains("FULLNAME"), -contains("LONGITUDE"), -contains("LATITUDE"), -contains("TOTAL_FARMERS"))
 
 for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
@@ -2740,7 +2743,8 @@ for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
   disappeared <- 
     civ %>% 
     filter(COOP_POINT_ID %in% coops_disappeared & DISCL_YEAR == year-1) %>% 
-    select(COOP_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, DISTRICT_GEOCODE, DISTRICT_NAME, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
+    select(COOP_ID, COOP_BS_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, 
+           DISTRICT_GEOCODE, DISTRICT_NAME, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
            contains("ABRVNAME"), contains("FULLNAME"), contains("LONGITUDE"), contains("LATITUDE"), contains("TOTAL_FARMERS")) %>% 
     distinct(COOP_POINT_ID, DISCL_YEAR, .keep_all = TRUE) %>% 
     mutate(DISCL_YEAR = year) # and change the year to the current one
@@ -2805,7 +2809,7 @@ civ_coop_bs_year <-
          -starts_with("CERT_"),
          -DISCL_NUMBER_FARMERS, -CAM_BUYERS, -BUYER, -NOT_RFA, -NOT_FT,
          -NUM_FARMERS, -NUM_FARMERS_EXTRAPOLATED, -NON_TRADER,-TRADER, -unique_company_link, -unique_trader_link) %>%
-  select(COOP_ID, COOP_POINT_ID, BUYING_STATION_IDS, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
+  select(COOP_ID, COOP_BS_ID, COOP_POINT_ID, BUYING_STATION_IDS, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
          DISTRICT_NAME, DISTRICT_GEOCODE,
          DISCLOSURE_SOURCES, TRADER_NAMES, CERTIFICATIONS, 
          TOTAL_FARMERS_NONTRADER, TOTAL_FARMERS_TRADER, TOTAL_FARMERS_RFA, TOTAL_FARMERS_FT, TOTAL_FARMERS, 
