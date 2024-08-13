@@ -17,58 +17,12 @@ library(here)
 dir.create(here("temp_data", "preprocessed_sustain_cocoa"))
 
 # Assets and functions --------------
-# this is a geodetic crs, i.e. not projecting to a plan. But I haven't found a proj one. for Côte d'Ivoire for now. 
-civ_crs = 4226 # https://epsg.io/4226 
+# use the projected CRS used by BNETD for their 2020 land use map. 
+civ_crs <- 32630
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
 
-# This function handles cases where a full name and an abbreviated name are given in the abrv name variable.
-fn_clean_abrvname1 <- function(col_name){
-  case_when(
-    # grepl("UNITE COOPERATIVE AGRICOLE DE DANANE", col_name) ~ "COOP UDAN",
-    # grepl("COOPERATIVE AGRICOLE BACON ESPOIR", col_name) ~ "CABES",
-    # grepl("COOPERATIVE AGRICOLE ABOTRE DE NIABLE", col_name) ~ "COAANI",
-    # grepl("COOPERATIVE AGRICOLE BENKADI", col_name) ~ "COOPABENKADI",
-    # grepl("COOPERATIVE AGRICOLE D'AGNANFOUTOU", col_name) ~ "COESAG",
-    # grepl("COOPERATIVE AGRICOLE ZEMESS TAABA DE GBABAM", col_name) ~ "COOPAZEG",
-    # grepl("COOPERATIVE DES PRODUCTEURS DE YAKASSE ATTOBROU", col_name) ~ "COOPROYA",
-    # grepl("SOCIETE AGRICOLE BINKADI DE BROUDOUGOU PENDA CA", col_name) ~ "SOCABB",
-    # grepl("SCOOPAO SOCIETE COOPERATIVE DES AGRICULTEURS DE PETIT OUAGA", col_name) ~ "SCOOPAO",
-    # grepl("SOCIETE COOPERATIVE SIMPLIFIEE AGRICOLE KAMBONOU DE ARRAH", col_name) ~ "SCOAKA",
-    # grepl("SOCIETE COOPERATIVE ESPERENCE DE KPELEKRO", col_name) ~ "SOCAEK",
-    # grepl("SOCIETE COOPERATIVE AVEC CONSEIL D'ADMINISTRATION ENTENTE DE SEGUELA", col_name) ~ "COOP CA ES",
-    # grepl("COOPERATIVE DES PRODUCTEURS AGRICOLES DE NIABLE", col_name) ~ "COOP CA PAN",
-    # grepl("COOPERATIVE YEYONIAN DU CANTON ANIASSUE", col_name) ~ "COOPYCA",
-    # grepl("SOCIETE COOPERATIVE AGRICOLE DE GNATO AVEC CONSEIL D'ADMINISTRATION", col_name) ~ "SOCAG",
-    # grepl("SOCIETE COOPERATIVE AGRICOLE DE BAYOTA", col_name) ~ "SOCABA COOP CA",
-    # grepl("SPAD GAGNOA", col_name) ~ "SPAD GAGNOA", # ETG adds the name of the manufacturer to some surv_coop names. 
-    # grepl("SCAT I|SCAT 1", col_name) ~ "SCAT 1",
-    grepl("\\(CA\\)$", col_name) ~ " CA ",
-    grepl("\\(COOP\\)$", col_name) ~ " COOP ",
-    grepl("\\(SCOOP\\)$", col_name) ~ " SCOOP ",
-    TRUE ~ col_name
-  )
-}
-
-# This function removes some common characters used in abreviated surv_coop names
-fn_clean_abrvname2 <- function(col_name){
-  cleaned_col <- str_trans(str_trim(col_name))
-  cleaned_col <- gsub(pattern = "\\.|[(]|[)]| WAREHOUSE$", "", cleaned_col)
-  cleaned_col <- gsub(pattern = "\n|\\_|\\/|-", " ", cleaned_col)
-  cleaned_col <- gsub(pattern = "Ô", "O", cleaned_col)
-  # cleaned_col <- gsub(pattern = "A N E K", "ANEK", cleaned_col) 
-  
-  cleaned_col <- str_squish(cleaned_col)
-  
-  return(cleaned_col)
-}
-
-fn_clean_abrvname3 <- function(col_name){
-  gsub(pattern = "COOP CA | COOP CA$|COOP-CA | COOP-CA$|COOPCA | COOPCA$|COOPCA-|-COOPCA$|COOP-CA-|-COOP-CA$|COOP | COOP$|COOP-|-COOP$|SCOOP | SCOOP$|SCOOP-|-SCOOP$|SCOOPS | SCOOPS$|SCOOPS-|-SCOOPS$", 
-       replacement = "", 
-       x = col_name)
-}
 
 vil = read_xlsx(here("input_data", "sustain_cocoa", "surveys_civ", "Village_level_survey_Cote_dIvoire_-_all_versions_-_False_-_2023-12-04-14-44-13.xlsx"), 
                     sheet = "Village level survey_Cote d'...", 
@@ -151,6 +105,8 @@ surv_coop %>%
 
 simplif_names = unique(surv_coop$COOP_SIMPLIF_ABRV_NAME)
 
+## Prepare IC2B to join --------
+
 # limit coopbs to unique rows and buying stations which it makes sense to match. 
 coopbs_tomatch = 
   coopbs %>% 
@@ -198,7 +154,9 @@ surv_coop_bs %>%
   View()
   
 
-## Join village survey with the extended coop survey ---------
+## Join coop survey with village survey ---------
+# ... to make links
+
 vil_bs =
   vil %>% 
   inner_join(surv_coop_bs %>% select(VILLAGE_SURVEY_ID, COOP_SIMPLIF_ABRV_NAME, BS_LONGITUDE = LONGITUDE, BS_LATITUDE = LATITUDE, 
@@ -261,10 +219,10 @@ ggplot()+
   geom_sf(data = departements, fill = "transparent")
 
 ## Make distance var ------------
-vil_sfbs$DISTANCE_PRO_ITM <- 
+vil_sfbs$LINK_DISTANCE_METERS <- 
   st_distance(sfvil_bs, vil_sfbs, by_element = TRUE)
 
-summary(vil_sfbs$DISTANCE_PRO_ITM)
+summary(vil_sfbs$LINK_DISTANCE_METERS)
 
 vil_bs = 
   vil_sfbs %>% 
@@ -278,9 +236,9 @@ vil_bs$VILLAGE_SURVEY_ID %>% unique() %>% length() == nrow(vil_bs)
 vil_bs_closestbs =
   vil_bs %>% 
   group_by(VILLAGE_SURVEY_ID) %>% 
-  mutate(SMALLEST_DIST = min(DISTANCE_PRO_ITM)) %>% 
+  mutate(SMALLEST_DIST = min(LINK_DISTANCE_METERS)) %>% 
   ungroup() %>% 
-  filter(DISTANCE_PRO_ITM == SMALLEST_DIST)
+  filter(LINK_DISTANCE_METERS == SMALLEST_DIST)
 
 # check that this goes back to one row per village 
 vil_bs_closestbs$VILLAGE_SURVEY_ID %>% unique() %>% length() 
@@ -302,8 +260,9 @@ nrow(vil_bs_closestbs)
 toexport = 
   vil_bs_closestbs %>% 
   mutate(YEAR = 2023, 
+         DATA_SOURCE = "SUSTAINCOCOA",
          PRO_ID = paste0("SUSTAINCOCOA_VILLAGE_",VILLAGE_SURVEY_ID)) %>% 
-  select(YEAR, PRO_ID, COOP_BS_ID, DISTANCE_PRO_ITM, 
+  select(YEAR, PRO_ID, COOP_BS_ID, LINK_DISTANCE_METERS, 
          PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
          PRO_DEPARTMENT_NAME = LVL_4_NAME,
          PRO_LONGITUDE, PRO_LATITUDE)

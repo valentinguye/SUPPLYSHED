@@ -375,11 +375,6 @@ civ_ft <- civ
 
 
 ## JRC ####
-
-names(jrcmerge)[!names(jrcmerge) %in% c("DISTRICT_GEOCODE", "LOCALITY_NAME")] <- 
-  paste0("DISCL_", names(jrcmerge)[!names(jrcmerge) %in% c("DISTRICT_GEOCODE", "LOCALITY_NAME")])
-
-jrcmerge$COMPANY <- "JOINT RESEARCH CENTER"
 names(jrcmerge)
 
 initcoln <- ncol(civ)
@@ -387,12 +382,15 @@ initrown <- nrow(civ)
 civ <- full_join(civ, jrcmerge, 
                  by = intersect(colnames(civ), colnames(jrcmerge)), multiple = "all") 
 
-if(ncol(civ) != initcoln | nrow(civ)==initrown){stop("something went wrong in consolidating disclosure data.")}
-
-
-
+if(ncol(civ) != initcoln | nrow(civ)==initrown){stop("something went wrong in consolidating JRC data.")}
 
 # rm(jrc, jrc_coops, jrcmerge)
+
+# turn the NAs left in IS_JRC indicator into FALSE, to be clear 
+civ <- 
+  civ %>% 
+  mutate(IS_JRC = if_else(is.na(IS_JRC), FALSE, TRUE))
+
 
 civ_jrc <- civ 
 
@@ -700,7 +698,7 @@ civ <-
 # and remove these rows (currently two, from CAM and JRC) that have only the generic info for the whole union
 civ <- 
   civ %>% 
-  filter(!(SUPPLIER_ABRVNAME == "ECOOKIM" & 
+  filter(!(SUPPLIER_ABRVNAME == "ECOOKIM" & is.na(LONGITUDE) &
              (SUPPLIER_FULLNAME == "UNION DES SOCIETES COOPERATIVE KIMBE" | is.na(SUPPLIER_FULLNAME))
            )
          )
@@ -1235,6 +1233,23 @@ civ <-
   mutate(COOP_POINT_ID = cur_group_id()) %>% 
   ungroup()
 
+# this is to keep track of JRC coops, for the SUPPLYSHED project. 
+civ <- 
+  civ %>% 
+  group_by(COOP_POINT_ID) %>% 
+  mutate(
+    IS_ALL_JRC = case_when(
+      !all(IS_JRC) ~ FALSE, 
+      TRUE ~ TRUE 
+    ), 
+    IS_ANY_JRC = case_when(
+      !any(IS_JRC) ~ FALSE, 
+      TRUE ~ TRUE 
+    ), 
+    JRC_BUYER_IDS = paste0(na.omit(unique(JRC_BUYER_ID)), collapse = " + ")  
+  ) %>% 
+  ungroup() %>% 
+  select(-IS_JRC)
 
 # this is just to keep track of where the info comes from, at point level. 
 civ <- 
@@ -2726,7 +2741,8 @@ gen_row <- data.frame(variables, values) %>%
 gen_row <- 
   gen_row %>% 
   # leave COOP_POINT_ID to work with, but remove COOP_ID and COOP_BS_ID
-  select(-COOP_BS_ID, -COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -DISTRICT_NAME, -IS_ALL_CAM_V3, -IS_ANY_CAM_V3,
+  select(-COOP_BS_ID, -COOP_ID, -DISCL_YEAR, -DISCL_COUNTRY_NAME, -DISCL_AREA_NAME, -DISTRICT_GEOCODE, -DISTRICT_NAME, 
+         -IS_ALL_CAM_V3, -IS_ANY_CAM_V3, -IS_ALL_JRC, -IS_ANY_JRC, -JRC_BUYER_IDS,
          -contains("ABRVNAME"), -contains("FULLNAME"), -contains("LONGITUDE"), -contains("LATITUDE"), -contains("TOTAL_FARMERS"))
 
 for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
@@ -2743,8 +2759,8 @@ for(year in (min(civ$DISCL_YEAR)+1):max(civ$DISCL_YEAR)){
   disappeared <- 
     civ %>% 
     filter(COOP_POINT_ID %in% coops_disappeared & DISCL_YEAR == year-1) %>% 
-    select(COOP_ID, COOP_BS_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, 
-           DISTRICT_GEOCODE, DISTRICT_NAME, IS_ALL_CAM_V3, IS_ANY_CAM_V3,
+    select(COOP_ID, COOP_BS_ID, COOP_POINT_ID, DISCL_YEAR, DISCL_COUNTRY_NAME, DISCL_AREA_NAME, DISTRICT_GEOCODE, DISTRICT_NAME, 
+           IS_ALL_CAM_V3, IS_ANY_CAM_V3, IS_ALL_JRC, IS_ANY_JRC, JRC_BUYER_IDS,
            contains("ABRVNAME"), contains("FULLNAME"), contains("LONGITUDE"), contains("LATITUDE"), contains("TOTAL_FARMERS")) %>% 
     distinct(COOP_POINT_ID, DISCL_YEAR, .keep_all = TRUE) %>% 
     mutate(DISCL_YEAR = year) # and change the year to the current one

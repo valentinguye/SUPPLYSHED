@@ -20,20 +20,14 @@ library(units)
 dir.create(here("temp_data", "preprocessed_cargill"))
 
 # Assets and functions --------------
-# this is a geodetic crs, i.e. not projecting to a plan. But I haven't found a proj one. for Côte d'Ivoire for now. 
-civ_crs = 4226 # https://epsg.io/4226 
+# use the projected CRS used by BNETD for their 2020 land use map. 
+civ_crs <- 32630
+
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
 
-# Functions 
-fn_clean_abrvname3 <- function(col_name){
-  gsub(pattern = "COOP CA | COOP CA$|COOP-CA | COOP-CA$|COOPCA | COOPCA$|COOPCA-|-COOPCA$|COOP-CA-|-COOP-CA$|COOP | COOP$|COOP-|-COOP$|SCOOP | SCOOP$|SCOOP-|-SCOOP$|SCOOPS | SCOOPS$|SCOOPS-|-SCOOPS$", 
-       replacement = "", 
-       x = col_name)
-}
 
-# grep("COOPCA", coopbsy$DISCL_SUPPLIER_ABRVNAME, value = T) %>% unique()
 
 # Departements (districts)
 departements <- s3read_using(
@@ -65,16 +59,19 @@ carg_pt =
   carg %>% 
   # Remove the few farms in Yamoussoukro which otherwise get matched to Socaan which is several departments away
   # (do it before centroids grouped by farmers)
-  filter(!FID%in%c(1156, 1176, 1181, 3076, 5053, 1173, 1160))
+  filter(!FID%in%c(1156, 1176, 1181, 3076, 5053, 1173, 1160)) %>% 
+  filter(!st_is_empty(geometry))
 # those in Yamoussoukro get also filtered with a st_simplify 
 # carg_pt %>%
 #   filter(LVL_4_NAME%in%c("YAMOUSSOUKRO", "AGNIBILEKRO")) %>%
 #   pull(FID)
 
-sf_use_s2(FALSE)
+carg_pt$geometry
+sf_use_s2(TRUE)
 carg_pt = 
   carg_pt %>% 
-  st_simplify(dTolerance = 0.0001) %>% # 1 decimal degree = 111.1 km at equator
+  # here it is projected so we can give it in meters. in lon/lat, this needs to be expressed in decimal degree and 1 decimal degree = 111.1 km at equator, so 0.0001 is good. 
+  st_simplify(dTolerance = 10) %>%
   summarise(
     .by = FARMER_COD,
     COOPERATIV = unique(COOPERATIV),
@@ -108,6 +105,7 @@ st_is_longlat(carg$geometry)
 # Remove geometry to be able to dplyr join, but keep coordinates
 carg_pt = 
   carg_pt %>% 
+  st_transform(crs = 4326) %>% 
   rowwise() %>% 
   mutate(PRO_LONGITUDE = unlist(geometry)[1],
          PRO_LATITUDE = unlist(geometry)[2]) %>% 
@@ -117,7 +115,7 @@ carg_pt =
 # carg_pt$geometry[[1]][1]
 
 carg_pt$PRO_LATITUDE %>% summary()
-carg_pt$PRO_LONGITUDE %>% summary() # this is in civ_crs 
+carg_pt$PRO_LONGITUDE %>% summary() # this is in lon/lat
 
 
 # Join with IC2B -----
@@ -143,7 +141,7 @@ carg_pt =
 intersect(unique(carg_pt$SIMPLIF_COOPERATIV), unique(coopbsy$SIMPLIF_ABRVNAME))
 
 
-# join 
+## Prepare IC2B to join --------
 
 # limit coopbsy to unique rows and buying stations which it makes sense to match. 
 bs_carg =
@@ -174,6 +172,9 @@ carg_pt$LVL_4_NAME %>% unique()
 # only one is disclosed by cargill anyway. 
 if(bs_carg$COOP_ID %>% unique() %>% length() != length(unique(carg_pt$COOPERATIV))){stop("the merge wont be correct")}
 
+
+## Join links with IC2B -------
+
 # For 3 coops, there are more than one buying station. 
 
 # multiple matches are expected, because 3 of the 6 coops have several buying stations in IC2B.
@@ -186,14 +187,15 @@ carg_pt_bs =
 
 carg_pt_sfbs = 
   carg_pt_bs %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326) %>% 
-  st_transform(civ_crs) # change rien. 
+  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
 # bs_carg %>% filter(SUPPLIER_ABRVNAME != SIMPLIF_ABRVNAME)
 
 # start from the merger, for st_distance to work on same size df. 
 carg_sfpt_bs = 
   carg_pt_bs %>% 
-  st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = civ_crs) 
+  st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
 
 
 ggplot()+
@@ -203,19 +205,19 @@ ggplot()+
 
 ggplot()+
     geom_sf(data = carg_sfpt_bs, aes(col = SIMPLIF_COOPERATIV))  +
-              geom_sf(data = carg_pt_sfbs, col="black")  +
-              geom_sf(data = departements, fill = "transparent")
+    geom_sf(data = carg_pt_sfbs, col="black")  +
+    geom_sf(data = departements, fill = "transparent")
 
-carg_pt_bs$DISTANCE_PRO_ITM <- 
+carg_pt_bs$LINK_DISTANCE_METERS <- 
   st_distance(carg_sfpt_bs, carg_pt_sfbs, by_element = TRUE)
 
 # Keep only the closest buying station of the linked coop, from a given farm, i.e. across matched buying stations, which are all of the same coop.  
 carg_pt_closestbs =
   carg_pt_bs %>% 
   group_by(FARMER_COD) %>% 
-  mutate(SMALLEST_DIST = min(DISTANCE_PRO_ITM)) %>% 
+  mutate(SMALLEST_DIST = min(LINK_DISTANCE_METERS)) %>% 
   ungroup() %>% 
-  filter(DISTANCE_PRO_ITM == SMALLEST_DIST)
+  filter(LINK_DISTANCE_METERS == SMALLEST_DIST)
 
 # check that this goes back to the number of plots before we merged with multiple BS
 if(nrow(carg_pt_closestbs) != nrow(carg_pt)){stop('going back not correct')}
@@ -229,8 +231,9 @@ carg %>%
 toexport = 
   carg_pt_closestbs %>% 
   mutate(YEAR = 2019, 
-         PRO_ID = paste0("CARGILL_",FARMER_COD)) %>% 
-  select(YEAR, PRO_ID, COOP_BS_ID, DISTANCE_PRO_ITM, 
+         DATA_SOURCE = "CARGILL",
+         PRO_ID = paste0("CARGILL_FARMER_",FARMER_COD)) %>% 
+  select(YEAR, PRO_ID, COOP_BS_ID, LINK_DISTANCE_METERS, 
          PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
          PRO_DEPARTMENT_NAME = LVL_4_NAME,
          PRO_LONGITUDE, PRO_LATITUDE)

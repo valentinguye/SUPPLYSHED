@@ -19,8 +19,9 @@ library(units)
 # Will write preprocessed data there
 dir.create(here("temp_data", "preprocessed_jrc_data"))
 
-# this is a geodetic crs, i.e. not projecting to a plan. But I haven't found a proj one. for Côte d'Ivoire for now. 
-civ_crs = 4226 # https://epsg.io/4226 
+# use the projected CRS used by BNETD for their 2020 land use map. 
+civ_crs <- 32630
+
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
@@ -75,6 +76,14 @@ econact = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "econ_
 
 # it's only different variables in there.
 intersect(names(jrc), names(section3a))
+
+
+# IC2B (private) 
+coopbs <- 
+  read.csv(
+    file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) 
+
+
 
 # PREPARE --------
 
@@ -176,11 +185,11 @@ jrc =
   jrc %>% 
   rename(
     # INTERVIEW ATTRIBUTES
+    JRC_BUYER_ID = buyer_id,
     i00q6__itw_ctr = Country_buyer,
     i00q7__itw_reg = Region_buyer,
     i00q8__itw_spf = sp_buyer,
     i00q9__itw_village = EA_buyer,
-    i00q10__ID = buyer_id,
     i00q20__name_reported = Name_entity,
     i00q21__itw_latitude = i00q21__Latitude,
     i00q21__itw_longitude = i00q21__Longitude,
@@ -282,6 +291,7 @@ jrc =
 jrc_buyer_roster = 
   jrc_buyer_roster %>% 
   rename(
+    JRC_BUYER_ID = buyer_id,
     i04aq15__buyer_code = i04aq15,
     i04aq16__tonne_supply_2018 = i04aq16,
     i04aq17__tonne_supply_2019 = i04aq17,
@@ -289,10 +299,10 @@ jrc_buyer_roster =
     i04aq19__price_cfa_per_kg_2019 = i04aq19,
     i04aq20__km_cp_city = i04aq20,
     i04aq24__buyer_type = i04aq24,
-    i04aq24_oth__buyer_type_oth = i04aq24_oth,
-    i00q10__ID = buyer_id)
+    i04aq24_oth__buyer_type_oth = i04aq24_oth)
 
 # Rename section 3A data 
+names(section3a)
 
 # qty_buy_inkg is the kg purchased by this intermediary to this producer in the whole year. 
 section3a %>% filter(qty_buy_inkg != light_sold_to_this_buy_kg + main_sold_to_this_buy_kg) %>% nrow()
@@ -300,6 +310,7 @@ section3a %>% filter(qty_buy_inkg != light_sold_to_this_buy_kg + main_sold_to_th
 section3a = 
   section3a %>% 
   rename(
+    JRC_BUYER_ID = buyer_id,
     s03aq1_type_code__s03aq1 = s03aq1_id, # 'code acheteur'
     itm_type__s03aq2 = s03aq2,
     itm_type__s03aq2_oth = s03aq2_oth,
@@ -456,14 +467,33 @@ section3a =
     prev_both_inkg = prev_main_inkg + prev_light_inkg
   )
 
-### Producer ID ------------
-# FOR NOW, SUPPOSE THAT ZD AND HH IDENTIFY THE PRODUCER (pending a reply from Katharina)
+### Buyer ID --------------
 jrc = 
   jrc %>% 
-  mutate(producer_id = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)) 
+  mutate(JRC_BUYER_ID = as.character(JRC_BUYER_ID))
+
+jrc_buyer_roster = 
+  jrc_buyer_roster %>% 
+  mutate(JRC_BUYER_ID = as.character(JRC_BUYER_ID))
+
+section3a = 
+  section3a %>% 
+  mutate(JRC_BUYER_ID = as.character(JRC_BUYER_ID))
+
+### Producer ID ------------
+# It is not ZD and HH that identify the producers, but the interview key (Katharina's email from 09/08/2024)
+
+jrc = 
+  jrc %>% 
+  mutate(
+    producer_id = interview__key
+    #producer_id = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)
+  )
 
 jrc$producer_id %>% unique() %>% na.omit() %>% length()
 jrc$interview__key %>% unique() %>% length()
+nrow(jrc)
+
 jrc$s00q10__zd %>% unique() %>% length()
 is.na(jrc$s00q10__zd) %>% sum()
 
@@ -680,7 +710,7 @@ jrc_coops_save = jrc_coops
 jrc_coops = 
   jrc_coops %>% 
   left_join(jrc_buyer_roster,
-            by = "i00q10__ID", 
+            by = "JRC_BUYER_ID", 
             multiple = "all") %>% 
   rowwise() %>% 
   mutate(TRADER_NAME = case_when(
@@ -720,12 +750,25 @@ jrc_coops_merge =
   jrc_coops %>% 
   mutate(COUNTRY_NAME = "IVORY_COAST", 
          YEAR = 2019) %>% # jrc$i00q21__itw_date %>% unique()
-  select(YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME,  
+  select(YEAR, 
+         JRC_BUYER_ID, # to be able to match IC2B data 
+         SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME,  
+         LONGITUDE = ITM_LONGITUDE,
+         LATITUDE = ITM_LATITUDE,
          DISTRICT_GEOCODE, LOCALITY_NAME, COUNTRY_NAME, TRADER_NAME, 
          # NUMBER_FARMERS, 
          TOTAL_FARMERS)  # order does not matter
 
 ### Export -----
+
+names(jrc_coops_merge)[!names(jrc_coops_merge) %in% c("JRC_BUYER_ID", "DISTRICT_GEOCODE", "LOCALITY_NAME")] <- 
+  paste0("DISCL_", names(jrc_coops_merge)[!names(jrc_coops_merge) %in% c("JRC_BUYER_ID", "DISTRICT_GEOCODE", "LOCALITY_NAME")])
+
+# add some variables to keep track of JRC coops in IC2B
+jrc_coops_merge = 
+  jrc_coops_merge %>% 
+  mutate(IS_JRC = TRUE,
+         COMPANY = "JOINT RESEARCH CENTER")
 
 write_csv(jrc_coops_merge,
           file = here("temp_data", "preprocessed_jrc_data", "jrc_coops_IC2B_standardized.csv"),
@@ -735,7 +778,7 @@ write_csv(jrc_coops_merge,
 
 
 
-# SUPPLY SHED MODEL ------
+# SUPPLY SHED MODEL - PART 1 ------
 
 # We want 2 sf objects with as many rows, in the same order, to run st_distance(by_element = TRUE) on them. 
 # These objects have one row per actual producer-intermediary link, as per jrc object. 
@@ -751,7 +794,7 @@ jrc_geo <-
 
 # this is 662 producers linked with 118 buyers
 jrc_geo$producer_id %>% unique() %>% length()
-jrc_geo$i00q10__ID %>% unique() %>% length()
+jrc_geo$JRC_BUYER_ID %>% unique() %>% length()
 # of which 159 producers are linked with 29 cooperatives. 
 jrc_geo %>% 
   filter(IS_COOP) %>% 
@@ -760,7 +803,7 @@ jrc_geo %>%
   length()
 jrc_geo %>% 
   filter(IS_COOP) %>% 
-  pull(i00q10__ID) %>% 
+  pull(JRC_BUYER_ID) %>% 
   unique %>% 
   length()
 
@@ -794,21 +837,49 @@ if(!all.equal(pro_sf$interview__key, itm_sf$interview__key)){
 ## Distance producer-intermediary 
 
 # Since the filtering is the same (on the availability of coordinates for both ends), both subsets have the same rows      
-jrc_geo$DISTANCE_PRO_ITM <- 
+jrc_geo$LINK_DISTANCE_METERS <- 
   st_distance(pro_sf, itm_sf, by_element = TRUE)
 
-jrc_geo_coops = 
-  jrc_geo %>% 
-  filter(IS_COOP)
 
-jrc_geo$DISTANCE_PRO_ITM %>% summary()
-jrc_geo_coops$DISTANCE_PRO_ITM %>% summary()
 
-ggplot(jrc_geo_coops, aes(x=DISTANCE_PRO_ITM)) + 
+jrc_geo$LINK_DISTANCE_METERS %>% summary()
+
+ggplot(jrc_geo, aes(x=LINK_DISTANCE_METERS)) + 
   geom_histogram() +
   theme(axis.title.y = element_blank()) + 
   labs(x = "Producer-intermediary distance") 
 
+## Restrict to coops
+jrc_geo_coops = 
+  jrc_geo %>% 
+  filter(IS_COOP)
+
+nrow(jrc_geo_coops)
+length(unique(jrc_geo_coops$JRC_BUYER_ID))
+length(unique(jrc_coops_merge$JRC_BUYER_ID))
+jrc_geo_coops$LINK_DISTANCE_METERS %>% summary()
+
+
+# Join with IC2B -----
+
+## Prepare IC2B to join --------
+coopbs = 
+  coopbs %>% 
+  filter(YEAR == 2019) %>% 
+  # temporary necessary
+  mutate(JRC_BUYER_IDS = gsub(pattern = "NA \\+ ", replacement = "", x = JRC_BUYER_IDS)) #%>% 
+  # pull(JRC_BUYER_IDS) %>% unique()
+
+if(anyNA(jrc_geo_coops$JRC_BUYER_ID)){stop("the merge will match all non-JRC coops in IC2B")}
+if(nrow(coopbs) != length(unique(coopbs$COOP_BS_ID))){stop("there's a pb in coopbs")}
+
+jrc_geo_coops =
+  jrc_geo_coops %>% 
+  left_join(coopbs %>% select(JRC_BUYER_IDS, COOP_BS_ID), 
+            by = join_by("JRC_BUYER_ID" == "JRC_BUYER_IDS"))
+
+# they all match
+anyNA(jrc_geo_coops$COOP_BS_ID)
 
 ## Export --------------------
 
@@ -817,9 +888,12 @@ if("Ghana" %in% jrc_geo$s00q4__country){stop()}
 
 toexport =
   jrc_geo_coops %>% 
-  mutate(YEAR = 2019) %>% # jrc$i00q21__itw_date %>% unique()
+  mutate(YEAR = 2019,
+         DATA_SOURCE = "JRC", 
+         PRO_ID = paste0("JRC_FARMER_",producer_id)) %>% # jrc$i00q21__itw_date %>% unique()
   # keep only the variables that we can also compute in other data sources than JRC. 
-  select(YEAR, PRO_ID, DISTANCE_PRO_ITM, 
+  select(YEAR, PRO_ID, LINK_DISTANCE_METERS, 
+         COOP_BS_ID, 
          PRO_DEPARTMENT_NAME = s00q7__dst,
          PRO_LONGITUDE = s00q12__itw_longitude, 
          PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
@@ -833,21 +907,26 @@ write_csv(toexport,
           col_names = TRUE)
 
 
+# SUPPLY SHED MODEL - PART 2 ------
+# Here we add or just use more variables (JRC-specific) to the link data.  
+
+jrc$s02aq301__km_home_plot %>% summary()
+quantile(jrc$s02aq301__km_home_plot, 0.9, na.rm = TRUE)
 
 ## Merger of link data and intermediary data -------
 # Isolate intermediary data from the jrc join
 itm <- 
   jrc %>% 
-  filter(!is.na(i00q10__ID)) %>% 
+  filter(!is.na(JRC_BUYER_ID)) %>% 
   # need to do that because jrc is a join and not a stack of producers and interm. 
   # (so it has several rows for the same interm. when a producer sells to the same guy)
-  distinct(i00q10__ID, .keep_all = TRUE) %>% 
+  distinct(JRC_BUYER_ID, .keep_all = TRUE) %>% 
   filter(!is.na(ITM_LONGITUDE) & !is.na(ITM_LATITUDE)) %>% 
   select(!starts_with("s0")) %>% 
   st_as_sf(coords = c("ITM_LONGITUDE", "ITM_LATITUDE"))
 
 # Among the 170 distinct intermediaries, 146 have coordinates. 
-jrc$i00q10__ID %>% unique() %>%  na.omit() %>% length() # 170
+jrc$JRC_BUYER_ID %>% unique() %>%  na.omit() %>% length() # 170
 nrow(itm) 
 
 ## Link variables -------------
@@ -855,7 +934,7 @@ nrow(itm)
 link_itm <- 
   left_join(section3a, 
             itm, 
-            by = join_by(""=="i00q10__ID"))
+            by = "JRC_BUYER_ID")
 
 ## Producer variables -----------
 
@@ -864,7 +943,7 @@ link_itm <-
 link_itm <- 
   left_join(section3a, 
             itm, 
-            by = join_by(""=="i00q10__ID"))
+            by = "JRC_BUYER_ID")
 
 
 
