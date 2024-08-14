@@ -879,7 +879,7 @@ jrc_geo_coops =
             by = join_by("JRC_BUYER_ID" == "JRC_BUYER_IDS"))
 
 # they all match
-anyNA(jrc_geo_coops$COOP_BS_ID)
+if(anyNA(jrc_geo_coops$COOP_BS_ID)){stop("not all observation is matched back with IC2B, which is not expected.")}
 
 ## Export --------------------
 
@@ -898,7 +898,10 @@ toexport =
          PRO_LONGITUDE = s00q12__itw_longitude, 
          PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
 
-# should we add coop identifiers to then match IC2B? 
+# remove any duplicate in these attributes we are interested in 
+toexport = 
+  toexport %>% 
+  distinct()
 
 write_csv(toexport,
           file = here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"),

@@ -66,12 +66,34 @@ carg_pt =
 #   filter(LVL_4_NAME%in%c("YAMOUSSOUKRO", "AGNIBILEKRO")) %>%
 #   pull(FID)
 
+# Descriptive stats on farm bbox
+sf_use_s2(TRUE)
+carg_farm = 
+  carg_pt %>% 
+  # here it is projected so we can give it in meters. in lon/lat, this needs to be expressed in decimal degree and 1 decimal degree = 111.1 km at equator, so 0.0001 is good. 
+  st_simplify(dTolerance = 0.001) %>%
+  summarise(
+    .by = FARMER_COD,
+    geometry = st_union(geometry)
+  )
+carg_farm %>% filter(st_is_empty(geometry))
+
+carg_bbx = 
+  carg_farm %>% 
+  rowwise() %>% 
+  mutate(FARM_BBOX_HA = set_units(st_area(st_as_sfc(st_bbox(geometry))), "ha", na.rm = T))
+
+carg_bbx$FARM_BBOX_HA %>% summary()
+quantile(carg_bbx$FARM_BBOX_HA, 0.95)
+
 carg_pt$geometry
 sf_use_s2(TRUE)
 carg_pt = 
   carg_pt %>% 
   # here it is projected so we can give it in meters. in lon/lat, this needs to be expressed in decimal degree and 1 decimal degree = 111.1 km at equator, so 0.0001 is good. 
-  st_simplify(dTolerance = 10) %>%
+  # I simplify to the minimum (smallest possible tolerance value), for the operation to run but without 
+  # returning any empty geometry (which would be the case for instance with a 1m tolerance) 
+  st_simplify(dTolerance = 0.001) %>%
   summarise(
     .by = FARMER_COD,
     COOPERATIV = unique(COOPERATIV),
