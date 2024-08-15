@@ -45,14 +45,8 @@ jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_stand
 # Sustain-cocoa link data
 sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
 
-departements <- s3read_using(
-  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson",
-  bucket = "trase-storage",
-  FUN = read_sf,
-  #sheet = "Cacao",
-  #skip = 3,
-  opts = c("check_region" = T)
-)
+departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
+
 departements = 
   st_transform(departements, crs = civ_crs)
 
@@ -182,14 +176,34 @@ coopbs_sf =
 # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
 # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
 # At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.25 square km) or less.
-
 grid_size_m = 30000
+
+# # Limit to cocoa growing region 
+# production_geocode_panel <- s3read_using(
+#   object = "cote_divoire/cocoa/indicators/in/q4_2023/cocoa_production_2019_2022_q4_2023.csv",
+#   bucket = "trase-storage",
+#   opts = c("check_region" = T),
+#   FUN = read_delim,
+#   delim = ",") %>%
+#   select(LVL_4_CODE, LVL_4_NAME, 
+#          production_2019, production_2020, production_2021, production_2022) %>%
+#   pivot_longer(cols = starts_with("production"), 
+#                values_to = "COCOA_PRODUCTION_TONNES",
+#                names_to = "YEAR",
+#                names_prefix = "production_") %>% 
+#   mutate(YEAR = as.numeric(YEAR)) %>% 
+#   rowwise() %>% 
+#   mutate(LVL4_TRASE_ID_PROD = geocode_to_trase_id(LVL_4_CODE)) %>% 
+#   ungroup() # REMOVES THE ROWWISE 
+
+
 
 # Make a terra template, just because I found how to do it before I found with stars.  
 (grid_sr = rast(extent = ext(departements), 
                 resolution = grid_size_m,
                 crs = crs(departements))
 )
+
 # Convert to stars
 grid_st = st_as_stars(grid_sr)
 
@@ -206,7 +220,7 @@ consol_sf =
   grid_st %>% 
   st_xy2sfc(as_points = FALSE, na.rm = FALSE) %>% # as_points = F outputs grid cells as polygons
   st_as_sf() %>% 
-  mutate(GRID_ID = as.character(row_number())) %>% 
+  mutate(GRID_ID = row_number()) %>% 
   select(-lyr.1))
 
 # This extends the rows of the grids to the extent that there are actual links in every grid. 
@@ -230,13 +244,13 @@ grid_actual =
 # The number of NAs in ACTUAL_LINK_ID is the number of grid cells with no actual link
 grid_actual$ACTUAL_LINK_ID %>% summary()
 
-
 # and this is the distribution of unique actual links by grid cell
 grid_actual %>% 
   group_by(GRID_ID) %>% 
-  mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(ACTUAL_LINK_ID))) %>% 
+  mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(na.omit(ACTUAL_LINK_ID)))) %>% 
   ungroup() %>% 
   pull(N_UNIQUE_ACTUAL_LINKS_BYGRID) %>% summary()
+
 
 
 ## Add virtual links ---------------
@@ -253,8 +267,34 @@ grid_potential_ctoid =
     dist = as_units(dist_meters_threshold, "m"), 
     left = TRUE
   ) %>% 
-  rename(POTENTIAL_COOP_BS_ID = COOP_BS_ID)
+  rename( # use names that make sense in the dimensions post join
+    POTENTIAL_COOP_BS_ID = COOP_BS_ID, 
+    POTENTIAL_LINKS_IN_GRID_SET_ID = ACTUAL_LINK_ID)
+
 # The choice of the threshold, 90% vs. 100% makes a huge difference, since it's implies a reach of 41 vs. 75km resp. 
+
+# - dans les grids avec des actual links, il y a le nombre d'actual links * le nombre de coops within distance du centroid. 
+#   La démultiplication par le nombre d'actual links correspond au fait qu'on n'a pas aggrégés les links au sein des mailles.
+# - dans les mailles sans actual link, il y a le nombre de coops within distance du centroid. 
+
+# So there should not be any duplicated potential link within a grid and an actual link
+if(
+grid_potential_ctoid %>% 
+  group_by(GRID_ID, POTENTIAL_LINKS_IN_GRID_SET_ID) %>% 
+  mutate(ANY_DUPL_COOP = any(duplicated(POTENTIAL_COOP_BS_ID))) %>% 
+  ungroup() %>% 
+  pull(ANY_DUPL_COOP) %>% any()
+){stop("something unexpected in the row deployment by the spatial join")}
+
+# Another check: that POTENTIAL_LINKS_IN_GRID_SET_ID is NA only in grid cells with no link at all. 
+if(
+grid_potential_ctoid %>% 
+  group_by(GRID_ID) %>% 
+  mutate(ANY_NA = any(is.na(POTENTIAL_COOP_BS_ID)), 
+         ALL_NA = all(is.na(POTENTIAL_COOP_BS_ID))) %>% 
+  ungroup() %>% 
+  filter(ANY_NA != ALL_NA) %>% nrow() != 0
+){stop("unexpected")}
 
 # With this method, it's not exactly the same number, but very marginal. 
 # grid_actual_ctoid = 
@@ -266,66 +306,113 @@ grid_potential_ctoid =
 #     left = TRUE
 #   )
 
-# So we need to remove the actual links added a second time.
-grid_potential_ctoid %>% 
-  filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% View()
-
-nrow(filter(grid_potential_ctoid, TRAINING_SET))
+# grid_potential_ctoid %>% 
+#   filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% View()
+# nrow(filter(grid_potential_ctoid, TRAINING_SET_CELL))
 
 # The number of distinct actual links within a grid cell. 
 grid_potential_ctoid %>% 
   group_by(GRID_ID) %>% 
-  mutate(IS_EMPTY_GRID = length(unique(ACTUAL_LINK_ID))) %>% 
+  mutate(IS_EMPTY_GRID = length(unique(na.omit(POTENTIAL_LINKS_IN_GRID_SET_ID)))) %>% 
   ungroup() %>% 
   pull(IS_EMPTY_GRID) %>% summary()
            
-tmp = 
-  grid_potential_ctoid %>% 
-  group_by(GRID_ID, ACTUAL_LINK_ID) %>% 
-  mutate(IS_DUPL = duplicated(POTENTIAL_COOP_BS_ID)) %>% 
-  ungroup()
-tmp %>% filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% View()
-tmp %>% 
-  filter(TRAINING_SET) %>% 
-  arrange(GRID_ID, PRO_ID, POTENTIAL_COOP_BS_ID) %>% View()
-
 
 ### Mark virtual links --------------
-grid_actual_ctoid
+grid_potential_ctoid 
 
+# not all actual links are retrieved in the spatial join, for 2 reasons probably: 
+# - the threshold is not the max distance, but there's still a diff when using the max   
+# - the distance is to grid cell centroids here. 
+# but it's surprising there is such a difference... 
+# it's not possible to identify actual links after the join, other than by the equality below which fails to identify them all... 
+grid_potential_ctoid %>%
+  filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% nrow() < nrow(consol)
+
+
+grid_potential_ctoid %>% 
+  filter(!is.na(ACTUAL_COOP_BS_ID)) %>% 
+  nrow()
 
 # MAKE VARIABLES ----------------
 
-## Compute distances -------------
-
-
 
 ## Count # reachable   -------------
-grid_actual$GRID_ID%>% unique() %>% length() 
-grid_actual_ctoid$GRID_ID%>% unique() %>% length() 
-# tmpsave <- pot_cells_ctoid
 
-grid_actual_ctoid = 
-  grid_actual_ctoid %>% 
-  group_by(GRID_ID) %>%  
-  mutate(N_BS_WITHIN_DIST = length(na.omit(unique(COOP_BS_ID))),# n(), POURQUOI EST_CE QUE CA FAIT PAS PAREIL AVEC n() ? DIT QQCHOSE DE LA STRUCTURE DES DONN2ES QUI N4EST PAS COMME ATTENDUE ? 
-         ANY_ACTUAL_LINK = any(TRAINING_SET)) %>% 
+grid_potential_ctoid = 
+  grid_potential_ctoid %>% 
+  group_by(GRID_ID, POTENTIAL_LINKS_IN_GRID_SET_ID) %>%  
+  mutate(N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID))) # use this, and not n(), for the variable to take value 0 when there's is no match, rather than one row that has NA value 
+         # N_BS_WITHIN_DIST2 = n(), this would be equal to 1, and not 0, for grid cells that reach no buying station. 
+         ) %>% 
   ungroup()
 
-# length(na.omit(unique(COOP_)
-grid_actual_ctoid$N_BS_WITHIN_DIST %>% summary()
+# grid_potential_ctoid %>% 
+#   filter(N_BS_WITHIN_DIST != N_BS_WITHIN_DIST2) %>% View()
+
+grid_potential_ctoid$N_BS_WITHIN_DIST %>% summary()
 
 
-## Extract LU in grid cells -------------
+## Compute distances -------------
+# st_distance needs to work on same size df. 
+
+# this is not the full grid anymore, but only grid cells with at least one potential link 
+potential_ctoid = 
+  grid_potential_ctoid %>% 
+  filter(N_BS_WITHIN_DIST > 0)
+nrow(potential_ctoid) != nrow(grid_potential_ctoid)
+
+if(potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
+   anyNA(potential_ctoid$BS_LONGITUDE)){stop("potential_ctoid does not have the expected spatial attributes at this stage")}
+
+potential_bspt = 
+  potential_ctoid %>% 
+  st_drop_geometry() %>% 
+  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
+
+potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <- 
+  st_distance(potential_ctoid, potential_bspt, by_element = TRUE) %>% as.numeric()
+
+# merge back to the full grid
+(init_nrow <- nrow(grid_potential_ctoid))
+grid_potential_ctoid = 
+  grid_potential_ctoid %>% 
+  left_join(potential_ctoid %>% 
+              select(GRID_ID, POTENTIAL_LINKS_IN_GRID_SET_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
+              st_drop_geometry(), 
+            by = c("GRID_ID", "POTENTIAL_LINKS_IN_GRID_SET_ID", "POTENTIAL_COOP_BS_ID"))
+if(init_nrow != nrow(grid_potential_ctoid)){stop("rows added unexpectedly")}
+
+# In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
+grid_potential_ctoid %>% 
+  mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
+    POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID ~ POTENTIAL_LINK_DISTANCE_METERS - LINK_DISTANCE_METERS,
+    TRUE ~ NA
+    )) %>% 
+  pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
 
 
-allcel_st = 
-  st_rasterize(sf = consol_sf, template = tmplt_st, align=FALSE, options= "")
+## Merge LU variables in grid cells -------------
 
-allcel_sf = st_xy2sfc(allcel_st, as_points = TRUE, na.rm = FALSE)
-class(allcel_sf)
+# These were computed in the grid, preserving the GRID_ID. 
+# au pire, on peut juste extraire dans la grid totale, et ne merger que les variables extraites, pas forcément la géométrie...
 
-plot(allcel_st)
+
+# Switch geometry from the cell centroid to the polygon. - This takes ~15 minutes
+# grid_potential_poly =
+#   grid_actual %>%
+#   arrange(GRID_ID) %>% # because this may speed up 
+#   select(GRID_ID) %>%
+#   full_join(
+#     y = grid_potential_ctoid %>% 
+#           st_drop_geometry() %>%
+#           arrange(GRID_ID),
+#     by = "GRID_ID")
+# if(nrow(grid_potential_poly) != nrow(grid_potential_ctoid)){stop("the join did not work as expected")}
+
+
+
 
 
 
