@@ -894,7 +894,9 @@ toexport =
   # keep only the variables that we can also compute in other data sources than JRC. 
   select(YEAR, PRO_ID, LINK_DISTANCE_METERS, 
          COOP_BS_ID, 
-         PRO_DEPARTMENT_NAME = s00q7__dst,
+         # PRO_DEPARTMENT_NAME = s00q7__dst,
+         BS_LONGITUDE = ITM_LONGITUDE, # can be called BS_ now since it's only coops. 
+         BS_LATITUDE = ITM_LATITUDE,
          PRO_LONGITUDE = s00q12__itw_longitude, 
          PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
 

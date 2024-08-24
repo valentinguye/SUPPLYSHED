@@ -57,9 +57,11 @@ consol <- data.frame(
   "YEAR" = NA, 
   "PRO_ID" = NA, 
   "COOP_BS_ID" = NA, 
+  "BS_LONGITUDE" = NA,
+  "BS_LATITUDE" = NA,
   "LINK_DISTANCE_METERS" = NA, 
-  "PRO_DEPARTMENT_GEOCODE" = NA, 
-  "PRO_DEPARTMENT_NAME" = NA,
+  # "PRO_DEPARTMENT_GEOCODE" = NA, 
+  # "PRO_DEPARTMENT_NAME" = NA,
   "PRO_LONGITUDE" = NA, 
   "PRO_LATITUDE" = NA
 )
@@ -91,7 +93,7 @@ if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclos
 # remove first rows that were just here for left_join-ing
 consol <- filter(consol, !is.na(YEAR))
 # for now remove for convenience
-consol <- select(consol, -PRO_DEPARTMENT_NAME, -PRO_DEPARTMENT_GEOCODE)
+# consol <- select(consol, -PRO_DEPARTMENT_NAME, -PRO_DEPARTMENT_GEOCODE)
 
 # Make ID for actual links
 # allows in particular to identify actual links more easily if in some input data PRO_ID is duplicated in consol
@@ -235,7 +237,6 @@ if(
     grid_actual$COOP_BS_ID %>% na.omit() %>% unique() %>% length()
 ){stop("info on linked coops has been lost in the process")}
 
-### Mark actual links ----------------
 grid_actual = 
   grid_actual %>% 
   # mutate(TRAINING_SET_CELL = if_else(!is.na(PRO_ID), TRUE, FALSE)) %>% 
@@ -259,6 +260,7 @@ actual =
   st_drop_geometry() %>% 
   mutate(POTENTIAL_COOP_BS_ID = ACTUAL_COOP_BS_ID) 
 
+
 ## Add virtual links ---------------
 
 ### Identify coops within distance -------------
@@ -269,7 +271,7 @@ potential =
   mutate(geometry = st_centroid(geometry)) %>%
   st_join(
     coopbs_sf %>% 
-      select(COOP_BS_ID), #, BS_LONGITUDE, BS_LATITUDE
+      select(COOP_BS_ID, BS_LONGITUDE, BS_LATITUDE), #
     join = st_is_within_distance, 
     dist = as_units(dist_meters_threshold, "m"), 
     left = TRUE
@@ -303,12 +305,14 @@ potential =
   filter(!(DUP_LINK & IS_FROM_STJOIN)) %>% 
   # Number of reachable coops within a grid cell, regardless through how many links  
   group_by(GRID_ID) %>% 
-  mutate(N_POTENTIAL_COOPS = length(unique(POTENTIAL_COOP_BS_ID))) %>% 
+  mutate(N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID)))) %>%  # use this, and not n(), for the variable to take value 0 when there's is no potential coop matched (i.e. potential link), rather than one row that has NA value 
   ungroup() %>% 
   # identify grid cells with no actual link 
   group_by(GRID_ID) %>% 
   mutate(NO_ACTUAL_LINK = all(IS_FROM_STJOIN)) %>% 
-  ungroup()
+  ungroup() %>% 
+  # OUTCOMe VARIABLE - is the link actual or virtual??? 
+  mutate(IS_LINK_ACTUAL = !is.na(ACTUAL_LINK_ID))
 
 # potential %>% 
 #   filter((DUP_LINK & IS_FROM_STJOIN)) %>% View()
@@ -323,6 +327,7 @@ potential$DUP_LINK %>% summary()
 
 # But currently, there are always more different potential coops in potential than in stjoin, suggesting we haven't removed enough 
 # TEST second proposition. The first one is not testable, because some actual links are not reproduced by the spatial join. 
+if(
 grid_sf %>% 
   mutate(geometry = st_centroid(geometry)) %>%
   st_join(
@@ -335,17 +340,24 @@ grid_sf %>%
   st_drop_geometry() %>% 
   rename(POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
   summarise(.by = GRID_ID, 
-            N_POTENTIAL_COOPS = length(unique(POTENTIAL_COOP_BS_ID))) %>% 
+            N_BS_WITHIN_DIST = length(unique(POTENTIAL_COOP_BS_ID))) %>% 
   inner_join(potential %>% 
               filter(NO_ACTUAL_LINK) %>% 
-              select(GRID_ID, N_POTENTIAL_COOPS), 
+              select(GRID_ID, N_BS_WITHIN_DIST), 
             by = "GRID_ID") %>% 
-  mutate(PROBLEM = N_POTENTIAL_COOPS.x < N_POTENTIAL_COOPS.y) %>% 
+  mutate(PROBLEM = N_BS_WITHIN_DIST.x < N_BS_WITHIN_DIST.y) %>% 
   filter(PROBLEM) %>% 
   nrow() > 0
-  
+){stop("stacking method producing a different number of potential links than the spatial join in cells with no actual link, which is unexpected.")} 
 
-# So there should not be any duplicated potential link within a grid and an actual link
+# So there should be as many none actual links , i.e. virtual links, as there are links from stjoin now 
+if(
+  potential %>% 
+  filter(!IS_LINK_ACTUAL != IS_FROM_STJOIN) %>% 
+  nrow() != 0
+){stop("something is misunderstood")}
+
+# and there should not be any duplicated potential link within a grid and an actual link
 if(
 potential %>% 
   group_by(GRID_ID, ACTUAL_LINK_ID) %>% 
@@ -364,6 +376,16 @@ potential %>%
   filter(ANY_NA != ALL_NA) %>% nrow() != 0
 ){stop("unexpected")}
 
+if(
+  potential %>%
+  filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% 
+  nrow() != nrow(consol_sf)
+){stop("actual links were missed or duplicated")}
+# potential %>% 
+#   filter(!is.na(ACTUAL_COOP_BS_ID)) %>% 
+#   nrow()
+
+
 # With this method, it's not exactly the same number, but very marginal. 
 # grid_actual_ctoid = 
 #   grid_actual %>% 
@@ -374,11 +396,6 @@ potential %>%
 #     left = TRUE
 #   )
 
-###  --------------------
-
-# potential %>% 
-#   filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% View()
-# nrow(filter(potential, TRAINING_SET_CELL))
 
 # The number of distinct actual links within a grid cell. 
 # potential %>% 
@@ -389,69 +406,56 @@ potential %>%
            
 
 ### Mark virtual links --------------
-potential 
 
 # not all actual links are retrieved in the spatial join, for 2 reasons probably: 
 # - the threshold is not the max distance, but there's still a diff when using the max   
 # - the distance is to grid cell centroids here. 
 # but it's surprising there is such a difference... 
-# it's not possible to identify actual links after the join, other than by the equality below which fails to identify them all... 
-potential %>%
-  filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% nrow() < nrow(consol)
 
-
-potential %>% 
-  filter(!is.na(ACTUAL_COOP_BS_ID)) %>% 
-  nrow()
 
 # MAKE VARIABLES ----------------
 
-
-## Count # reachable   -------------
-
-potential = 
-  potential %>% 
-  group_by(GRID_ID, POTENTIAL_LINKS_IN_GRID_SET_ID) %>%  
-  mutate(N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID))) # use this, and not n(), for the variable to take value 0 when there's is no match, rather than one row that has NA value 
-         # N_BS_WITHIN_DIST2 = n(), this would be equal to 1, and not 0, for grid cells that reach no buying station. 
-         ) %>% 
-  ungroup()
-
-# potential %>% 
-#   filter(N_BS_WITHIN_DIST != N_BS_WITHIN_DIST2) %>% View()
-
+## Number of potential coops -------- 
+# was computed above (N_BS_WITHIN_DIST), because useful in a test. 
 potential$N_BS_WITHIN_DIST %>% summary()
 
 
 ## Compute distances -------------
 # st_distance needs to work on same size df. 
 
-# this is not the full grid anymore, but only grid cells with at least one potential link 
-potential = 
-  potential %>% 
+# this does not have the full grid anymore, but only grid cells with at least one potential link 
+only_potential_ctoid = 
+  # give back grid cell centroid coordinates
+  grid_sf %>% 
+  mutate(geometry = st_centroid(geometry)) %>% 
+  inner_join(
+    potential, 
+    by = "GRID_ID", 
+    multiple = "all"
+  ) %>% 
   filter(N_BS_WITHIN_DIST > 0)
-nrow(potential) != nrow(potential)
+nrow(potential) != nrow(only_potential_ctoid)
 
-if(potential %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
-   anyNA(potential$BS_LONGITUDE)){stop("potential does not have the expected spatial attributes at this stage")}
+if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
+   anyNA(only_potential_ctoid$BS_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
 
 potential_bspt = 
-  potential %>% 
+  only_potential_ctoid %>% 
   st_drop_geometry() %>% 
   st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
-potential$POTENTIAL_LINK_DISTANCE_METERS <- 
-  st_distance(potential, potential_bspt, by_element = TRUE) %>% as.numeric()
+only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <- 
+  st_distance(only_potential_ctoid, potential_bspt, by_element = TRUE) %>% as.numeric()
 
 # merge back to the full grid
 (init_nrow <- nrow(potential))
 potential = 
   potential %>% 
-  left_join(potential %>% 
-              select(GRID_ID, POTENTIAL_LINKS_IN_GRID_SET_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
+  left_join(only_potential_ctoid %>% 
+              select(GRID_ID, ACTUAL_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
               st_drop_geometry(), 
-            by = c("GRID_ID", "POTENTIAL_LINKS_IN_GRID_SET_ID", "POTENTIAL_COOP_BS_ID"))
+            by = c("GRID_ID", "ACTUAL_LINK_ID", "POTENTIAL_COOP_BS_ID"))
 if(init_nrow != nrow(potential)){stop("rows added unexpectedly")}
 
 # In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
