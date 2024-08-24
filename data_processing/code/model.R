@@ -405,7 +405,9 @@ if(
 #   pull(IS_EMPTY_GRID) %>% summary()
            
 
-### Mark virtual links --------------
+### Add links to other intermediaries --------------
+# This is from JRC only... 
+
 
 # not all actual links are retrieved in the spatial join, for 2 reasons probably: 
 # - the threshold is not the max distance, but there's still a diff when using the max   

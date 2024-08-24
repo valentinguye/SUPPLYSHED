@@ -494,6 +494,11 @@ jrc$producer_id %>% unique() %>% na.omit() %>% length()
 jrc$interview__key %>% unique() %>% length()
 nrow(jrc)
 
+# Remove these few unexpected/not understood duplicates 
+jrc = 
+  jrc %>% 
+  distinct()
+
 jrc$s00q10__zd %>% unique() %>% length()
 is.na(jrc$s00q10__zd) %>% sum()
 
@@ -880,6 +885,17 @@ jrc_geo_coops =
 
 # they all match
 if(anyNA(jrc_geo_coops$COOP_BS_ID)){stop("not all observation is matched back with IC2B, which is not expected.")}
+if(
+  distinct(jrc_geo, producer_id) %>% nrow() == nrow(jrc_geo)
+   ){stop("producer_id is supposed to identify rows in jrc but this is not the case and will cause troubles")}
+
+# add this information back to all jrc geo links
+jrc_geo = 
+  jrc_geo %>% 
+  left_join(
+    jrc_geo_coops %>% select("producer_id", "COOP_BS_ID", "JRC_BUYER_ID"), 
+    by = "producer_id"
+  )
 
 ## Export --------------------
 
@@ -887,12 +903,13 @@ if(anyNA(jrc_geo_coops$COOP_BS_ID)){stop("not all observation is matched back wi
 if("Ghana" %in% jrc_geo$s00q4__country){stop()}
 
 toexport =
-  jrc_geo_coops %>% 
+  jrc_geo %>% 
   mutate(YEAR = 2019,
          DATA_SOURCE = "JRC", 
          PRO_ID = paste0("JRC_FARMER_",producer_id)) %>% # jrc$i00q21__itw_date %>% unique()
   # keep only the variables that we can also compute in other data sources than JRC. 
-  select(YEAR, PRO_ID, LINK_DISTANCE_METERS, 
+  select(YEAR, PRO_ID, IS_COOP, 
+         LINK_DISTANCE_METERS, 
          COOP_BS_ID, 
          # PRO_DEPARTMENT_NAME = s00q7__dst,
          BS_LONGITUDE = ITM_LONGITUDE, # can be called BS_ now since it's only coops. 
@@ -900,7 +917,7 @@ toexport =
          PRO_LONGITUDE = s00q12__itw_longitude, 
          PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
 
-# remove any duplicate in these attributes we are interested in 
+# remove any duplicate in these attributes we are interested in (but now they are already removed earlier)
 toexport = 
   toexport %>% 
   distinct()
