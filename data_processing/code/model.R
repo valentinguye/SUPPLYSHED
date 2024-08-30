@@ -42,6 +42,12 @@ carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_s
 # JRC link data
 jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))
 
+jrc_links_coops = 
+  jrc_links %>% 
+  filter(IS_COOP) %>% 
+  select(-IS_COOP)
+
+
 # Sustain-cocoa link data
 sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
 
@@ -49,6 +55,26 @@ departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
 
 departements = 
   st_transform(departements, crs = civ_crs)
+
+# Production per department estimated by Trase
+production_dpt =
+  read_csv(here("input_data/s3/indicators/in/q4_2023/cocoa_production_2019_2022_q4_2023.csv")) %>%
+  select(LVL_4_CODE, LVL_4_NAME,
+         production_2019, production_2020, production_2021, production_2022) %>%
+  pivot_longer(cols = starts_with("production"),
+               values_to = "COCOA_PRODUCTION_TONNES",
+               names_to = "YEAR",
+               names_prefix = "production_") %>%
+  mutate(YEAR = as.numeric(YEAR)) %>% 
+  summarise(.by = LVL_4_CODE, 
+            AVG_COCOA_PRODUCTION_TONNES = mean(COCOA_PRODUCTION_TONNES))
+
+is.grouped_df(production_dpt)
+summary(production_dpt)
+
+# BNETD LAND USE MAP FOR 2020
+civlu = rast(here("input_data", "BNETD", "Raster13082024", "Raster", "ocs2020.tif"))
+
 
 # CONSOLIDATE LINK DATA ---------------------
 
@@ -77,7 +103,7 @@ if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclos
 # Add JRC 
 initcoln <- ncol(consol)
 initrown <- nrow(consol)
-consol <- full_join(consol, jrc_links, 
+consol <- full_join(consol, jrc_links_coops, 
                     by = intersect(colnames(consol), colnames(jrc_links)), multiple = "all") 
 
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
@@ -177,33 +203,22 @@ coopbs_sf =
 # The size of the grid is an important parameter. 
 # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
 # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
-# At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.25 square km) or less.
+# At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.5 x 0.5 km) or less.
 grid_size_m = 30000
 
-# # Limit to cocoa growing region 
-# production_geocode_panel <- s3read_using(
-#   object = "cote_divoire/cocoa/indicators/in/q4_2023/cocoa_production_2019_2022_q4_2023.csv",
-#   bucket = "trase-storage",
-#   opts = c("check_region" = T),
-#   FUN = read_delim,
-#   delim = ",") %>%
-#   select(LVL_4_CODE, LVL_4_NAME, 
-#          production_2019, production_2020, production_2021, production_2022) %>%
-#   pivot_longer(cols = starts_with("production"), 
-#                values_to = "COCOA_PRODUCTION_TONNES",
-#                names_to = "YEAR",
-#                names_prefix = "production_") %>% 
-#   mutate(YEAR = as.numeric(YEAR)) %>% 
-#   rowwise() %>% 
-#   mutate(LVL4_TRASE_ID_PROD = geocode_to_trase_id(LVL_4_CODE)) %>% 
-#   ungroup() # REMOVES THE ROWWISE 
+## Limit to cocoa growing region 
+cocoa_departements = 
+  departements %>% 
+  left_join(production_dpt, 
+            by = "LVL_4_CODE") %>% 
+  filter(AVG_COCOA_PRODUCTION_TONNES > 500)
 
-
+plot(cocoa_departements[,"AVG_COCOA_PRODUCTION_TONNES"])
 
 # Make a terra template, just because I found how to do it before I found with stars.  
-(grid_sr = rast(extent = ext(departements), 
+(grid_sr = rast(extent = ext(cocoa_departements), 
                 resolution = grid_size_m,
-                crs = crs(departements))
+                crs = crs(cocoa_departements))
 )
 
 # Convert to stars
@@ -217,17 +232,22 @@ consol_sf =
   st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs)
 
-# convert raster to sf
-(grid_sf = 
+# convert raster to sf with polygons
+(grid_poly = 
   grid_st %>% 
   st_xy2sfc(as_points = FALSE, na.rm = FALSE) %>% # as_points = F outputs grid cells as polygons
   st_as_sf() %>% 
   mutate(GRID_ID = row_number()) %>% 
   select(-lyr.1))
 
+# and the same object, but with cell centroid geometry
+grid_ctoid = 
+  grid_poly %>% 
+  mutate(geometry = st_centroid(geometry))
+
 # This extends the rows of the grids to the extent that there are actual links in every grid. 
 grid_actual = 
-  grid_sf %>% 
+  grid_poly %>% 
   st_join(consol_sf, 
           join = st_intersects,
           left = TRUE)
@@ -267,8 +287,7 @@ actual =
 
 # For every grid cell, this adds as many rows as there are potential links, including the actual ones. 
 potential = 
-  grid_sf %>% 
-  mutate(geometry = st_centroid(geometry)) %>%
+  grid_ctoid %>% 
   st_join(
     coopbs_sf %>% 
       select(COOP_BS_ID, BS_LONGITUDE, BS_LATITUDE), #
@@ -321,6 +340,10 @@ potential$IS_FROM_STJOIN %>% summary()
 potential$DUP_LINK %>% summary()
 
 # The choice of the threshold, 90% vs. 100% makes a huge difference, since it's implies a reach of 41 vs. 75km resp. 
+# not all actual links are retrieved in the spatial join, for 2 reasons probably: 
+# - the threshold is not the max distance, but there's still a diff when using the max   
+# - the distance is to grid cell centroids here. 
+# but it's surprising there is such a difference... 
 
 # - dans les grids avec des actual links, il y a le nombre d'actual links + le nombre d'AUTRES coops within distance du centroid. 
 # - dans les mailles sans actual link, il y a le nombre de coops within distance du centroid. 
@@ -328,8 +351,7 @@ potential$DUP_LINK %>% summary()
 # But currently, there are always more different potential coops in potential than in stjoin, suggesting we haven't removed enough 
 # TEST second proposition. The first one is not testable, because some actual links are not reproduced by the spatial join. 
 if(
-grid_sf %>% 
-  mutate(geometry = st_centroid(geometry)) %>%
+grid_ctoid %>% 
   st_join(
     coopbs_sf %>% 
       select(COOP_BS_ID), #, BS_LONGITUDE, BS_LATITUDE
@@ -385,7 +407,6 @@ if(
 #   filter(!is.na(ACTUAL_COOP_BS_ID)) %>% 
 #   nrow()
 
-
 # With this method, it's not exactly the same number, but very marginal. 
 # grid_actual_ctoid = 
 #   grid_actual %>% 
@@ -396,7 +417,6 @@ if(
 #     left = TRUE
 #   )
 
-
 # The number of distinct actual links within a grid cell. 
 # potential %>% 
 #   group_by(GRID_ID) %>% 
@@ -406,37 +426,41 @@ if(
            
 
 ### Add links to other intermediaries --------------
-# This is from JRC only... 
+# Do it here because given our data inputs, links to other intermediaries than coops is the exception and not the rule. 
+# (It's from JRC only.)
 
+potential_all = 
+  potential %>% 
+  full_join(
+    jrc_links %>% filter(!IS_COOP) %>% select(intersect(colnames(potential), colnames(jrc_links))),
+    by = intersect(colnames(potential), colnames(jrc_links)), multiple = "all")
 
-# not all actual links are retrieved in the spatial join, for 2 reasons probably: 
-# - the threshold is not the max distance, but there's still a diff when using the max   
-# - the distance is to grid cell centroids here. 
-# but it's surprising there is such a difference... 
+names(potential_all)
+if(nrow(potential_all) != nrow(potential) + nrow(filter(jrc_links, !IS_COOP))){stop("some rows were unexpectedly matched")}
 
 
 # MAKE VARIABLES ----------------
 
 ## Number of potential coops -------- 
 # was computed above (N_BS_WITHIN_DIST), because useful in a test. 
-potential$N_BS_WITHIN_DIST %>% summary()
+potential_all$N_BS_WITHIN_DIST %>% summary()
 
 
 ## Compute distances -------------
+# From the cell centroid to all intermediaries potentially linked. 
 # st_distance needs to work on same size df. 
 
 # this does not have the full grid anymore, but only grid cells with at least one potential link 
 only_potential_ctoid = 
   # give back grid cell centroid coordinates
-  grid_sf %>% 
-  mutate(geometry = st_centroid(geometry)) %>% 
+  grid_ctoid %>% 
   inner_join(
-    potential, 
+    potential_all, 
     by = "GRID_ID", 
     multiple = "all"
   ) %>% 
   filter(N_BS_WITHIN_DIST > 0)
-nrow(potential) != nrow(only_potential_ctoid)
+nrow(potential_all) != nrow(only_potential_ctoid)
 
 if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
    anyNA(only_potential_ctoid$BS_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
@@ -451,17 +475,17 @@ only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <-
   st_distance(only_potential_ctoid, potential_bspt, by_element = TRUE) %>% as.numeric()
 
 # merge back to the full grid
-(init_nrow <- nrow(potential))
-potential = 
-  potential %>% 
+(init_nrow <- nrow(potential_all))
+potential_all = 
+  potential_all %>% 
   left_join(only_potential_ctoid %>% 
               select(GRID_ID, ACTUAL_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
               st_drop_geometry(), 
             by = c("GRID_ID", "ACTUAL_LINK_ID", "POTENTIAL_COOP_BS_ID"))
-if(init_nrow != nrow(potential)){stop("rows added unexpectedly")}
+if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
 
 # In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
-potential %>% 
+potential_all %>% 
   mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
     POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID ~ POTENTIAL_LINK_DISTANCE_METERS - LINK_DISTANCE_METERS,
     TRUE ~ NA
@@ -469,10 +493,99 @@ potential %>%
   pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
 
 
+## District -----------
+# Use the full shapefile of departements, and not only cocoa departements here, 
+# because there are grid cells in no-cocoa departements. 
+grid_distr =
+  grid_ctoid %>% 
+  st_join(departements %>% select(DISTRICT_GEOCODE = LVL_4_CODE, DISTRICT_NAME = LVL_4_NAME),
+          join = st_intersects) %>% 
+  st_drop_geometry() 
+
+if(nrow(grid_distr) != nrow(grid_ctoid)){stop("the spatial join matches several districts with one grid cell")}
+
+potential_all = 
+  potential_all %>% 
+  left_join(grid_distr, 
+            by = "GRID_ID")
+
+## Number of coops in district -------------
+
+(n_coops_dpt = 
+  coopbs %>% 
+  filter(!is.na(DISTRICT_GEOCODE)) %>% 
+  summarise(.by = c(DISTRICT_GEOCODE, DISTRICT_NAME), 
+            N_COOP_IN_DPT = length(na.omit(unique(COOP_ID)))) %>% 
+  arrange(desc(N_COOP_IN_DPT)))
+
+sum(n_coops_dpt$N_COOP_IN_DPT)
+
+potential_all = 
+  potential_all %>% 
+  left_join(n_coops_dpt, 
+            by = "DISTRICT_GEOCODE")
+
+## IC2B variables -------------
+
+# Currently, we ALLOW NA VALUES in IC2B variables
+
+potential_coopbs = 
+  coopbs %>% 
+  mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
+         COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
+         
+         TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
+         CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
+
+         # characterize certifications
+         COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
+         
+         # this removes NAs because grepl("RA", NA) -> FALSE
+         COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+         # detail certification
+         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+         UTZ = grepl("UTZ", CERTIFICATIONS),
+         FT = grepl("FAIRTRADE", CERTIFICATIONS),
+         COOP_ONLY_RFA = RFA & !UTZ & !FT,
+         COOP_ONLY_UTZ = !RFA & UTZ & !FT,
+         COOP_ONLY_FT  = !RFA & !UTZ & FT,
+         COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
+         COOP_RFA_AND_FT  = RFA & !UTZ & FT,
+         COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
+         COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+         
+         COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         
+         # characterize buyers
+         COOP_N_KNOWN_BUYERS = case_when(
+           !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
+           TRUE ~ 0
+         )) %>% 
+           
+  rename(COOP_FARMERS = TOTAL_FARMERS,
+         COOP_ABRVNAME = SUPPLIER_ABRVNAME, 
+         COOP_FULLNAME = SUPPLIER_FULLNAME, 
+         COOP_BUYERS = TRADER_NAMES, 
+         COOP_CERTIFICATIONS = CERTIFICATIONS) %>% 
+  select(starts_with("COOP_"))
+  
+# names(potential_coopbs)
+# coopbs %>% 
+#   filter(!is.na(BS_LONGITUDE)) %>% 
+#   pull(TOTAL_FARMERS) %>% summary()
+
+potential_all = 
+  potential_all %>% 
+  left_join(potential_coopbs, 
+            by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+
+
 ## Merge LU variables in grid cells -------------
 
 # These were computed in the grid, preserving the GRID_ID. 
 # au pire, on peut juste extraire dans la grid totale, et ne merger que les variables extraites, pas forcément la géométrie...
+
+
 
 
 # Switch geometry from the cell centroid to the polygon. - This takes ~15 minutes

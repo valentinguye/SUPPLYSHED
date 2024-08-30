@@ -48,12 +48,16 @@ choices = read_xlsx(here("input_data", "sustain_cocoa", "surveys_civ", "ref_surv
                   col_names = TRUE) 
 
 # IC2B (private) 
-# filter to 2023 because we need a cross-section and it's the year when survey data was collected
+# filter to 2021 because we need a cross-section and it's the year when survey data is valid for 
+# and there is almost only 1-1 matches between surveyed and IC2B coops in 2021, while there are 
+# many 1-multiple matches with IC2B 2022 or later. It is resolved anyway by a closest BS condition, 
+# but it's probably just more correct to match before many homonym coops are "created". 
+
 # ic2b = read.csv(here("input_data", "dataverse_files", "IC2B_coopyear.csv")) %>% 
 coopbs <- 
   read.csv(
     file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) %>% 
-  filter(YEAR == 2023) 
+  filter(YEAR == 2021) 
   
 
 # Departements (districts)
@@ -259,7 +263,7 @@ nrow(vil_bs_closestbs)
 
 toexport = 
   vil_bs_closestbs %>% 
-  mutate(YEAR = 2023, 
+  mutate(YEAR = 2021, 
          DATA_SOURCE = "SUSTAINCOCOA",
          PRO_ID = paste0("SUSTAINCOCOA_VILLAGE_",VILLAGE_SURVEY_ID)) %>% 
   select(YEAR, PRO_ID, COOP_BS_ID, 
@@ -276,6 +280,72 @@ write_csv(toexport,
           append = FALSE, 
           col_names = TRUE)
 
+## Export with more variables 
+
+potential_coopbs = 
+  coopbs %>% 
+  mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
+         COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
+         
+         TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
+         DISCLOSURE_SOURCES = if_else(DISCLOSURE_SOURCES == "" | DISCLOSURE_SOURCES == " ", NA, DISCLOSURE_SOURCES),
+         CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
+         
+         # characterize certifications
+         COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
+         
+         # this removes NAs because grepl("RA", NA) -> FALSE
+         COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+         # detail certification
+         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+         UTZ = grepl("UTZ", CERTIFICATIONS),
+         FT = grepl("FAIRTRADE", CERTIFICATIONS),
+         COOP_ONLY_RFA = RFA & !UTZ & !FT,
+         COOP_ONLY_UTZ = !RFA & UTZ & !FT,
+         COOP_ONLY_FT  = !RFA & !UTZ & FT,
+         COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
+         COOP_RFA_AND_FT  = RFA & !UTZ & FT,
+         COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
+         COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+         
+         COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
+         
+         # characterize buyers
+         COOP_N_KNOWN_BUYERS = case_when(
+           !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
+           TRUE ~ 0
+         )) %>% 
+  
+  rename(COOP_N_FARMERS = TOTAL_FARMERS,
+         COOP_ABRVNAME = SUPPLIER_ABRVNAME, 
+         COOP_FULLNAME = SUPPLIER_FULLNAME, 
+         COOP_KNOWN_BUYERS = TRADER_NAMES, 
+         COOP_DISCLOSURE_SOURCES = DISCLOSURE_SOURCES,
+         COOP_KNOWN_CERTIFICATIONS = CERTIFICATIONS 
+         # COOP_BS_LONGITUDE = LONGITUDE,
+         # COOP_BS_LATITUDE = LATITUDE
+         ) %>% 
+  select(starts_with("COOP_"), -COOP_POINT_ID)
+
+toexport_2 = 
+  vil_bs_closestbs %>% 
+  mutate(PRODUCER_BS_DISTANCE_METERS = as.numeric(LINK_DISTANCE_METERS)) %>% 
+  left_join(potential_coopbs, 
+            by = "COOP_BS_ID") %>% 
+  select(starts_with("COOP_"),
+         BS_LONGITUDE, BS_LATITUDE,
+         PRODUCER_BS_DISTANCE_METERS, 
+         PRODUCER_LONGITUDE = PRO_LONGITUDE,
+         PRODUCER_LATITUDE = PRO_LATITUDE,
+         everything())
+
+toexport_2$COOP_DISCLOSURE_SOURCES %>% unique()
+
+write_csv(toexport_2,
+          file = here("temp_data", "preprocessed_sustain_cocoa", "sustaincocoa-privateIC2B_merge.csv"),
+          na = "NA", 
+          append = FALSE, 
+          col_names = TRUE)
 
 ### Traitants --------
 nrow(vil)
