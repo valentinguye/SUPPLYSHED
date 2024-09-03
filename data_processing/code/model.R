@@ -18,14 +18,17 @@ library(kableExtra)
 library(here)
 library(readstata13)
 library(sjmisc)
-library(terra)
+library(terra) # put it after {raster} such that it superceeds homonym functions. 
+library(exactextractr)
 library(stars)
+
+dir.create("temp_data", "coopbs_10km_buffer") # not use currently
+dir.create(here("temp_data", "terrain"))
 
 
 # Assets and functions -----------------------------------------------------
 # use the projected CRS used by BNETD for their 2020 land use map. 
 civ_crs <- 32630
-
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
@@ -52,9 +55,11 @@ jrc_links_coops =
 sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
 
 departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
-
+init_crs = st_crs(departements)
 departements = 
   st_transform(departements, crs = civ_crs)
+end_crs = st_crs(departements)
+
 
 # Production per department estimated by Trase
 production_dpt =
@@ -75,6 +80,38 @@ summary(production_dpt)
 # BNETD LAND USE MAP FOR 2020
 civlu = rast(here("input_data", "BNETD", "Raster13082024", "Raster", "ocs2020.tif"))
 
+# TERRAIN
+tri = rast(here("input_data/terrain/tri/tri.txt"))
+tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
+
+
+# Prepare coop location/buffer ---------------
+coopbsy$YEAR %>% summary()
+
+coopbs = 
+  coopbsy %>% 
+  filter(YEAR == latest_survey_year)
+#   distinct(COOP_BS_ID, .keep_all = TRUE)
+
+coopbs_sf = 
+  coopbs %>% 
+  filter(!is.na(BS_LONGITUDE)) %>% 
+  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(crs = civ_crs) 
+
+# coopbs_buffered_sf =
+#   coopbs_sf %>%
+#   st_buffer(dist = dist_meters_threshold)
+
+# Extract terrain/LU in smaller buffers than the 90%+ threshold, to have meaningful variation
+coopbs_10km_buffer =
+  coopbs_sf %>%
+  st_buffer(dist = 10*1e3) %>% 
+  select(COOP_BS_ID) %>% 
+  st_transform(crs = crs(tri))
+
+# export to GEE and re-import here - not anymore, we do it in R only now.   
+# write_sf(coopbs_10km_buffer, "temp_data/coopbs_10km_buffer/coopbs_10km_buffer.shp")
 
 # CONSOLIDATE LINK DATA ---------------------
 
@@ -170,36 +207,10 @@ consol =
 summary(consol$LINK_DISTANCE_METERS)
 sd(consol$LINK_DISTANCE_METERS[consol$LINK_DISTANCE_METERS], na.rm = TRUE)
 
-# COOP BUFFERS ---------------
-coopbsy$YEAR %>% summary()
 
-coopbs = 
-  coopbsy %>% 
-  filter(YEAR == latest_survey_year)
-#   distinct(COOP_BS_ID, .keep_all = TRUE)
-
-coopbs_sf = 
-  coopbs %>% 
-  filter(!is.na(BS_LONGITUDE)) %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
-  st_transform(crs = civ_crs) 
-
-# coopbs_buffered_sf = 
-#   coopbs %>% 
-#   filter(!is.na(BS_LONGITUDE)) %>% 
-#   st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
-#   st_transform(crs = civ_crs) %>% 
-#   st_buffer(dist = dist_meters_threshold)
-
-  
-# EXTRACT IN COOP BUFFERS ------------
-  
-# export to GEE and re-import here.  
-  
-  
 # DEPLOY MODEL STRUCTURE -----------------
 
-## Grid base -----------
+## Set spatial parameters ------------
 # The size of the grid is an important parameter. 
 # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
 # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
@@ -215,16 +226,62 @@ cocoa_departements =
 
 plot(cocoa_departements[,"AVG_COCOA_PRODUCTION_TONNES"])
 
+grid_extent = ext(cocoa_departements)
+grid_extent_geod = project(grid_extent, from = paste0("epsg:",civ_crs), to = "epsg:4326")
+grid_crs = crs(cocoa_departements)
+
+
+## Grid base -----------
+
 # Make a terra template, just because I found how to do it before I found with stars.  
-(grid_sr = rast(extent = ext(cocoa_departements), 
+(grid_sr = rast(extent = grid_extent, 
                 resolution = grid_size_m,
-                crs = crs(cocoa_departements))
+                crs = grid_crs)
 )
 
+## Grid-level variables -------------------
+ # (do here so these vars are more clearly embedded in the grid, without dependence on cell ID attribution)
+
+### Terrain ------------
+# Do only Terrain Ruggedness Index for now
+
+grid_extent_tricrs = project(grid_extent, from = paste0("epsg:",civ_crs), to = crs(tri))
+
+tri_civ = 
+  tri %>% 
+  crop(grid_extent_tricrs)
+
+tri_project_filename = paste0("tri_civ_bnetdproj_", grid_size_m*1e-3,"km.tif")
+
+project(x = tri_civ, 
+        y = grid_sr,
+        align = FALSE, # (the default) not necessary if cropped prior
+        method = "average",
+        threads = TRUE,
+        filename = here("temp_data", "terrain", tri_project_filename), 
+        overwrite = TRUE)
+
+grid_tri = rast(here("temp_data", "terrain", tri_project_filename))
+
+
+### Land use --------------
+
+
+### Suitability --------------
+
+
+
 # Convert to stars
-grid_st = st_as_stars(grid_sr)
+# grid_st = st_as_stars(grid_sr)
+grid_st = 
+  grid_tri %>% 
+  st_as_stars() %>% 
+  rename(TRI = all_of(tri_project_filename))
 
 ## Add actual links -------------
+
+
+
 
 # Spatialize actual links 
 consol_sf = 
@@ -238,7 +295,8 @@ consol_sf =
   st_xy2sfc(as_points = FALSE, na.rm = FALSE) %>% # as_points = F outputs grid cells as polygons
   st_as_sf() %>% 
   mutate(GRID_ID = row_number()) %>% 
-  select(-lyr.1))
+   select(GRID_ID, TRI) #,-lyr.1
+  )
 
 # and the same object, but with cell centroid geometry
 grid_ctoid = 
@@ -439,13 +497,13 @@ names(potential_all)
 if(nrow(potential_all) != nrow(potential) + nrow(filter(jrc_links, !IS_COOP))){stop("some rows were unexpectedly matched")}
 
 
-# MAKE VARIABLES ----------------
+# ADD VARIABLES ----------------
 
 ## Number of potential coops -------- 
 # was computed above (N_BS_WITHIN_DIST), because useful in a test. 
 potential_all$N_BS_WITHIN_DIST %>% summary()
 
-
+ 
 ## Compute distances -------------
 # From the cell centroid to all intermediaries potentially linked. 
 # st_distance needs to work on same size df. 
@@ -580,7 +638,62 @@ potential_all =
             by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
 
-## Merge LU variables in grid cells -------------
+## Terrain in BS buffers -------------
+# tri = rast(here("input_data/terrain/tri/tri.txt"))
+# writeRaster(tri, here("temp_data", "terrain", "tri.tif"))
+
+# tri_coopbs_10km_buffer = 
+#   read.csv(here("input_data/GEE/tri_coopbs_10km_buffer.csv")) %>% 
+#   as_tibble() %>%   
+#   select(COOP_BS_ID, 
+#          COOP_BS_10KM_TRI = tri)
+dir_tri = here("temp_data", "terrain", "tri_coopbs_10km_buffer.geojson")
+
+if(!file.exists(dir_tri)){
+  # This takes ~15min
+  tri_coopbs_10km_buffer = 
+    exact_extract(x = tri, 
+                  y = coopbs_10km_buffer, 
+                  append_cols = c("COOP_BS_ID"),
+                  fun = "weighted_mean", 
+                  weights = tri_area, 
+                  progress = TRUE)
+  
+  st_write(tri_coopbs_10km_buffer, dir_tri)
+  
+}else{
+  tri_coopbs_10km_buffer = st_read(dir_tri)
+}
+
+tri_coopbs_10km_buffer = 
+  rename(COOP_BS_10KM_TRI = weighted_mean)
+
+potential_all = 
+  potential_all %>% 
+  left_join(tri_coopbs_10km_buffer, 
+            by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+
+
+## Land use in BS buffers -------------
+# For land use, it was easier to do it in GEE.  
+coopbs_10km_buffer_lu = 
+  read.csv(here("input_data/GEE/bnetd_coopbs_10km_buffer.csv")) %>% 
+  as_tibble() %>%   
+  select(COOP_BS_ID, 
+         COOP_BS_10KM_COCOA_HA = cocoa, 
+         COOP_BS_10KM_STLMT_HA = settlements)
+
+potential_all = 
+  potential_all %>% 
+  left_join(coopbs_10km_buffer_lu, 
+            by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+
+
+plot(slope_civ)
+plot(st_geometry(cocoa_departements), add = T, alpha = 0.2)
+
+crs(slope_civ)
+crs(cocoa_departements)
 
 # These were computed in the grid, preserving the GRID_ID. 
 # au pire, on peut juste extraire dans la grid totale, et ne merger que les variables extraites, pas forcément la géométrie...

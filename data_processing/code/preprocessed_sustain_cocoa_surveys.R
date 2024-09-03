@@ -143,9 +143,12 @@ surv_coop_bs =
   inner_join(coopbs_tomatch, 
             by = join_by("COOP_SIMPLIF_ABRV_NAME" == "SIMPLIF_ABRVNAME"), 
             multiple = "all") # multiple matches are expected, coops have several buying stations in IC2B.
-  # MANY GOOD MATCHES SANS RIEN FAIRE. ON PEUT RESOUDRE CEUX RESTANTS MANUELLEMENT 
-  # THE MULTIPLE MATCHES ARE DUE TO HOMONYMS IN ABBREVIATED DATA. SEE IF FEDE HAS SOMETHING TO SHARE TO HELP RESOLVE
-  # OTHERWISE, RESOLVE by applying a distance threshold below, hardcoding a percentile from the other data sources.  
+
+# Options to handle multiple matches (homonyms in abbreviated names)
+# - resolve manually
+# - apply distance threshold
+# - apply nearest match 
+# Currently we do nearest match. 
 
 coopbs_tomatch$COOP_BS_ID %>% unique() %>% length()
 surv_coop_bs$COOP_BS_ID %>% unique() %>% length()
@@ -200,7 +203,7 @@ sfvil_bs <- st_join(sfvil_bs,
                    departements[,c("LVL_4_CODE", "LVL_4_NAME")],
                    join = st_intersects) 
 
-
+## Make distance var ------------
 
 # start from the above, not the merger
 vil_sfbs = 
@@ -222,7 +225,6 @@ ggplot()+
   geom_sf(data = vil_sfbs, col="black")  +
   geom_sf(data = departements, fill = "transparent")
 
-## Make distance var ------------
 vil_sfbs$LINK_DISTANCE_METERS <- 
   st_distance(sfvil_bs, vil_sfbs, by_element = TRUE)
 
