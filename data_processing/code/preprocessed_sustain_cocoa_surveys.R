@@ -176,8 +176,8 @@ coopbs_tomatch =
 #  To give IC2B attributes (at bs-level) to survey coop data 
 vil_links_bs = 
   vil_links %>% 
-  # left_join because we want to keep links with other buyers than coops. 
-  left_join(coopbs_tomatch, 
+  # inner_join to work only on links with coops
+  inner_join(coopbs_tomatch, 
              by = join_by("COOP_SIMPLIF_ABRV_NAME" == "SIMPLIF_ABRVNAME"), 
              multiple = "all") # multiple matches are expected, coops have several buying stations in IC2B.
 
@@ -202,19 +202,11 @@ vil_links_bs %>%
          BS_LONGITUDE, BS_LATITUDE) %>% 
   View()
 
-# Remove links with a coop but not matched to IC2B
-# i.e. keep only links with an IC2B buying station or another buyer than a coop. 
-nrow(vil_links)
-nrow(vil_links_bs)
-vil_links_bs = 
-  vil_links_bs %>% 
-  filter(!(!is.na(COOP_SIMPLIF_ABRV_NAME) & is.na(COOP_BS_ID)))
-nrow(vil_links_bs)
-
-# this removes 83 links and 15 villages 
+# not all villages have a link with at least 1 bs
 vil_links_bs$VILLAGE_SURVEY_ID %>% unique() %>% length()
 vil_links$VILLAGE_SURVEY_ID %>% unique() %>% length()
 vil$VILLAGE_SURVEY_ID %>% unique() %>% length()
+
 
 # Spatialize -----------
 
@@ -281,36 +273,55 @@ vil_links_bs =
   vil_links_sfbs %>% 
   st_drop_geometry()
 
-vil$VILLAGE_SURVEY_ID %>% unique() %>% length() == nrow(vil)
+# vil$VILLAGE_SURVEY_ID %>% unique() %>% length() == nrow(vil)
 
+
+# Keep closest BS / homonym coop ---------------
 # For a given village, keep only the closest buying station of the closest coop among the possibly several 
-# buying stations and possibly several coops matched based on the abbreviated name, 
-vil_links_bs_closestbs =
+# buying stations (of possibly different coops) having the same abbreviated name
+# So leave the closest abbreviated name of every village 
+vil_links_closestbs =
   vil_links_bs %>% 
-  group_by(VILLAGE_SURVEY_ID) %>% 
-  mutate(SMALLEST_DIST = min(LINK_DISTANCE_METERS)) %>% 
+  group_by(VILLAGE_SURVEY_ID, COOP_ABRV_NAME) %>% 
+  mutate(SMALLEST_DIST = min(LINK_DISTANCE_METERS),
+         LINK_ID = cur_group_id()) %>% 
   ungroup() %>% 
   filter(LINK_DISTANCE_METERS == SMALLEST_DIST)
 
-# check that this goes back to one row per village 
-vil_links_bs_closestbs$VILLAGE_SURVEY_ID %>% unique() %>% length() 
-nrow(vil_links_bs_closestbs) 
+# check that this goes back to one row per village-abrv name link 
+if(vil_links_closestbs$LINK_ID %>% unique() %>% length() != nrow(vil_links_closestbs)){
+  stop("unexpected structure")
+}
+
+
 # vil_links_bs %>% 
 #   filter(VILLAGE_SURVEY_ID==15) %>% 
 #   distinct()
 # there is one remaining duplicate on everything, I don't understand why. I move on. 
-vil_links_bs_closestbs = 
-  vil_links_bs_closestbs %>% 
+vil_links_closestbs = 
+  vil_links_closestbs %>% 
   distinct(VILLAGE_SURVEY_ID, .keep_all = TRUE)
 
-vil_links_bs_closestbs$VILLAGE_SURVEY_ID %>% unique() %>% length() 
-nrow(vil_links_bs_closestbs) 
+vil_links_closestbs$VILLAGE_SURVEY_ID %>% unique() %>% length() 
+nrow(vil_links_closestbs) 
+
+
+# Add links with other buyers than coops... would be here but it's only 5 obs. so don't bother for now. 
+# Identify these links
+vil_otherlinks = 
+  vil_links %>% 
+  filter(is.na(COOP_ABRV_NAME))
+
+vil_otherlinks$village_cocoa_buyer %>% unique()
+vil_otherlinks$VILLAGE_SURVEY_ID %>% unique() %>% length()
+# it's only five villages that don't sell to a coop at all. 
+
 
 
 # Export ----
 
 toexport = 
-  vil_links_bs_closestbs %>% 
+  vil_links_closestbs %>% 
   mutate(YEAR = 2021, 
          DATA_SOURCE = "SUSTAINCOCOA",
          PRO_ID = paste0("SUSTAINCOCOA_VILLAGE_",VILLAGE_SURVEY_ID)) %>% 
