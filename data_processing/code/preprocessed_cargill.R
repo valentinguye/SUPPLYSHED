@@ -234,6 +234,7 @@ carg_pt_bs$LINK_DISTANCE_METERS <-
   st_distance(carg_sfpt_bs, carg_pt_sfbs, by_element = TRUE)
 
 # Keep only the closest buying station of the linked coop, from a given farm, i.e. across matched buying stations, which are all of the same coop.  
+# (this is ok to group just by farmer, because the info Cargill gives is a single coop that every farmer supplies.)
 carg_pt_closestbs =
   carg_pt_bs %>% 
   group_by(FARMER_COD) %>% 

@@ -284,23 +284,27 @@ vil_links_closestbs =
   vil_links_bs %>% 
   group_by(VILLAGE_SURVEY_ID, COOP_ABRV_NAME) %>% 
   mutate(SMALLEST_DIST = min(LINK_DISTANCE_METERS),
-         LINK_ID = cur_group_id()) %>% 
+         LINK_ID = cur_group_id(), 
+         IS_CLOSEST_DUPLI = duplicated(SMALLEST_DIST),
+         ANY_CLOSEST_DUPLI = anyDuplicated(SMALLEST_DIST)) %>% 
   ungroup() %>% 
-  filter(LINK_DISTANCE_METERS == SMALLEST_DIST)
+  filter(LINK_DISTANCE_METERS == SMALLEST_DIST) %>% 
+  # remove the two links (72 and 73) where there are still conflicts that we cannot resolve 
+  filter(!LINK_ID %in% c(72, 73))
+
+# vil_links_closestbs %>% 
+#   select(LINK_ID, SMALLEST_DIST, ANY_CLOSEST_DUPLI, 
+#          COOP_ID, COOP_POINT_ID, COOP_BS_ID, VILLAGE_SURVEY_ID,
+#          COOP_ABRV_NAME, 
+#          SUPPLIER_ABRVNAME, COOP_SIMPLIF_ABRV_NAME, SUPPLIER_FULLNAME, 
+#          BS_LONGITUDE, BS_LATITUDE) %>% 
+#   arrange(desc(LINK_ID), desc(SMALLEST_DIST)) %>% 
+#   View()
 
 # check that this goes back to one row per village-abrv name link 
 if(vil_links_closestbs$LINK_ID %>% unique() %>% length() != nrow(vil_links_closestbs)){
   stop("unexpected structure")
 }
-
-
-# vil_links_bs %>% 
-#   filter(VILLAGE_SURVEY_ID==15) %>% 
-#   distinct()
-# there is one remaining duplicate on everything, I don't understand why. I move on. 
-vil_links_closestbs = 
-  vil_links_closestbs %>% 
-  distinct(VILLAGE_SURVEY_ID, .keep_all = TRUE)
 
 vil_links_closestbs$VILLAGE_SURVEY_ID %>% unique() %>% length() 
 nrow(vil_links_closestbs) 
@@ -315,7 +319,6 @@ vil_otherlinks =
 vil_otherlinks$village_cocoa_buyer %>% unique()
 vil_otherlinks$VILLAGE_SURVEY_ID %>% unique() %>% length()
 # it's only five villages that don't sell to a coop at all. 
-
 
 
 # Export ----
@@ -387,7 +390,7 @@ potential_coopbs =
   select(starts_with("COOP_"), -COOP_POINT_ID)
 
 toexport_2 = 
-  vil_bs_closestbs %>% 
+  vil_links_closestbs %>% 
   mutate(PRODUCER_BS_DISTANCE_METERS = as.numeric(LINK_DISTANCE_METERS)) %>% 
   left_join(potential_coopbs, 
             by = "COOP_BS_ID") %>% 
@@ -430,9 +433,4 @@ vil =
 
 nrow(vil)
 
-
-links =
-  left_join(vil, 
-            surv_coop, 
-            by = "VILLAGE_SURVEY_ID") 
 

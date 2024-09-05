@@ -24,7 +24,7 @@ library(stars)
 
 dir.create("temp_data", "coopbs_10km_buffer") # not use currently
 dir.create(here("temp_data", "terrain"))
-
+dir.create(here("temp_data", "BNETD"))
 
 # Assets and functions -----------------------------------------------------
 # use the projected CRS used by BNETD for their 2020 land use map. 
@@ -84,34 +84,9 @@ civlu = rast(here("input_data", "BNETD", "Raster13082024", "Raster", "ocs2020.ti
 tri = rast(here("input_data/terrain/tri/tri.txt"))
 tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
 
+# LAND USE 
+bnetd = rast(here("input_data/GEE/BNETD_binary_cocoa_settlements_3km.tif"))
 
-# Prepare coop location/buffer ---------------
-coopbsy$YEAR %>% summary()
-
-coopbs = 
-  coopbsy %>% 
-  filter(YEAR == latest_survey_year)
-#   distinct(COOP_BS_ID, .keep_all = TRUE)
-
-coopbs_sf = 
-  coopbs %>% 
-  filter(!is.na(BS_LONGITUDE)) %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
-  st_transform(crs = civ_crs) 
-
-# coopbs_buffered_sf =
-#   coopbs_sf %>%
-#   st_buffer(dist = dist_meters_threshold)
-
-# Extract terrain/LU in smaller buffers than the 90%+ threshold, to have meaningful variation
-coopbs_10km_buffer =
-  coopbs_sf %>%
-  st_buffer(dist = 10*1e3) %>% 
-  select(COOP_BS_ID) %>% 
-  st_transform(crs = crs(tri))
-
-# export to GEE and re-import here - not anymore, we do it in R only now.   
-# write_sf(coopbs_10km_buffer, "temp_data/coopbs_10km_buffer/coopbs_10km_buffer.shp")
 
 # CONSOLIDATE LINK DATA ---------------------
 
@@ -181,31 +156,65 @@ if(consol$ACTUAL_LINK_ID %>% unique() %>% length() != nrow(consol)){stop()}
 #   View()
 
 
-# LINK STATS ----------------
+# ACTUAL LINK STATS ----------------
+# follow model prefix guidelines 
+consol = 
+  consol %>% 
+  rename(ACTUAL_LINK_DISTANCE_METERS = LINK_DISTANCE_METERS)
 
 # Latest surveyed year, to take the panel of coops at this time.  
 latest_survey_year = max(consol$YEAR, na.rm = TRUE)
 latest_survey_year
 
 # Distance producer - intermediary 
-summary(consol$LINK_DISTANCE_METERS)
+summary(consol$ACTUAL_LINK_DISTANCE_METERS)
 
-dist_outliers = boxplot.stats(consol$LINK_DISTANCE_METERS, coef = 2)$out %>% sort()
+dist_outliers = boxplot.stats(consol$ACTUAL_LINK_DISTANCE_METERS, coef = 2)$out %>% sort()
 consol = 
   consol %>% 
-  mutate(LINK_DISTANCE_METERS = case_when(
-    LINK_DISTANCE_METERS %in% dist_outliers ~ NA,
-    TRUE ~ LINK_DISTANCE_METERS
+  mutate(ACTUAL_LINK_DISTANCE_METERS = case_when(
+    ACTUAL_LINK_DISTANCE_METERS %in% dist_outliers ~ NA,
+    TRUE ~ ACTUAL_LINK_DISTANCE_METERS
   ))
 
-(dist_meters_90pctl = quantile(consol$LINK_DISTANCE_METERS, 0.9, na.rm = T) %>% round(-3))
-(dist_meters_95pctl = quantile(consol$LINK_DISTANCE_METERS, 0.95, na.rm = T) %>% round(-3))
-(dist_meters_max = quantile(consol$LINK_DISTANCE_METERS, 1, na.rm = T) %>% round(-3))
+(dist_meters_90pctl = quantile(consol$ACTUAL_LINK_DISTANCE_METERS, 0.9, na.rm = T) %>% round(-3))
+(dist_meters_95pctl = quantile(consol$ACTUAL_LINK_DISTANCE_METERS, 0.95, na.rm = T) %>% round(-3))
+(dist_meters_max = quantile(consol$ACTUAL_LINK_DISTANCE_METERS, 1, na.rm = T) %>% round(-3))
 
 (dist_meters_threshold <- dist_meters_95pctl)
 
-summary(consol$LINK_DISTANCE_METERS)
-sd(consol$LINK_DISTANCE_METERS[consol$LINK_DISTANCE_METERS], na.rm = TRUE)
+summary(consol$ACTUAL_LINK_DISTANCE_METERS)
+sd(consol$ACTUAL_LINK_DISTANCE_METERS[consol$ACTUAL_LINK_DISTANCE_METERS], na.rm = TRUE)
+
+
+
+# Prepare coop location/buffer ---------------
+coopbsy$YEAR %>% summary()
+
+coopbs = 
+  coopbsy %>% 
+  filter(YEAR == latest_survey_year)
+#   distinct(COOP_BS_ID, .keep_all = TRUE)
+
+coopbs_sf = 
+  coopbs %>% 
+  filter(!is.na(BS_LONGITUDE)) %>% 
+  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(crs = civ_crs) 
+
+# coopbs_buffered_sf =
+#   coopbs_sf %>%
+#   st_buffer(dist = dist_meters_threshold)
+
+# Extract terrain/LU in smaller buffers than the 90%+ threshold, to have meaningful variation
+coopbs_10km_buffer =
+  coopbs_sf %>%
+  st_buffer(dist = 10*1e3) %>% 
+  select(COOP_BS_ID) %>% 
+  st_transform(crs = crs(tri))
+
+# export to GEE and re-import here - not anymore, we do it in R only now.   
+# write_sf(coopbs_10km_buffer, "temp_data/coopbs_10km_buffer/coopbs_10km_buffer.shp")
 
 
 # DEPLOY MODEL STRUCTURE -----------------
@@ -251,20 +260,43 @@ tri_civ =
   tri %>% 
   crop(grid_extent_tricrs)
 
-tri_project_filename = paste0("tri_civ_bnetdproj_", grid_size_m*1e-3,"km.tif")
+tri_project_filename = paste0("tri_modelgrid_", grid_size_m*1e-3,"km.tif")
 
-project(x = tri_civ, 
-        y = grid_sr,
-        align = FALSE, # (the default) not necessary if cropped prior
-        method = "average",
-        threads = TRUE,
-        filename = here("temp_data", "terrain", tri_project_filename), 
-        overwrite = TRUE)
+if(!file.exists(here("temp_data", "terrain", tri_project_filename))){
+  project(x = tri_civ, 
+          y = grid_sr,
+          align = FALSE, # (the default) not necessary if cropped prior
+          method = "average",
+          threads = TRUE,
+          filename = here("temp_data", "terrain", tri_project_filename), 
+          overwrite = TRUE)
+}
 
 grid_tri = rast(here("temp_data", "terrain", tri_project_filename))
 
+plot(grid_tri)
+plot(st_geometry(departements), add = TRUE)
 
 ### Land use --------------
+# we want to align exactly the GEE aggregate of BNETD raw data (10m) into 1km, to the grid base set here.   
+bnetd
+grid_sr
+
+bnetd_project_filename = paste0("bnetd_modelgrid_", grid_size_m*1e-3,"km.tif")
+
+if(!file.exists(here("temp_data", "BNETD", bnetd_project_filename))){
+  terra::resample(x = bnetd, 
+                  y = grid_sr,
+                  method = "sum", # sum bc values in ha
+                  threads = TRUE,
+                  filename = here("temp_data", "BNETD", bnetd_project_filename), 
+                  overwrite = TRUE)
+}
+
+grid_lu = rast(here("temp_data", "BNETD", bnetd_project_filename))
+
+plot(grid_lu$cocoa)
+plot(st_geometry(departements), add = TRUE)
 
 
 ### Suitability --------------
@@ -272,16 +304,18 @@ grid_tri = rast(here("temp_data", "terrain", tri_project_filename))
 
 
 # Convert to stars
+
 # grid_st = st_as_stars(grid_sr)
 grid_st = 
-  grid_tri %>% 
-  st_as_stars() %>% 
-  rename(TRI = all_of(tri_project_filename))
+  c(grid_lu, grid_tri) %>% 
+  st_as_stars(ignore_file = TRUE, 
+              as_attributes = TRUE) %>% 
+  rename(CELL_COCOA_HA = cocoa, 
+         CELL_SETTLEMENT_HA = settlements,
+         CELL_TRI_MM = tri) # tri is in millimeters in Nunn & Puga data. 
+
 
 ## Add actual links -------------
-
-
-
 
 # Spatialize actual links 
 consol_sf = 
@@ -294,8 +328,8 @@ consol_sf =
   grid_st %>% 
   st_xy2sfc(as_points = FALSE, na.rm = FALSE) %>% # as_points = F outputs grid cells as polygons
   st_as_sf() %>% 
-  mutate(GRID_ID = row_number()) %>% 
-   select(GRID_ID, TRI) #,-lyr.1
+  mutate(CELL_ID = row_number()) %>% 
+   select(CELL_ID, CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_TRI_MM) #,-lyr.1
   )
 
 # and the same object, but with cell centroid geometry
@@ -325,7 +359,7 @@ grid_actual$ACTUAL_LINK_ID %>% summary()
 
 # and this is the distribution of unique actual links by grid cell
 grid_actual %>% 
-  group_by(GRID_ID) %>% 
+  group_by(CELL_ID) %>% 
   mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(na.omit(ACTUAL_LINK_ID)))) %>% 
   ungroup() %>% 
   pull(N_UNIQUE_ACTUAL_LINKS_BYGRID) %>% summary()
@@ -361,7 +395,7 @@ potential =
     YEAR = NA, 
     PRO_ID = NA, 
     ACTUAL_COOP_BS_ID = NA, 
-    LINK_DISTANCE_METERS = NA, 
+    ACTUAL_LINK_DISTANCE_METERS = NA, 
     PRO_LONGITUDE = NA, 
     PRO_LATITUDE = NA, 
     ACTUAL_LINK_ID = NA
@@ -374,22 +408,22 @@ potential =
   mutate(IS_FROM_STJOIN = is.na(ACTUAL_LINK_ID)) %>% 
   # identify duplicated coop ids within a grid cell
   # make sure that ALL duplicates are found, regardless of order. 
-  group_by(GRID_ID) %>% 
+  group_by(CELL_ID) %>% 
   mutate(DUP_LINK = duplicated(POTENTIAL_COOP_BS_ID) | duplicated(POTENTIAL_COOP_BS_ID, fromLast = TRUE)) %>% 
   ungroup() %>% 
   # this identified duplicates including due to several actual links from this cell,
   # so remove rows that are duplicated coop ids, AND are from the spatial join, i.e. are not several actual links. 
   filter(!(DUP_LINK & IS_FROM_STJOIN)) %>% 
   # Number of reachable coops within a grid cell, regardless through how many links  
-  group_by(GRID_ID) %>% 
-  mutate(N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID)))) %>%  # use this, and not n(), for the variable to take value 0 when there's is no potential coop matched (i.e. potential link), rather than one row that has NA value 
+  group_by(CELL_ID) %>% 
+  mutate(CELL_N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID)))) %>%  # use this, and not n(), for the variable to take value 0 when there's is no potential coop matched (i.e. potential link), rather than one row that has NA value 
   ungroup() %>% 
   # identify grid cells with no actual link 
-  group_by(GRID_ID) %>% 
-  mutate(NO_ACTUAL_LINK = all(IS_FROM_STJOIN)) %>% 
+  group_by(CELL_ID) %>% 
+  mutate(CELL_NO_ACTUAL_LINK = all(IS_FROM_STJOIN)) %>% 
   ungroup() %>% 
   # OUTCOMe VARIABLE - is the link actual or virtual??? 
-  mutate(IS_LINK_ACTUAL = !is.na(ACTUAL_LINK_ID))
+  mutate(LINK_IS_ACTUAL = !is.na(ACTUAL_LINK_ID))
 
 # potential %>% 
 #   filter((DUP_LINK & IS_FROM_STJOIN)) %>% View()
@@ -419,13 +453,13 @@ grid_ctoid %>%
   ) %>%
   st_drop_geometry() %>% 
   rename(POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
-  summarise(.by = GRID_ID, 
-            N_BS_WITHIN_DIST = length(unique(POTENTIAL_COOP_BS_ID))) %>% 
+  summarise(.by = CELL_ID, 
+            CELL_N_BS_WITHIN_DIST = length(unique(POTENTIAL_COOP_BS_ID))) %>% 
   inner_join(potential %>% 
-              filter(NO_ACTUAL_LINK) %>% 
-              select(GRID_ID, N_BS_WITHIN_DIST), 
-            by = "GRID_ID") %>% 
-  mutate(PROBLEM = N_BS_WITHIN_DIST.x < N_BS_WITHIN_DIST.y) %>% 
+              filter(CELL_NO_ACTUAL_LINK) %>% 
+              select(CELL_ID, CELL_N_BS_WITHIN_DIST), 
+            by = "CELL_ID") %>% 
+  mutate(PROBLEM = CELL_N_BS_WITHIN_DIST.x < CELL_N_BS_WITHIN_DIST.y) %>% 
   filter(PROBLEM) %>% 
   nrow() > 0
 ){stop("stacking method producing a different number of potential links than the spatial join in cells with no actual link, which is unexpected.")} 
@@ -433,14 +467,14 @@ grid_ctoid %>%
 # So there should be as many none actual links , i.e. virtual links, as there are links from stjoin now 
 if(
   potential %>% 
-  filter(!IS_LINK_ACTUAL != IS_FROM_STJOIN) %>% 
+  filter(!LINK_IS_ACTUAL != IS_FROM_STJOIN) %>% 
   nrow() != 0
 ){stop("something is misunderstood")}
 
 # and there should not be any duplicated potential link within a grid and an actual link
 if(
 potential %>% 
-  group_by(GRID_ID, ACTUAL_LINK_ID) %>% 
+  group_by(CELL_ID, ACTUAL_LINK_ID) %>% 
   mutate(ANY_DUPL_COOP = any(duplicated(POTENTIAL_COOP_BS_ID))) %>% 
   ungroup() %>% 
   pull(ANY_DUPL_COOP) %>% any()
@@ -449,7 +483,7 @@ potential %>%
 # Another check: that POTENTIAL_COOP_BS_ID is NA only in grid cells with no link at all. 
 if(
 potential %>% 
-  group_by(GRID_ID) %>% 
+  group_by(CELL_ID) %>% 
   mutate(ANY_NA = any(is.na(POTENTIAL_COOP_BS_ID)), 
          ALL_NA = all(is.na(POTENTIAL_COOP_BS_ID))) %>% 
   ungroup() %>% 
@@ -477,7 +511,7 @@ if(
 
 # The number of distinct actual links within a grid cell. 
 # potential %>% 
-#   group_by(GRID_ID) %>% 
+#   group_by(CELL_ID) %>% 
 #   mutate(IS_EMPTY_GRID = length(unique(na.omit(POTENTIAL_LINKS_IN_GRID_SET_ID)))) %>% 
 #   ungroup() %>% 
 #   pull(IS_EMPTY_GRID) %>% summary()
@@ -500,8 +534,8 @@ if(nrow(potential_all) != nrow(potential) + nrow(filter(jrc_links, !IS_COOP))){s
 # ADD VARIABLES ----------------
 
 ## Number of potential coops -------- 
-# was computed above (N_BS_WITHIN_DIST), because useful in a test. 
-potential_all$N_BS_WITHIN_DIST %>% summary()
+# was computed above (CELL_N_BS_WITHIN_DIST), because useful in a test. 
+potential_all$CELL_N_BS_WITHIN_DIST %>% summary()
 
  
 ## Compute distances -------------
@@ -511,13 +545,13 @@ potential_all$N_BS_WITHIN_DIST %>% summary()
 # this does not have the full grid anymore, but only grid cells with at least one potential link 
 only_potential_ctoid = 
   # give back grid cell centroid coordinates
-  grid_ctoid %>% 
+  grid_ctoid %>% select(CELL_ID) %>%  
   inner_join(
     potential_all, 
-    by = "GRID_ID", 
+    by = "CELL_ID", 
     multiple = "all"
   ) %>% 
-  filter(N_BS_WITHIN_DIST > 0)
+  filter(CELL_N_BS_WITHIN_DIST > 0)
 nrow(potential_all) != nrow(only_potential_ctoid)
 
 if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
@@ -537,26 +571,27 @@ only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <-
 potential_all = 
   potential_all %>% 
   left_join(only_potential_ctoid %>% 
-              select(GRID_ID, ACTUAL_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
+              select(CELL_ID, ACTUAL_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
               st_drop_geometry(), 
-            by = c("GRID_ID", "ACTUAL_LINK_ID", "POTENTIAL_COOP_BS_ID"))
+            by = c("CELL_ID", "ACTUAL_LINK_ID", "POTENTIAL_COOP_BS_ID"))
 if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
 
 # In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
 potential_all %>% 
   mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
-    POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID ~ POTENTIAL_LINK_DISTANCE_METERS - LINK_DISTANCE_METERS,
+    POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID ~ POTENTIAL_LINK_DISTANCE_METERS - ACTUAL_LINK_DISTANCE_METERS,
     TRUE ~ NA
     )) %>% 
   pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
 
 
-## District -----------
+## Cell district -----------
+# Just easier to do that here rather than in grid-level above. 
 # Use the full shapefile of departements, and not only cocoa departements here, 
 # because there are grid cells in no-cocoa departements. 
 grid_distr =
-  grid_ctoid %>% 
-  st_join(departements %>% select(DISTRICT_GEOCODE = LVL_4_CODE, DISTRICT_NAME = LVL_4_NAME),
+  grid_ctoid %>% select(CELL_ID) %>%  
+  st_join(departements %>% select(CELL_DISTRICT_GEOCODE = LVL_4_CODE, CELL_DISTRICT_NAME = LVL_4_NAME),
           join = st_intersects) %>% 
   st_drop_geometry() 
 
@@ -565,7 +600,7 @@ if(nrow(grid_distr) != nrow(grid_ctoid)){stop("the spatial join matches several 
 potential_all = 
   potential_all %>% 
   left_join(grid_distr, 
-            by = "GRID_ID")
+            by = "CELL_ID")
 
 ## Number of coops in district -------------
 
@@ -580,8 +615,9 @@ sum(n_coops_dpt$N_COOP_IN_DPT)
 
 potential_all = 
   potential_all %>% 
-  left_join(n_coops_dpt, 
-            by = "DISTRICT_GEOCODE")
+  left_join(n_coops_dpt %>% select(CELL_N_COOP_IN_DPT = N_COOP_IN_DPT, # this is a cell level var
+                                   DISTRICT_GEOCODE), 
+            by = join_by(CELL_DISTRICT_GEOCODE == DISTRICT_GEOCODE))
 
 ## IC2B variables -------------
 
@@ -639,14 +675,7 @@ potential_all =
 
 
 ## Terrain in BS buffers -------------
-# tri = rast(here("input_data/terrain/tri/tri.txt"))
-# writeRaster(tri, here("temp_data", "terrain", "tri.tif"))
-
-# tri_coopbs_10km_buffer = 
-#   read.csv(here("input_data/GEE/tri_coopbs_10km_buffer.csv")) %>% 
-#   as_tibble() %>%   
-#   select(COOP_BS_ID, 
-#          COOP_BS_10KM_TRI = tri)
+# Extract directly here in R
 dir_tri = here("temp_data", "terrain", "tri_coopbs_10km_buffer.geojson")
 
 if(!file.exists(dir_tri)){
@@ -661,17 +690,26 @@ if(!file.exists(dir_tri)){
   
   st_write(tri_coopbs_10km_buffer, dir_tri)
   
-}else{
-  tri_coopbs_10km_buffer = st_read(dir_tri)
 }
+tri_coopbs_10km_buffer = st_read(dir_tri)
 
 tri_coopbs_10km_buffer = 
+  tri_coopbs_10km_buffer %>% 
   rename(COOP_BS_10KM_TRI = weighted_mean)
 
 potential_all = 
   potential_all %>% 
   left_join(tri_coopbs_10km_buffer, 
             by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+
+# This would have been the workflow with GEE
+# tri = rast(here("input_data/terrain/tri/tri.txt"))
+# writeRaster(tri, here("temp_data", "terrain", "tri.tif"))
+# tri_coopbs_10km_buffer = 
+#   read.csv(here("input_data/GEE/tri_coopbs_10km_buffer.csv")) %>% 
+#   as_tibble() %>%   
+#   select(COOP_BS_ID, 
+#          COOP_BS_10KM_TRI = tri)
 
 
 ## Land use in BS buffers -------------
@@ -681,36 +719,25 @@ coopbs_10km_buffer_lu =
   as_tibble() %>%   
   select(COOP_BS_ID, 
          COOP_BS_10KM_COCOA_HA = cocoa, 
-         COOP_BS_10KM_STLMT_HA = settlements)
+         COOP_BS_10KM_SETTLEMENT_HA = settlements)
 
 potential_all = 
   potential_all %>% 
   left_join(coopbs_10km_buffer_lu, 
             by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
-
-plot(slope_civ)
-plot(st_geometry(cocoa_departements), add = T, alpha = 0.2)
-
-crs(slope_civ)
-crs(cocoa_departements)
-
-# These were computed in the grid, preserving the GRID_ID. 
-# au pire, on peut juste extraire dans la grid totale, et ne merger que les variables extraites, pas forcément la géométrie...
-
-
-
+names(potential_all)
 
 # Switch geometry from the cell centroid to the polygon. - This takes ~15 minutes
 # grid_potential_poly =
 #   grid_actual %>%
-#   arrange(GRID_ID) %>% # because this may speed up 
-#   select(GRID_ID) %>%
+#   arrange(CELL_ID) %>% # because this may speed up 
+#   select(CELL_ID) %>%
 #   full_join(
 #     y = potential %>% 
 #           st_drop_geometry() %>%
-#           arrange(GRID_ID),
-#     by = "GRID_ID")
+#           arrange(CELL_ID),
+#     by = "CELL_ID")
 # if(nrow(grid_potential_poly) != nrow(potential)){stop("the join did not work as expected")}
 
 
@@ -731,6 +758,6 @@ crs(cocoa_departements)
 #   vect(geom = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = "epsg:4326", keepgeom = TRUE) %>% 
 #   project(paste0("epsg:", civ_crs))
 # 
-# allcel_tr = rasterize(consol_sr, tmplt_sr, field = c("PRO_ID", "COOP_BS_ID", "LINK_DISTANCE_METERS"), fun = function(x){length(unique(x))}) # by = names(consol_sr), 
+# allcel_tr = rasterize(consol_sr, tmplt_sr, field = c("PRO_ID", "COOP_BS_ID", "ACTUAL_LINK_DISTANCE_METERS"), fun = function(x){length(unique(x))}) # by = names(consol_sr), 
 # # function(x){factor(paste0(na.omit(unique(x)), collapse = ";"))}
 # rasterize(consol_sr, tmplt_sr, fun = "length") %>% values() %>% summary()
