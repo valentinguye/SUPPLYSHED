@@ -25,6 +25,7 @@ library(stars)
 dir.create("temp_data", "coopbs_10km_buffer") # not use currently
 dir.create(here("temp_data", "terrain"))
 dir.create(here("temp_data", "BNETD"))
+dir.create(here("temp_data", "prepared_main_dataset"))
 
 # Assets and functions -----------------------------------------------------
 # use the projected CRS used by BNETD for their 2020 land use map. 
@@ -48,7 +49,12 @@ jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_stand
 jrc_links_coops = 
   jrc_links %>% 
   filter(IS_COOP) %>% 
-  select(-IS_COOP)
+  select(-IS_COOP) 
+
+jrc_link_other = 
+  jrc_links %>% 
+  filter(!IS_COOP) %>% 
+  select(-IS_COOP) 
 
 
 # Sustain-cocoa link data
@@ -77,14 +83,13 @@ production_dpt =
 is.grouped_df(production_dpt)
 summary(production_dpt)
 
-# BNETD LAND USE MAP FOR 2020
-civlu = rast(here("input_data", "BNETD", "Raster13082024", "Raster", "ocs2020.tif"))
 
 # TERRAIN
 tri = rast(here("input_data/terrain/tri/tri.txt"))
 tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
 
-# LAND USE 
+# BNETD LAND USE MAP FOR 2020
+# aggregated in GEE to 1km, for binarized cocoa and settlement classes. 
 bnetd = rast(here("input_data/GEE/BNETD_binary_cocoa_settlements_3km.tif"))
 
 
@@ -140,9 +145,9 @@ nrow(consol)
 consol = 
   consol %>% 
   group_by(PRO_ID, COOP_BS_ID) %>% 
-  mutate(ACTUAL_LINK_ID = cur_group_id()) %>% 
+  mutate(ACTUAL_COOP_LINK_ID = cur_group_id()) %>% 
   ungroup()
-if(consol$ACTUAL_LINK_ID %>% unique() %>% length() != nrow(consol)){stop()}
+if(consol$ACTUAL_COOP_LINK_ID %>% unique() %>% length() != nrow(consol)){stop()}
 
 # to investigate potential prb
 # consol = 
@@ -158,6 +163,10 @@ if(consol$ACTUAL_LINK_ID %>% unique() %>% length() != nrow(consol)){stop()}
 
 # ACTUAL LINK STATS ----------------
 # follow model prefix guidelines 
+jrc_link_other = 
+  jrc_link_other %>% 
+  rename(ACTUAL_LINK_DISTANCE_METERS = LINK_DISTANCE_METERS)
+
 consol = 
   consol %>% 
   rename(ACTUAL_LINK_DISTANCE_METERS = LINK_DISTANCE_METERS)
@@ -224,7 +233,7 @@ coopbs_10km_buffer =
 # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
 # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
 # At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.5 x 0.5 km) or less.
-grid_size_m = 30000
+grid_size_m = 3000
 
 ## Limit to cocoa growing region 
 cocoa_departements = 
@@ -315,7 +324,7 @@ grid_st =
          CELL_TRI_MM = tri) # tri is in millimeters in Nunn & Puga data. 
 
 
-## Add actual links -------------
+## Add actual coop links -------------
 
 # Spatialize actual links 
 consol_sf = 
@@ -337,7 +346,8 @@ grid_ctoid =
   grid_poly %>% 
   mutate(geometry = st_centroid(geometry))
 
-# This extends the rows of the grids to the extent that there are actual links in every grid. 
+# This multiplies the number of rows (equal to number of cells in grid_poly) 
+# by the number of actual links in every grid cell.  
 grid_actual = 
   grid_poly %>% 
   st_join(consol_sf, 
@@ -354,13 +364,13 @@ grid_actual =
   # mutate(TRAINING_SET_CELL = if_else(!is.na(PRO_ID), TRUE, FALSE)) %>% 
   rename(ACTUAL_COOP_BS_ID = COOP_BS_ID)
 
-# The number of NAs in ACTUAL_LINK_ID is the number of grid cells with no actual link
-grid_actual$ACTUAL_LINK_ID %>% summary()
+# The number of NAs in ACTUAL_COOP_LINK_ID is the number of grid cells with no actual link
+grid_actual$ACTUAL_COOP_LINK_ID %>% summary()
 
 # and this is the distribution of unique actual links by grid cell
 grid_actual %>% 
   group_by(CELL_ID) %>% 
-  mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(na.omit(ACTUAL_LINK_ID)))) %>% 
+  mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(na.omit(ACTUAL_COOP_LINK_ID)))) %>% 
   ungroup() %>% 
   pull(N_UNIQUE_ACTUAL_LINKS_BYGRID) %>% summary()
 
@@ -370,14 +380,16 @@ actual =
   grid_actual %>% 
   filter(!is.na(ACTUAL_COOP_BS_ID)) %>% 
   st_drop_geometry() %>% 
-  mutate(POTENTIAL_COOP_BS_ID = ACTUAL_COOP_BS_ID) 
+  mutate(POTENTIAL_COOP_BS_ID = ACTUAL_COOP_BS_ID) # every actual coop is also a potential one in the model's terminology.  
+
+nrow(grid_poly) # out of the 37975 3km grid cells, 
+actual$CELL_ID %>% unique() %>% length() # 510 3km cells have at least one actual link.  
 
 
-## Add virtual links ---------------
+## Add virtual coop links ---------------
 
-### Identify coops within distance -------------
-
-# For every grid cell, this adds as many rows as there are potential links, including the actual ones. 
+# For every grid cell, this adds as many rows as there are potential links (i.e. coops within distance)
+# -- including the actual ones -- which we remove below
 potential = 
   grid_ctoid %>% 
   st_join(
@@ -390,7 +402,6 @@ potential =
   st_drop_geometry() %>% 
   rename( # use names that make sense in the dimensions post join
     POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
-    # POTENTIAL_LINKS_IN_GRID_SET_ID = ACTUAL_LINK_ID
   mutate(
     YEAR = NA, 
     PRO_ID = NA, 
@@ -398,14 +409,14 @@ potential =
     ACTUAL_LINK_DISTANCE_METERS = NA, 
     PRO_LONGITUDE = NA, 
     PRO_LATITUDE = NA, 
-    ACTUAL_LINK_ID = NA
+    ACTUAL_COOP_LINK_ID = NA
   ) %>% 
   select(names(actual)) %>% 
 
   # Stack potential & actual and remove actual links counted twice
   rbind(actual) %>% 
   # identify origins 
-  mutate(IS_FROM_STJOIN = is.na(ACTUAL_LINK_ID)) %>% 
+  mutate(IS_FROM_STJOIN = is.na(ACTUAL_COOP_LINK_ID)) %>% 
   # identify duplicated coop ids within a grid cell
   # make sure that ALL duplicates are found, regardless of order. 
   group_by(CELL_ID) %>% 
@@ -414,7 +425,7 @@ potential =
   # this identified duplicates including due to several actual links from this cell,
   # so remove rows that are duplicated coop ids, AND are from the spatial join, i.e. are not several actual links. 
   filter(!(DUP_LINK & IS_FROM_STJOIN)) %>% 
-  # Number of reachable coops within a grid cell, regardless through how many links  
+  # Number of reachable coop BS within a grid cell, regardless through how many links  
   group_by(CELL_ID) %>% 
   mutate(CELL_N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID)))) %>%  # use this, and not n(), for the variable to take value 0 when there's is no potential coop matched (i.e. potential link), rather than one row that has NA value 
   ungroup() %>% 
@@ -422,12 +433,13 @@ potential =
   group_by(CELL_ID) %>% 
   mutate(CELL_NO_ACTUAL_LINK = all(IS_FROM_STJOIN)) %>% 
   ungroup() %>% 
-  # OUTCOMe VARIABLE - is the link actual or virtual??? 
-  mutate(LINK_IS_ACTUAL = !is.na(ACTUAL_LINK_ID))
+  # OUTCOME VARIABLE - is the link actual or virtual??? 
+  mutate(LINK_IS_ACTUAL_COOP = !is.na(ACTUAL_COOP_LINK_ID))
 
 # potential %>% 
 #   filter((DUP_LINK & IS_FROM_STJOIN)) %>% View()
 
+potential$LINK_IS_ACTUAL_COOP %>% summary()
 potential$IS_FROM_STJOIN %>% summary()
 potential$DUP_LINK %>% summary()
 
@@ -458,7 +470,7 @@ grid_ctoid %>%
   inner_join(potential %>% 
               filter(CELL_NO_ACTUAL_LINK) %>% 
               select(CELL_ID, CELL_N_BS_WITHIN_DIST), 
-            by = "CELL_ID") %>% 
+            by = "CELL_ID", multiple = "all") %>% 
   mutate(PROBLEM = CELL_N_BS_WITHIN_DIST.x < CELL_N_BS_WITHIN_DIST.y) %>% 
   filter(PROBLEM) %>% 
   nrow() > 0
@@ -467,14 +479,14 @@ grid_ctoid %>%
 # So there should be as many none actual links , i.e. virtual links, as there are links from stjoin now 
 if(
   potential %>% 
-  filter(!LINK_IS_ACTUAL != IS_FROM_STJOIN) %>% 
+  filter(!LINK_IS_ACTUAL_COOP != IS_FROM_STJOIN) %>% 
   nrow() != 0
 ){stop("something is misunderstood")}
 
 # and there should not be any duplicated potential link within a grid and an actual link
 if(
 potential %>% 
-  group_by(CELL_ID, ACTUAL_LINK_ID) %>% 
+  group_by(CELL_ID, ACTUAL_COOP_LINK_ID) %>% 
   mutate(ANY_DUPL_COOP = any(duplicated(POTENTIAL_COOP_BS_ID))) %>% 
   ungroup() %>% 
   pull(ANY_DUPL_COOP) %>% any()
@@ -517,21 +529,130 @@ if(
 #   pull(IS_EMPTY_GRID) %>% summary()
            
 
-### Add links to other intermediaries --------------
+## Add links to other intermediaries --------------
 # Do it here because given our data inputs, links to other intermediaries than coops is the exception and not the rule. 
 # (It's from JRC only.)
+
+# Cell-level variables prepared above
+cell_vars = 
+  grid_poly %>% # the polygons (we need)
+  select(CELL_ID) %>% 
+  left_join(potential %>% 
+              select(starts_with("CELL_")) %>% # all cell-level variables
+              distinct(CELL_ID, .keep_all = TRUE),
+            by = "CELL_ID")
+  
+jrc_link_other = 
+  jrc_link_other %>% 
+  st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) %>% 
+  # Spatially join cell-level variables to the location of producers linked with other intermediaries than coops. 
+  st_join(cell_vars, 
+          join = st_intersects,
+          left = TRUE) %>% 
+  mutate(ACTUAL_OTHER_LINK_ID = row_number()) %>% 
+  st_drop_geometry()
+
+stopifnot(length(unique(jrc_link_other$ACTUAL_OTHER_LINK_ID)) == nrow(jrc_link_other))
+if(anyNA(potential$LINK_IS_ACTUAL_COOP)){stop("below operations needs that there's no NA in this indicator")}
 
 potential_all = 
   potential %>% 
   full_join(
-    jrc_links %>% filter(!IS_COOP) %>% select(intersect(colnames(potential), colnames(jrc_links))),
-    by = intersect(colnames(potential), colnames(jrc_links)), multiple = "all")
+    jrc_link_other,
+    by = intersect(colnames(potential), colnames(jrc_link_other)), multiple = "all") %>% 
+  # create indicator for these links
+  mutate(LINK_IS_ACTUAL_OTHER = !is.na(ACTUAL_OTHER_LINK_ID),
+         # and correct LINK_IS_ACTUAL_COOP which has now NAs because of the merge
+         LINK_IS_ACTUAL_COOP = if_else(is.na(LINK_IS_ACTUAL_COOP), FALSE, LINK_IS_ACTUAL_COOP))
 
 names(potential_all)
 if(nrow(potential_all) != nrow(potential) + nrow(filter(jrc_links, !IS_COOP))){stop("some rows were unexpectedly matched")}
+stopifnot(sum(potential_all$LINK_IS_ACTUAL_OTHER) == nrow(jrc_link_other))
+
+# This adds 517 rows, i.e. actual links with other intermediaries. 
+#  this is 8% of actual links with coops 
+100*(nrow(potential_all) - nrow(potential))/nrow(consol)
+
+
+# STRUCTURE IDENTIFIERS ----------------
+# In potential_all, there can be: 
+# - cells with no potential link (no actual nor virtual) - i.e. cells very remote
+# - cells with potential links, but no actual link (only virtual links)
+# - cells with actual link(s) only with coop(s)
+# - cells with actual link(s) only with other intermediary(s)
+# - cells with both actual links with coop(s) and intermediary(s)
+
+# Make identifiers to ease manipulation of these groups  
+potential_all = 
+  potential_all %>% 
+  mutate(
+    # an actual link is either with a coop or with an other intermediary
+    LINK_IS_ACTUAL = LINK_IS_ACTUAL_COOP | LINK_IS_ACTUAL_OTHER, 
+    # a virtual link is a row that is not an actual link, but still matched a coopbs  
+    LINK_IS_VIRTUAL = !LINK_IS_ACTUAL & !is.na(POTENTIAL_COOP_BS_ID), 
+    # a potential link is either an actual or a virtual link
+    LINK_IS_POTENTIAL = LINK_IS_ACTUAL | LINK_IS_VIRTUAL) %>% 
+    # based on this, characterize cells
+  group_by(CELL_ID) %>% 
+  mutate(
+    CELL_NO_POTENTIAL_LINK = !any(LINK_IS_POTENTIAL),
+    CELL_ONLY_VIRTUAL_LINK = any(LINK_IS_POTENTIAL) & !any(LINK_IS_ACTUAL),
+    CELL_ACTUAL_ONLYCOOP_LINK  = any(LINK_IS_ACTUAL_COOP)  & !any(LINK_IS_ACTUAL_OTHER),
+    CELL_ACTUAL_ONLYOTHER_LINK = any(LINK_IS_ACTUAL_OTHER) & !any(LINK_IS_ACTUAL_COOP),
+    CELL_ACTUAL_BOTH_LINK = any(LINK_IS_ACTUAL_OTHER) & any(LINK_IS_ACTUAL_COOP),
+    CELL_ACTUAL_LINK = any(LINK_IS_ACTUAL_OTHER) | any(LINK_IS_ACTUAL_COOP)
+  ) %>% 
+  ungroup() %>% 
+  select(CELL_ID, starts_with("CELL_"), starts_with("LINK_"), starts_with("COOP_"), 
+         everything()) 
+  
+# Check that the cell identifiers cover all cells
+if(
+  potential_all %>% 
+  rowwise() %>% 
+  mutate(CELL_ANY_CAT = CELL_NO_POTENTIAL_LINK + CELL_ONLY_VIRTUAL_LINK + CELL_ACTUAL_ONLYCOOP_LINK + CELL_ACTUAL_ONLYOTHER_LINK + CELL_ACTUAL_BOTH_LINK) %>% 
+  filter(CELL_ANY_CAT != 1) %>% nrow() > 0  
+){stop("Categories don't cover all cells")}
+
+# check that actual links with coops are 
+if(!all.equal(potential_all %>% filter(LINK_IS_ACTUAL_COOP), 
+              potential_all %>% filter(POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID))
+){stop("unexpected")}
+
+if(anyNA(potential_all %>% select(LINK_IS_ACTUAL, 
+                                  LINK_IS_VIRTUAL, 
+                                  LINK_IS_POTENTIAL,
+                                  CELL_NO_POTENTIAL_LINK, 
+                                  CELL_ONLY_VIRTUAL_LINK, 
+                                  CELL_ACTUAL_ONLYCOOP_LINK, 
+                                  CELL_ACTUAL_ONLYOTHER_LINK, 
+                                  CELL_ACTUAL_BOTH_LINK,
+                                  CELL_ACTUAL_LINK))){stop("NAs not expected")}
+potential_all %>% 
+  select(LINK_IS_ACTUAL, 
+         LINK_IS_VIRTUAL, 
+         LINK_IS_POTENTIAL,
+         CELL_NO_POTENTIAL_LINK, 
+         CELL_ONLY_VIRTUAL_LINK, 
+         CELL_ACTUAL_ONLYCOOP_LINK, 
+         CELL_ACTUAL_ONLYOTHER_LINK, 
+         CELL_ACTUAL_BOTH_LINK,
+         CELL_ACTUAL_LINK) %>% 
+  summary()
+  
+# group_by(CELL_ID) %>% 
+# mutate(CELL_POTENTIAL_LINK_ID = cur_group_rows()) %>% 
+# ungroup() %>% 
+# mutate(CELL_POTENTIAL_LINK_ID = paste0(CELL_POTENTIAL_LINK_ID, "")) %>% 
+
+potential_all$ACTUAL_COOP_LINK_ID %>% unique() %>% length() 
+anyNA(potential_all$ACTUAL_COOP_LINK_ID)
 
 
 # ADD VARIABLES ----------------
+
+init_nrow_pa = nrow(potential_all) # # just to check that this section does not add any row
 
 ## Number of potential coops -------- 
 # was computed above (CELL_N_BS_WITHIN_DIST), because useful in a test. 
@@ -539,7 +660,7 @@ potential_all$CELL_N_BS_WITHIN_DIST %>% summary()
 
  
 ## Compute distances -------------
-# From the cell centroid to all intermediaries potentially linked. 
+# From the cell centroid to all intermediaries potentially linked 
 # st_distance needs to work on same size df. 
 
 # this does not have the full grid anymore, but only grid cells with at least one potential link 
@@ -551,35 +672,36 @@ only_potential_ctoid =
     by = "CELL_ID", 
     multiple = "all"
   ) %>% 
-  filter(CELL_N_BS_WITHIN_DIST > 0)
+  filter(!CELL_NO_POTENTIAL_LINK) # this includes actual links with other intermediaries than coops 
 nrow(potential_all) != nrow(only_potential_ctoid)
 
 if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
    anyNA(only_potential_ctoid$BS_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
 
-potential_bspt = 
+potential_itmpt = 
   only_potential_ctoid %>% 
   st_drop_geometry() %>% 
   st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
 only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <- 
-  st_distance(only_potential_ctoid, potential_bspt, by_element = TRUE) %>% as.numeric()
+  st_distance(only_potential_ctoid, potential_itmpt, by_element = TRUE) %>% as.numeric()
 
 # merge back to the full grid
 (init_nrow <- nrow(potential_all))
 potential_all = 
   potential_all %>% 
   left_join(only_potential_ctoid %>% 
-              select(CELL_ID, ACTUAL_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
+              select(CELL_ID, ACTUAL_COOP_LINK_ID, ACTUAL_OTHER_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
               st_drop_geometry(), 
-            by = c("CELL_ID", "ACTUAL_LINK_ID", "POTENTIAL_COOP_BS_ID"))
+            # (join by ACTUAL_OTHER_LINK_ID too, bc these links are also in only_potential_ctoid)
+            by = c("CELL_ID", "ACTUAL_COOP_LINK_ID", "ACTUAL_OTHER_LINK_ID", "POTENTIAL_COOP_BS_ID"))
 if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
 
 # In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
 potential_all %>% 
   mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
-    POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID ~ POTENTIAL_LINK_DISTANCE_METERS - ACTUAL_LINK_DISTANCE_METERS,
+    LINK_IS_ACTUAL ~ POTENTIAL_LINK_DISTANCE_METERS - ACTUAL_LINK_DISTANCE_METERS,
     TRUE ~ NA
     )) %>% 
   pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
@@ -611,7 +733,7 @@ potential_all =
             N_COOP_IN_DPT = length(na.omit(unique(COOP_ID)))) %>% 
   arrange(desc(N_COOP_IN_DPT)))
 
-sum(n_coops_dpt$N_COOP_IN_DPT)
+(sum(n_coops_dpt$N_COOP_IN_DPT)) 
 
 potential_all = 
   potential_all %>% 
@@ -728,6 +850,19 @@ potential_all =
 
 names(potential_all)
 
+if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")}
+
+
+# EXPORT -------
+
+saveRDS(potential_all, 
+        here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", grid_size_m*1e-3, "km.Rdata")))
+
+
+
+# OLD CODE BITS ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### 
+
+
 # Switch geometry from the cell centroid to the polygon. - This takes ~15 minutes
 # grid_potential_poly =
 #   grid_actual %>%
@@ -741,11 +876,6 @@ names(potential_all)
 # if(nrow(grid_potential_poly) != nrow(potential)){stop("the join did not work as expected")}
 
 
-
-
-
-
-# *  ---------------------------------
 # Use terra (rather than stars), because apparently stars::st_rasterize does not 
 # allow one to summarize the values of several points falling in the same grid cell. 
 # https://gis.stackexchange.com/questions/432367/how-to-apply-mean-min-max-merge-functions-on-a-vector-layer-to-create-a-stars-ra

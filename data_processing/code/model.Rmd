@@ -1,0 +1,75 @@
+---
+title: "model"
+author: "Valentin"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+      self_contained: false
+---
+# Set up and inputs
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(aws.s3)
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
+
+library(tidyverse)
+library(sf)
+library(readxl)
+library(xlsx)
+library(stringr)
+library(DescTools)
+library(rnaturalearth)
+library(ggpubr)
+library(units)
+library(scales)
+library(kableExtra)
+library(here)
+library(readstata13)
+library(sjmisc)
+library(terra) # put it after {raster} such that it superceeds homonym functions. 
+library(exactextractr)
+library(stars)
+library(pals)
+
+## Functions
+# Trase palettes etc. for plots
+source(here("code", "theme_trase.R"))
+
+# load in particular the function fn_trader_to_group_names, str_trans, ... 
+source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+
+MODEL_RESOLUTION_KM = 3
+
+## Assets
+
+# The cam at coop level is also needed for the exporting coop part (step 12)
+# coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) 
+
+main = readRDS(here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", MODEL_RESOLUTION_KM, "km.Rdata")))
+
+
+```
+
+```{r}
+training_size <- 0.9
+
+# Split the data
+train_test =
+  main %>%
+  filter(!CELL_NO_ACTUAL_LINK) %>% 
+  mutate(ROWNUM = row_number())
+
+training =
+  train_test %>%
+  slice_sample(prop = training_size) 
+
+test =
+  train_test %>%
+  filter(!ROWNUM %in% training$ROWNUM) %>%
+  unnest(cols = c(data))
+main <- main %>% unnest(cols = c(data))
+
+```
+
