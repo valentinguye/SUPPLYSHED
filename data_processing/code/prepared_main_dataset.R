@@ -40,6 +40,10 @@ coopbsy = read.csv(
   rename(BS_LONGITUDE = LONGITUDE, 
          BS_LATITUDE = LATITUDE)
 
+licens19 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2019_GEOCODED.csv"))
+licens20 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2020_GEOCODED.csv"))
+licens21 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2021_GEOCODED.csv"))
+
 # Cargill link data
 carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv"))
   
@@ -654,7 +658,7 @@ anyNA(potential_all$ACTUAL_COOP_LINK_ID)
 
 init_nrow_pa = nrow(potential_all) # # just to check that this section does not add any row
 
-## Number of potential coops -------- 
+## Nb of potential coops -------- 
 # was computed above (CELL_N_BS_WITHIN_DIST), because useful in a test. 
 potential_all$CELL_N_BS_WITHIN_DIST %>% summary()
 
@@ -724,7 +728,7 @@ potential_all =
   left_join(grid_distr, 
             by = "CELL_ID")
 
-## Number of coops in district -------------
+## Nb of coops in district -------------
 
 (n_coops_dpt = 
   coopbs %>% 
@@ -740,6 +744,37 @@ potential_all =
   left_join(n_coops_dpt %>% select(CELL_N_COOP_IN_DPT = N_COOP_IN_DPT, # this is a cell level var
                                    DISTRICT_GEOCODE), 
             by = join_by(CELL_DISTRICT_GEOCODE == DISTRICT_GEOCODE))
+
+
+
+## Nb other licensed buyers in district -----------
+licens_panel = 
+  rbind(licens19 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2019),
+        licens20 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2020),
+        licens21 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2021)) %>% 
+  arrange(NOM, DENOMINATION, LVL_4_CODE) %>% 
+  group_by(NOM, DENOMINATION, LVL_4_CODE) %>% 
+  # code from Trase work, don't bother, it's just an ID
+  mutate(LICENSED_BUYER_ID = paste0("CI-COFFEE-COCOA-APPROVED-BUYER-", str_pad(cur_group_id(), width=3, pad = "0"))) %>% 
+  ungroup() 
+
+(n_licbuy_dpt = 
+    licens_panel %>% 
+    filter(!is.na(LVL_4_CODE)) %>% 
+    summarise(.by = c(LVL_4_CODE, YEAR), 
+              N_LICBUY_IN_DPT_YEAR = length(na.omit(unique(LICENSED_BUYER_ID)))) %>% 
+    summarise(.by = LVL_4_CODE, 
+              AVG_N_LICBUY_IN_DPT = mean(N_LICBUY_IN_DPT_YEAR)) %>% 
+    arrange(desc(AVG_N_LICBUY_IN_DPT)))
+
+(sum(n_licbuy_dpt$AVG_N_LICBUY_IN_DPT)) 
+
+potential_all = 
+  potential_all %>% 
+  left_join(n_licbuy_dpt %>% select(CELL_AVG_N_LICBUY_IN_DPT = AVG_N_LICBUY_IN_DPT, # this is a cell level var
+                                   LVL_4_CODE), 
+            by = join_by(CELL_DISTRICT_GEOCODE == LVL_4_CODE))
+
 
 ## IC2B variables -------------
 
