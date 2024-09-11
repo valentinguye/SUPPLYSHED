@@ -24,27 +24,30 @@ fn_clean_corp_accronyms <- function(col_name) {
   )
 }
 
+
+# fn_clean_abrvname1n fn_clean_abrvname2 and fn_clean_abrvname3 below are used in private_IC2B.R 
+
 # This function handles cases where a full name and an abbreviated name are given in the abrv name variable.
 fn_clean_abrvname1 <- function(col_name){
   case_when(
-    # grepl("UNITE COOPERATIVE AGRICOLE DE DANANE", col_name) ~ "COOP UDAN",
-    # grepl("COOPERATIVE AGRICOLE BACON ESPOIR", col_name) ~ "CABES",
-    # grepl("COOPERATIVE AGRICOLE ABOTRE DE NIABLE", col_name) ~ "COAANI",
-    # grepl("COOPERATIVE AGRICOLE BENKADI", col_name) ~ "COOPABENKADI",
-    # grepl("COOPERATIVE AGRICOLE D'AGNANFOUTOU", col_name) ~ "COESAG",
-    # grepl("COOPERATIVE AGRICOLE ZEMESS TAABA DE GBABAM", col_name) ~ "COOPAZEG",
-    # grepl("COOPERATIVE DES PRODUCTEURS DE YAKASSE ATTOBROU", col_name) ~ "COOPROYA",
-    # grepl("SOCIETE AGRICOLE BINKADI DE BROUDOUGOU PENDA CA", col_name) ~ "SOCABB",
-    # grepl("SCOOPAO SOCIETE COOPERATIVE DES AGRICULTEURS DE PETIT OUAGA", col_name) ~ "SCOOPAO",
-    # grepl("SOCIETE COOPERATIVE SIMPLIFIEE AGRICOLE KAMBONOU DE ARRAH", col_name) ~ "SCOAKA",
-    # grepl("SOCIETE COOPERATIVE ESPERENCE DE KPELEKRO", col_name) ~ "SOCAEK",
-    # grepl("SOCIETE COOPERATIVE AVEC CONSEIL D'ADMINISTRATION ENTENTE DE SEGUELA", col_name) ~ "COOP CA ES",
-    # grepl("COOPERATIVE DES PRODUCTEURS AGRICOLES DE NIABLE", col_name) ~ "COOP CA PAN",
-    # grepl("COOPERATIVE YEYONIAN DU CANTON ANIASSUE", col_name) ~ "COOPYCA",
-    # grepl("SOCIETE COOPERATIVE AGRICOLE DE GNATO AVEC CONSEIL D'ADMINISTRATION", col_name) ~ "SOCAG",
-    # grepl("SOCIETE COOPERATIVE AGRICOLE DE BAYOTA", col_name) ~ "SOCABA COOP CA",
-    # grepl("SPAD GAGNOA", col_name) ~ "SPAD GAGNOA", # ETG adds the name of the manufacturer to some surv_coop names. 
-    # grepl("SCAT I|SCAT 1", col_name) ~ "SCAT 1",
+    grepl("UNITE COOPERATIVE AGRICOLE DE DANANE", col_name) ~ "COOP UDAN",
+    grepl("COOPERATIVE AGRICOLE BACON ESPOIR", col_name) ~ "CABES",
+    grepl("COOPERATIVE AGRICOLE ABOTRE DE NIABLE", col_name) ~ "COAANI",
+    grepl("COOPERATIVE AGRICOLE BENKADI", col_name) ~ "COOPABENKADI",
+    grepl("COOPERATIVE AGRICOLE D'AGNANFOUTOU", col_name) ~ "COESAG",
+    grepl("COOPERATIVE AGRICOLE ZEMESS TAABA DE GBABAM", col_name) ~ "COOPAZEG",
+    grepl("COOPERATIVE DES PRODUCTEURS DE YAKASSE ATTOBROU", col_name) ~ "COOPROYA",
+    grepl("SOCIETE AGRICOLE BINKADI DE BROUDOUGOU PENDA CA", col_name) ~ "SOCABB",
+    grepl("SCOOPAO SOCIETE COOPERATIVE DES AGRICULTEURS DE PETIT OUAGA", col_name) ~ "SCOOPAO",
+    grepl("SOCIETE COOPERATIVE SIMPLIFIEE AGRICOLE KAMBONOU DE ARRAH", col_name) ~ "SCOAKA",
+    grepl("SOCIETE COOPERATIVE ESPERENCE DE KPELEKRO", col_name) ~ "SOCAEK",
+    grepl("SOCIETE COOPERATIVE AVEC CONSEIL D'ADMINISTRATION ENTENTE DE SEGUELA", col_name) ~ "COOP CA ES",
+    grepl("COOPERATIVE DES PRODUCTEURS AGRICOLES DE NIABLE", col_name) ~ "COOP CA PAN",
+    grepl("COOPERATIVE YEYONIAN DU CANTON ANIASSUE", col_name) ~ "COOPYCA",
+    grepl("SOCIETE COOPERATIVE AGRICOLE DE GNATO AVEC CONSEIL D'ADMINISTRATION", col_name) ~ "SOCAG",
+    grepl("SOCIETE COOPERATIVE AGRICOLE DE BAYOTA", col_name) ~ "SOCABA COOP CA",
+    grepl("SPAD GAGNOA", col_name) ~ "SPAD GAGNOA", # ETG adds the name of the manufacturer to some coop names. 
+    grepl("SCAT I|SCAT 1", col_name) ~ "SCAT 1",
     grepl("\\(CA\\)$", col_name) ~ " CA ",
     grepl("\\(COOP\\)$", col_name) ~ " COOP ",
     grepl("\\(SCOOP\\)$", col_name) ~ " SCOOP ",
@@ -52,7 +55,7 @@ fn_clean_abrvname1 <- function(col_name){
   )
 }
 
-# This function removes some common characters used in abreviated surv_coop names
+# This function removes some common characters used in abreviated coop names
 fn_clean_abrvname2 <- function(col_name){
   cleaned_col <- str_trans(str_trim(col_name))
   cleaned_col <- gsub(pattern = "\\.|[(]|[)]| WAREHOUSE$", "", cleaned_col)
@@ -65,12 +68,16 @@ fn_clean_abrvname2 <- function(col_name){
   return(cleaned_col)
 }
 
+
 fn_clean_abrvname3 <- function(col_name){
   gsub(pattern = "COOP CA | COOP CA$|COOP-CA | COOP-CA$|COOPCA | COOPCA$|COOPCA-|-COOPCA$|COOP-CA-|-COOP-CA$|COOP | COOP$|COOP-|-COOP$|SCOOP | SCOOP$|SCOOP-|-SCOOP$|SCOOPS | SCOOPS$|SCOOPS-|-SCOOPS$", 
        replacement = "", 
        x = col_name)
 }
 
+
+
+# old, not used  
 fn_clean_names <- function(col_name) {
   str_squish(
     gsub("[.]| SL$| LTD$| CO$| LLC| INC| AS$| SRL$| BV$| SAS$| GMBH$|OOO LIMITED$", "", col_name)

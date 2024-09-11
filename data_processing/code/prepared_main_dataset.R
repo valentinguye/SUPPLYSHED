@@ -165,7 +165,7 @@ if(consol$ACTUAL_COOP_LINK_ID %>% unique() %>% length() != nrow(consol)){stop()}
 #   View()
 
 
-# ACTUAL LINK STATS ----------------
+# Actual link stats ----------------
 # follow model prefix guidelines 
 jrc_link_other = 
   jrc_link_other %>% 
@@ -261,7 +261,7 @@ grid_crs = crs(cocoa_departements)
                 crs = grid_crs)
 )
 
-## Grid-level variables -------------------
+## Cell-level variables -------------------
  # (do here so these vars are more clearly embedded in the grid, without dependence on cell ID attribution)
 
 ### Terrain ------------
@@ -728,7 +728,7 @@ potential_all =
   left_join(grid_distr, 
             by = "CELL_ID")
 
-## Nb of coops in district -------------
+## Nb of coops in cell's district -------------
 
 (n_coops_dpt = 
   coopbs %>% 
@@ -747,7 +747,7 @@ potential_all =
 
 
 
-## Nb other licensed buyers in district -----------
+## Nb other licensed buyers in cell's district -----------
 licens_panel = 
   rbind(licens19 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2019),
         licens20 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2020),
@@ -775,16 +775,18 @@ potential_all =
                                    LVL_4_CODE), 
             by = join_by(CELL_DISTRICT_GEOCODE == LVL_4_CODE))
 
+## Coop/BS-level variables ---------------------------
 
-## IC2B variables -------------
+### IC2B variables -------------
 
-# Currently, we ALLOW NA VALUES in IC2B variables
+# We match these variabes at buying station level, but they vary at coop level anyway. 
 
 potential_coopbs = 
   coopbs %>% 
   mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
          COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
          
+         # Currently, we ALLOW NA VALUES in IC2B variables
          TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
          CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
 
@@ -812,6 +814,10 @@ potential_coopbs =
            !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
            TRUE ~ 0
          )) %>% 
+  # number of known buying stations per coop, to proxy size 
+  group_by(COOP_ID) %>% 
+  mutate(COOP_N_KNOWN_BS = length(unique(COOP_BS_ID))) %>% 
+  ungroup() %>% 
            
   rename(COOP_FARMERS = TOTAL_FARMERS,
          COOP_ABRVNAME = SUPPLIER_ABRVNAME, 
@@ -831,7 +837,7 @@ potential_all =
             by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
 
-## Terrain in BS buffers -------------
+### Terrain in BS buffers -------------
 # Extract directly here in R
 dir_tri = here("temp_data", "terrain", "tri_coopbs_10km_buffer.geojson")
 
@@ -869,7 +875,7 @@ potential_all =
 #          COOP_BS_10KM_TRI = tri)
 
 
-## Land use in BS buffers -------------
+### Land use in BS buffers -------------
 # For land use, it was easier to do it in GEE.  
 coopbs_10km_buffer_lu = 
   read.csv(here("input_data/GEE/bnetd_coopbs_10km_buffer.csv")) %>% 

@@ -120,54 +120,12 @@ unique_mode <- function(col_name){
 
 
 
-# This function handles cases where a full name and an abbreviated name are given in the abrv name variable.
-fn_clean_abrvname1 <- function(col_name){
-  case_when(
-    grepl("UNITE COOPERATIVE AGRICOLE DE DANANE", col_name) ~ "COOP UDAN",
-    grepl("COOPERATIVE AGRICOLE BACON ESPOIR", col_name) ~ "CABES",
-    grepl("COOPERATIVE AGRICOLE ABOTRE DE NIABLE", col_name) ~ "COAANI",
-    grepl("COOPERATIVE AGRICOLE BENKADI", col_name) ~ "COOPABENKADI",
-    grepl("COOPERATIVE AGRICOLE D'AGNANFOUTOU", col_name) ~ "COESAG",
-    grepl("COOPERATIVE AGRICOLE ZEMESS TAABA DE GBABAM", col_name) ~ "COOPAZEG",
-    grepl("COOPERATIVE DES PRODUCTEURS DE YAKASSE ATTOBROU", col_name) ~ "COOPROYA",
-    grepl("SOCIETE AGRICOLE BINKADI DE BROUDOUGOU PENDA CA", col_name) ~ "SOCABB",
-    grepl("SCOOPAO SOCIETE COOPERATIVE DES AGRICULTEURS DE PETIT OUAGA", col_name) ~ "SCOOPAO",
-    grepl("SOCIETE COOPERATIVE SIMPLIFIEE AGRICOLE KAMBONOU DE ARRAH", col_name) ~ "SCOAKA",
-    grepl("SOCIETE COOPERATIVE ESPERENCE DE KPELEKRO", col_name) ~ "SOCAEK",
-    grepl("SOCIETE COOPERATIVE AVEC CONSEIL D'ADMINISTRATION ENTENTE DE SEGUELA", col_name) ~ "COOP CA ES",
-    grepl("COOPERATIVE DES PRODUCTEURS AGRICOLES DE NIABLE", col_name) ~ "COOP CA PAN",
-    grepl("COOPERATIVE YEYONIAN DU CANTON ANIASSUE", col_name) ~ "COOPYCA",
-    grepl("SOCIETE COOPERATIVE AGRICOLE DE GNATO AVEC CONSEIL D'ADMINISTRATION", col_name) ~ "SOCAG",
-    grepl("SOCIETE COOPERATIVE AGRICOLE DE BAYOTA", col_name) ~ "SOCABA COOP CA",
-    grepl("SPAD GAGNOA", col_name) ~ "SPAD GAGNOA", # ETG adds the name of the manufacturer to some coop names. 
-    grepl("SCAT I|SCAT 1", col_name) ~ "SCAT 1",
-    grepl("\\(CA\\)$", col_name) ~ " CA ",
-    grepl("\\(COOP\\)$", col_name) ~ " COOP ",
-    grepl("\\(SCOOP\\)$", col_name) ~ " SCOOP ",
-    TRUE ~ col_name
-  )
-}
 
-# This function removes some common characters used in abreviated coop names
-fn_clean_abrvname2 <- function(col_name){
-  cleaned_col <- str_trans(str_trim(col_name))
-  cleaned_col <- gsub(pattern = "\\.|[(]|[)]| WAREHOUSE$", "", cleaned_col)
-  cleaned_col <- gsub(pattern = "\n|\\_|\\/|-", " ", cleaned_col)
-  cleaned_col <- gsub(pattern = "Ô", "O", cleaned_col)
-  # cleaned_col <- gsub(pattern = "A N E K", "ANEK", cleaned_col) 
-  
-  cleaned_col <- str_squish(cleaned_col)
-  
-  return(cleaned_col)
-}
-
-# This function removes generic terms like CA COOP and SCOOPS
 # Functions 
-fn_clean_abrvname3 <- function(col_name){
-  gsub(pattern = "COOP CA | COOP CA$|COOP-CA | COOP-CA$|COOPCA | COOPCA$|COOPCA-|-COOPCA$|COOP-CA-|-COOP-CA$|COOP | COOP$|COOP-|-COOP$|SCOOP | SCOOP$|SCOOP-|-SCOOP$|SCOOPS | SCOOPS$|SCOOPS-|-SCOOPS$", 
-       replacement = "", 
-       x = col_name)
-}
+
+# fn_clean_abrvname3 removes generic terms like COOP CA and SCOOPS
+# it is now written in USEFUL_STUFF_supplyshedproj.R
+ 
 
 fn_clean_fullname <- function(col_name){
   fn <- gsub(pattern = "SOCIETE COOPERATIVE |STE COOP |COPERATIVE |COOPRATIVE |SOCIETE AGRICOLE COOPERATIVE |ENTREPRISE COOPERATIVE |ENTREPRISE AGRICOLE COOPERATIVE |ENTREP COOPERA ", 
@@ -2927,7 +2885,11 @@ civ_coop_bs_year =
          COOP_N_KNOWN_BUYERS = case_when(
            !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
            TRUE ~ 0
-         ))
+         )) %>% 
+  # number of known buying stations per coop, to proxy size 
+  group_by(COOP_ID) %>% 
+  mutate(COOP_N_KNOWN_BS = length(unique(COOP_BS_ID))) %>% 
+  ungroup() 
 
 # EXPORT ---------------------
 dir.create(here("temp_data/private_IC2B"))
