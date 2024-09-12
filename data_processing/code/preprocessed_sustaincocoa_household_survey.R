@@ -30,6 +30,10 @@ hhs = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "cocoa_sales_g
 hhs_byb = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "cocoa_sales_bybuyer.csv"))  %>% 
   rename(HH_SURVEY_ID = SID) 
 
+hhs_morevars = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "respondent_CE_interview_details_270224.csv"))  %>% 
+  rename(HH_SURVEY_ID = SID) 
+
+
 choices = read_xlsx(here("input_data", "sustain_cocoa", "surveys_civ", "ref_survey_041223.xlsx"), 
                     sheet = "choices", 
                     col_names = TRUE) 
@@ -80,65 +84,83 @@ glimpse(hhs)
 # Split rows (one by HH) by the number of buyers they are linked with
 hhs_links = 
   hhs %>% 
-  select(-buyer_cocoa_name) %>% # nothing in this column
-  select(HH_SURVEY_ID, )
-  pivot_longer(
-    cols = starts_with("buyer_cocoa_name")
-  )
-  # start by converting these keys into names 
-  left_join(sc_coop_names, 
-            by = join_by("buyer_cocoa_name_1" == "COOP_SURVEY_KEY")) %>% 
-  # hhs_links$COOP_ABRV_NAME %>% unique()
-  
-  # When the key is missing, or equal to "other", no name is matched from the list sc_coop_names.
-  # In this case, take the name responded in village_buyer_cooperative_list
+  # remove unnecessary vars for now, incl. buyer_cocoa_name which is empty
+  select(HH_SURVEY_ID, starts_with("buyer_cocoa_name_")) %>% 
+  # When the name is "other", give the value reported in the corresponding column
   mutate(
-    # but clean this variable before 
-    village_buyer_cooperative_other = str_squish(
-      gsub(pattern = "[(1)]|[(2)]|[(3)]|[(4)]|[(5)]|Société coopérative de Koffikro et d'Abouyo ", 
-           replacement = "", 
-           village_buyer_cooperative_other)
+    COOP_ABRV_NAME_1 = case_when(
+      buyer_cocoa_name_1 == "other" ~ buyer_cocoa_name_other_1, 
+      TRUE ~ buyer_cocoa_name_1
     ),
-    village_buyer_cooperative_other = str_squish(
-      gsub(pattern = "[/]| et ", 
-           replacement = ";", 
-           village_buyer_cooperative_other)
+    COOP_ABRV_NAME_2 = case_when(
+      buyer_cocoa_name_2 == "other" ~ buyer_cocoa_name_other_2, 
+      TRUE ~ buyer_cocoa_name_2
     ),
-    village_buyer_cooperative_other = gsub("Scoops rasso Scoop kany Sccni Scoop wuntaba", 
-                                           "SCOOPS RASSO; SCOOP KANY SCCNI; SCOOP WUNTABA", 
-                                           village_buyer_cooperative_other)
-  ) %>% 
-  # hhs_links$village_buyer_cooperative_other %>% unique()
-  mutate(
-    COOP_ABRV_NAME = case_when(
-      is.na(COOP_ABRV_NAME) ~ village_buyer_cooperative_other, 
-      TRUE ~ COOP_ABRV_NAME
+    COOP_ABRV_NAME_3 = case_when(
+      buyer_cocoa_name_3 == "other" ~ buyer_cocoa_name_other_3, 
+      TRUE ~ buyer_cocoa_name_3
+    ),
+    COOP_ABRV_NAME_4 = case_when(
+      buyer_cocoa_name_4 == "other" ~ buyer_cocoa_name_other_4, 
+      TRUE ~ buyer_cocoa_name_4
     )
   ) %>% 
-  # hhs_links$COOP_ABRV_NAME %>% unique()
-  # some "other" values are multiple coops, so split rows again here 
-  mutate(
-    COOP_ABRV_NAME = str_split(COOP_ABRV_NAME, pattern = ";"),
-    COOP_ABRV_NAME = map(COOP_ABRV_NAME, str_squish)
-  ) %>%
-  unnest(cols = c(COOP_ABRV_NAME)) %>% 
-  # hhs_links$COOP_ABRV_NAME %>% unique()
-  mutate(COOP_ABRV_NAME = if_else(COOP_ABRV_NAME %in% c("", "DK"), NA, COOP_ABRV_NAME)) %>% 
+  # reshape to have one row per HH-buyer link
+  pivot_longer(
+    cols = starts_with("COOP_ABRV_NAME_"), 
+    values_to = "COOP_ABRV_NAME"
+  ) %>% 
   
-  # DO NOT remove villages selling to no coop
-  # filter(!is.na(COOP_ABRV_NAME)) %>% 
+  # convert the keys responded in buyer_cocoa_name into names
+  left_join(sc_coop_names %>% rename(COOP_ABRV_NAME_EXTERN = COOP_ABRV_NAME), 
+            by = join_by("COOP_ABRV_NAME" == "COOP_SURVEY_KEY")) %>% 
+  mutate(COOP_ABRV_NAME = case_when(
+    !is.na(COOP_ABRV_NAME_EXTERN) ~ COOP_ABRV_NAME_EXTERN, 
+    TRUE ~ COOP_ABRV_NAME
+  )) 
+  hhs_links$COOP_ABRV_NAME %>% str_trans() %>% unique()
   
-  # clean these abbreviated names like they were cleaned for IC2B
-  mutate(COOP_SIMPLIF_ABRV_NAME = fn_clean_abrvname3(fn_clean_abrvname2(fn_clean_abrvname1(str_trans(str_squish(COOP_ABRV_NAME))))), 
-         COOP_SIMPLIF_ABRV_NAME = gsub("COOPS CA ", "", COOP_SIMPLIF_ABRV_NAME))
-
-# check them 
-(simplif_names = unique(hhs_links$COOP_SIMPLIF_ABRV_NAME))
-
+  # Now clean these strings
+  hhs_links = 
+    hhs_links %>% 
+    mutate(COOP_ABRV_NAME = str_trans(COOP_ABRV_NAME), 
+           COOP_ABRV_NAME = case_when(
+             COOP_ABRV_NAME %in% c("", " ", "NA", "N A", "999", "1", "COOPERATIVE 1", "N[\\]A", "N[/]A", "N[//]A") | grepl("OUBLIE|CONNAIS PAS", COOP_ABRV_NAME) ~ NA, 
+             TRUE ~ COOP_ABRV_NAME
+           ), 
+           COOP_ABRV_NAME = case_when(
+             COOP_ABRV_NAME == "SOCIETE COOPERATIVE AGRICOLE DE YAKASSE-ATTOBROU" ~ "COOPROYA", 
+             COOP_ABRV_NAME == "COOPERATIVE DES PRODUCTEURS ASSOCIES DE L'AGNEBY" ~ "COOPAA", 
+             TRUE ~ COOP_ABRV_NAME
+           ),
+           IS_BUYER_COOP = if_else(grepl("COOP", COOP_ABRV_NAME), TRUE, NA),
+           IS_BUYER_COOP = case_when(
+             grepl("PISTEUR|LIBANAIS|ACHETEUR", COOP_ABRV_NAME) ~ FALSE,
+             TRUE ~ IS_BUYER_COOP
+           ), 
+           
+           # Make simplified acronyms
+           COOP_ABRV_NAME = str_squish(gsub("(COOPERATIVE)|COOPERATIVE|COOPERATIVES|(COOPERATIVE DU VILLAGE)", "", COOP_ABRV_NAME)),
+           COOP_SIMPLIF_ABRV_NAME = fn_clean_abrvname3(fn_clean_abrvname2(fn_clean_abrvname1(COOP_ABRV_NAME))), 
+           COOP_SIMPLIF_ABRV_NAME = case_when(
+             COOP_SIMPLIF_ABRV_NAME == "C A S B" ~ "CASB",
+             COOP_SIMPLIF_ABRV_NAME %in% c("", " ", "NA", "N A") ~ NA, 
+             TRUE ~ COOP_SIMPLIF_ABRV_NAME
+             )
+           )
+  (simplif_names = sort(unique(hhs_links$COOP_SIMPLIF_ABRV_NAME)))
+  
+  # this doesn't catch all weird characters but so be it. 
+  grep("N[\\]A", x = hhs_links$COOP_ABRV_NAME, value = T)
+  grep("N[\]A", x = hhs_links$COOP_ABRV_NAME, value = T)
+  
+  # coopbs %>% filter(grepl("C A S B", SUPPLIER_ABRVNAME))
+  
 hhs_links %>% 
   distinct(COOP_ABRV_NAME, .keep_all = T) %>% 
   select(COOP_ABRV_NAME, COOP_SIMPLIF_ABRV_NAME) %>% 
   View()
+
 
 ## Prepare IC2B to join --------
 
@@ -183,16 +205,16 @@ hhs_links_bs$COOP_BS_ID %>% unique() %>% length()
 
 # names(hhs_links_bs)
 hhs_links_bs %>% 
-  select(COOP_ID, COOP_POINT_ID, COOP_BS_ID, VILLAGE_SURVEY_ID,
+  select(COOP_ID, COOP_POINT_ID, COOP_BS_ID, HH_SURVEY_ID,
          COOP_ABRV_NAME, 
          SUPPLIER_ABRVNAME, COOP_SIMPLIF_ABRV_NAME, SUPPLIER_FULLNAME, 
          BS_LONGITUDE, BS_LATITUDE) %>% 
   View()
 
-# not all villages have a link with at least 1 bs
-hhs_links_bs$VILLAGE_SURVEY_ID %>% unique() %>% length()
-hhs_links$VILLAGE_SURVEY_ID %>% unique() %>% length()
-hhs$VILLAGE_SURVEY_ID %>% unique() %>% length()
+# not all households have a link with at least 1 bs
+hhs_links_bs$HH_SURVEY_ID %>% unique() %>% length()
+hhs_links$HH_SURVEY_ID %>% unique() %>% length()
+hhs$HH_SURVEY_ID %>% unique() %>% length()
 
 
 # Spatialize -----------
@@ -200,18 +222,25 @@ hhs$VILLAGE_SURVEY_ID %>% unique() %>% length()
 sfhhs_links_bs = 
   #hhs_bs
   hhs_links_bs %>% 
+  # first, join the village GPS data (this matches perfectly)
+  inner_join(hhs_morevars %>% 
+               select(HH_SURVEY_ID, intd_village, 
+                      X_loc_location_x_y_latitude, X_loc_location_x_y_longitude,
+                      loc_y_2, loc_x_2, avlat, avlong), 
+             by = "HH_SURVEY_ID") %>% 
+  
   mutate(
-    `_loc_location_x_y_longitude` = as.numeric(`_loc_location_x_y_longitude`),
-    `_loc_location_x_y_latitude` = as.numeric(`_loc_location_x_y_latitude`),
-    `loc_x_1` = as.numeric(`loc_x_1`),
-    `loc_Y_1` = as.numeric(`loc_Y_1`),
+    X_loc_location_x_y_longitude = as.numeric(X_loc_location_x_y_longitude),
+    X_loc_location_x_y_latitude = as.numeric(X_loc_location_x_y_latitude),
+    avlong = as.numeric(avlong),
+    avlat = as.numeric(avlat),
     PRO_LONGITUDE = case_when(
-      is.na(`_loc_location_x_y_longitude`) ~ loc_x_1, 
-      TRUE ~ `_loc_location_x_y_longitude`
+      is.na(X_loc_location_x_y_longitude) ~ avlong, 
+      TRUE ~ X_loc_location_x_y_longitude
     ),
     PRO_LATITUDE = case_when(
-      is.na(`_loc_location_x_y_latitude`) ~ loc_Y_1, 
-      TRUE ~ `_loc_location_x_y_latitude`
+      is.na(X_loc_location_x_y_latitude) ~ avlat, 
+      TRUE ~ X_loc_location_x_y_latitude
     )
   ) %>% 
   filter(!is.na(PRO_LONGITUDE)) %>% 
@@ -220,6 +249,19 @@ sfhhs_links_bs =
   st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
+  # no row lost! 
+
+  # DO SOME 
+  # sfhhs_links_bs %>% 
+  #   select(HH_SURVEY_ID, intd_village, 
+  #          X_loc_location_x_y_latitude, X_loc_location_x_y_longitude,
+  #          loc_y_2, loc_x_2, avlat, avlong)
+  # 
+  # sfhhs_links_bs %>% select(avlat, avlong) %>% summary()
+  # sfhhs_links_bs$loc_x_2 %>% unique()
+  # sfhhs_links_bs$loc_y_2 %>% unique()
+  
+  
 nrow(hhs_links_bs)
 nrow(sfhhs_links_bs)
 

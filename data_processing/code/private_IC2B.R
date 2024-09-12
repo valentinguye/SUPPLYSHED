@@ -160,18 +160,6 @@ fn_clean_fullname_manual <- function(col_name){
   )
 }
 
-
-# Helper function, to make sure there is a single status by coop, in post-prod section.  
-unique_noNA <- function(col_name){
-  unq <- na.omit(unique(col_name))#[!is.na(unique(col_name))]
-  if(length(unq) == 0){
-    toret <- NA
-  } else {
-    toret <- unq
-  }
-  return(toret)
-}
-
 # --- CONSOLIDATE PRIVATE DATA WITH PUBLIC DISCLOSURES ----------
 
 ## FT #### 
@@ -2940,6 +2928,16 @@ civ_coop_bs_year =
 #   arrange(COOP_ID) %>%
 #   View()
 
+# # Helper function, to make sure there is a single status by coop, in post-prod section.  
+# unique_noNA <- function(col_name){
+#   unq <- na.omit(unique(col_name))#[!is.na(unique(col_name))]
+#   if(length(unq) == 0){
+#     toret <- NA
+#   } else {
+#     toret <- unq
+#   }
+#   return(toret)
+# }
 # civ_coop_bs_year_tmp$COOP_STATUS %>% unique()
 # civ_coop_bs_year_tmp$COOP_STATUS_2 %>% unique()
 # civ_coop_bs_year_tmp %>%
