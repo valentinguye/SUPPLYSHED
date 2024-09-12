@@ -21,7 +21,7 @@ dir.create(here("temp_data", "preprocessed_sustain_cocoa"))
 civ_crs <- 32630
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
-source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 
 hhs = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "cocoa_sales_general.csv")) %>% 
@@ -330,70 +330,6 @@ write_csv(toexport,
 
 ## Export with more variables 
 
-potential_coopbs = 
-  coopbs %>% 
-  mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
-         COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
-         
-         TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
-         DISCLOSURE_SOURCES = if_else(DISCLOSURE_SOURCES == "" | DISCLOSURE_SOURCES == " ", NA, DISCLOSURE_SOURCES),
-         CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
-         
-         # characterize certifications
-         COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
-         
-         # this removes NAs because grepl("RA", NA) -> FALSE
-         COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
-         # detail certification
-         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
-         UTZ = grepl("UTZ", CERTIFICATIONS),
-         FT = grepl("FAIRTRADE", CERTIFICATIONS),
-         COOP_ONLY_RFA = RFA & !UTZ & !FT,
-         COOP_ONLY_UTZ = !RFA & UTZ & !FT,
-         COOP_ONLY_FT  = !RFA & !UTZ & FT,
-         COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
-         COOP_RFA_AND_FT  = RFA & !UTZ & FT,
-         COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
-         COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         
-         COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
-         
-         # characterize buyers
-         COOP_N_KNOWN_BUYERS = case_when(
-           !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
-           TRUE ~ 0
-         )) %>% 
-  
-  rename(COOP_N_FARMERS = TOTAL_FARMERS,
-         COOP_ABRVNAME = SUPPLIER_ABRVNAME, 
-         COOP_FULLNAME = SUPPLIER_FULLNAME, 
-         COOP_KNOWN_BUYERS = TRADER_NAMES, 
-         COOP_DISCLOSURE_SOURCES = DISCLOSURE_SOURCES,
-         COOP_KNOWN_CERTIFICATIONS = CERTIFICATIONS 
-         # COOP_BS_LONGITUDE = LONGITUDE,
-         # COOP_BS_LATITUDE = LATITUDE
-  ) %>% 
-  select(starts_with("COOP_"), -COOP_POINT_ID)
-
-toexport_2 = 
-  hhs_links_closestbs %>% 
-  mutate(PRODUCER_BS_DISTANCE_METERS = as.numeric(LINK_DISTANCE_METERS)) %>% 
-  left_join(potential_coopbs, 
-            by = "COOP_BS_ID") %>% 
-  select(starts_with("COOP_"),
-         BS_LONGITUDE, BS_LATITUDE,
-         PRODUCER_BS_DISTANCE_METERS, 
-         PRODUCER_LONGITUDE = PRO_LONGITUDE,
-         PRODUCER_LATITUDE = PRO_LATITUDE,
-         everything())
-
-toexport_2$COOP_DISCLOSURE_SOURCES %>% unique()
-
-write_csv(toexport_2,
-          file = here("temp_data", "preprocessed_sustain_cocoa", "sustaincocoa-privateIC2B_merge.csv"),
-          na = "NA", 
-          append = FALSE, 
-          col_names = TRUE)
 
 
 

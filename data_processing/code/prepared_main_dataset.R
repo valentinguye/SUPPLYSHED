@@ -32,7 +32,7 @@ dir.create(here("temp_data", "prepared_main_dataset"))
 civ_crs <- 32630
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
-source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 
 coopbsy = read.csv(
@@ -656,62 +656,18 @@ anyNA(potential_all$ACTUAL_COOP_LINK_ID)
 
 # ADD VARIABLES ----------------
 
+potential_all_save = potential_all
+
 init_nrow_pa = nrow(potential_all) # # just to check that this section does not add any row
 
-## Nb of potential coops -------- 
+## Cell-level variables ------------------
+
+### Nb of potential coops -------- 
 # was computed above (CELL_N_BS_WITHIN_DIST), because useful in a test. 
 potential_all$CELL_N_BS_WITHIN_DIST %>% summary()
 
- 
-## Compute distances -------------
-# From the cell centroid to all intermediaries potentially linked 
-# st_distance needs to work on same size df. 
 
-# this does not have the full grid anymore, but only grid cells with at least one potential link 
-only_potential_ctoid = 
-  # give back grid cell centroid coordinates
-  grid_ctoid %>% select(CELL_ID) %>%  
-  inner_join(
-    potential_all, 
-    by = "CELL_ID", 
-    multiple = "all"
-  ) %>% 
-  filter(!CELL_NO_POTENTIAL_LINK) # this includes actual links with other intermediaries than coops 
-nrow(potential_all) != nrow(only_potential_ctoid)
-
-if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
-   anyNA(only_potential_ctoid$BS_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
-
-potential_itmpt = 
-  only_potential_ctoid %>% 
-  st_drop_geometry() %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
-  st_transform(civ_crs) 
-
-only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <- 
-  st_distance(only_potential_ctoid, potential_itmpt, by_element = TRUE) %>% as.numeric()
-
-# merge back to the full grid
-(init_nrow <- nrow(potential_all))
-potential_all = 
-  potential_all %>% 
-  left_join(only_potential_ctoid %>% 
-              select(CELL_ID, ACTUAL_COOP_LINK_ID, ACTUAL_OTHER_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
-              st_drop_geometry(), 
-            # (join by ACTUAL_OTHER_LINK_ID too, bc these links are also in only_potential_ctoid)
-            by = c("CELL_ID", "ACTUAL_COOP_LINK_ID", "ACTUAL_OTHER_LINK_ID", "POTENTIAL_COOP_BS_ID"))
-if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
-
-# In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
-potential_all %>% 
-  mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
-    LINK_IS_ACTUAL ~ POTENTIAL_LINK_DISTANCE_METERS - ACTUAL_LINK_DISTANCE_METERS,
-    TRUE ~ NA
-    )) %>% 
-  pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
-
-
-## Cell district -----------
+### Cell district -----------
 # Just easier to do that here rather than in grid-level above. 
 # Use the full shapefile of departements, and not only cocoa departements here, 
 # because there are grid cells in no-cocoa departements. 
@@ -728,7 +684,8 @@ potential_all =
   left_join(grid_distr, 
             by = "CELL_ID")
 
-## Nb of coops in cell's district -------------
+
+### Nb of coops in cell's district -------------
 
 (n_coops_dpt = 
   coopbs %>% 
@@ -747,7 +704,7 @@ potential_all =
 
 
 
-## Nb other licensed buyers in cell's district -----------
+### Nb other licensed buyers in cell's district -----------
 licens_panel = 
   rbind(licens19 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2019),
         licens20 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2020),
@@ -775,50 +732,44 @@ potential_all =
                                    LVL_4_CODE), 
             by = join_by(CELL_DISTRICT_GEOCODE == LVL_4_CODE))
 
+
 ## Coop/BS-level variables ---------------------------
 
 ### IC2B variables -------------
 
 # We match these variabes at buying station level, but they vary at coop level anyway. 
 
-potential_coopbs = 
-  coopbs %>% 
-  mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
-         COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
-         
-         # Currently, we ALLOW NA VALUES in IC2B variables
-         TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
-         CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
-
-         # characterize certifications
-         COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
-         
-         # this removes NAs because grepl("RA", NA) -> FALSE
-         COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
-         # detail certification
-         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
-         UTZ = grepl("UTZ", CERTIFICATIONS),
-         FT = grepl("FAIRTRADE", CERTIFICATIONS),
-         COOP_ONLY_RFA = RFA & !UTZ & !FT,
-         COOP_ONLY_UTZ = !RFA & UTZ & !FT,
-         COOP_ONLY_FT  = !RFA & !UTZ & FT,
-         COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
-         COOP_RFA_AND_FT  = RFA & !UTZ & FT,
-         COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
-         COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         
-         COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
-         
-         # characterize buyers
-         COOP_N_KNOWN_BUYERS = case_when(
-           !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
-           TRUE ~ 0
-         )) %>% 
-  # number of known buying stations per coop, to proxy size 
-  group_by(COOP_ID) %>% 
-  mutate(COOP_N_KNOWN_BS = length(unique(COOP_BS_ID))) %>% 
-  ungroup() %>% 
-           
+# Make one-hot-encoded variables 
+coopbs_ohe = 
+  coopbs  %>% 
+  rowwise() %>% 
+  mutate(
+    # for RFA, UTZ & FT, they are already produced in private_IC2B.R post-prod section.
+    COOP_SSI_CARGILL = grepl("CARGILL", CERTIFICATIONS),
+    COOP_SSI_BARRY = grepl("BARRY CALLEBAUT", CERTIFICATIONS),
+    COOP_SSI_OLAM = grepl("OLAM", CERTIFICATIONS),
+    COOP_SSI_ECOM = grepl("ECOM", CERTIFICATIONS),
+    COOP_SSI_NESTLE = grepl("NESTLE", CERTIFICATIONS),
+    COOP_SSI_MONDELEZ = grepl("MONDELEZ", CERTIFICATIONS),
+    COOP_SSI_BLOMMER = grepl("BLOMMER", CERTIFICATIONS),
+    COOP_SSI_CEMOI = grepl("CEMOI", CERTIFICATIONS),
+    COOP_SSI_HERSHEY = grepl("HERSHEY", CERTIFICATIONS),
+    COOP_SSI_MARS = grepl("MARS", CERTIFICATIONS),
+    COOP_SSI_SUCDEN = grepl("SUCDEN", CERTIFICATIONS),
+    COOP_SSI_PURATOS = grepl("PURATOS", CERTIFICATIONS),
+    COOP_SSI_OTHER = grepl("OTHER", CERTIFICATIONS)
+  ) %>% 
+  mutate(tmp_value = TRUE) %>% 
+  pivot_wider(names_from = DISTRICT_NAME, 
+              names_prefix = "COOP_DISTRICT_",
+              values_from = tmp_value,  
+              values_fill = FALSE) %>% 
+  mutate(tmp_value = TRUE) %>% 
+  pivot_wider(names_from = COOP_STATUS, 
+              names_prefix = "COOP_STATUS_",
+              values_from = tmp_value,  
+              values_fill = FALSE) %>% 
+  select(-COOP_STATUS_NA) %>% 
   rename(COOP_FARMERS = TOTAL_FARMERS,
          COOP_ABRVNAME = SUPPLIER_ABRVNAME, 
          COOP_FULLNAME = SUPPLIER_FULLNAME, 
@@ -826,14 +777,16 @@ potential_coopbs =
          COOP_CERTIFICATIONS = CERTIFICATIONS) %>% 
   select(starts_with("COOP_"))
   
-# names(potential_coopbs)
+stopifnot(nrow(coopbs)==nrow(coopbs_ohe))
+
+# names(coopbs_ohe)
 # coopbs %>% 
 #   filter(!is.na(BS_LONGITUDE)) %>% 
 #   pull(TOTAL_FARMERS) %>% summary()
 
 potential_all = 
   potential_all %>% 
-  left_join(potential_coopbs, 
+  left_join(coopbs_ohe, 
             by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
 
@@ -893,6 +846,92 @@ names(potential_all)
 
 if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")}
 
+
+## Link-level variables ----------------
+
+### Compute distances -------------
+# Between every buyer location and either the producer location when available, and the cell centroid otherwise.
+
+# Prepare the two kinds:
+
+# Those with exact producer location
+potential_obsed =
+  potential_all %>% 
+  filter(!is.na(PRO_LONGITUDE)) %>% 
+  mutate(PROEXT_LONGITUDE = PRO_LONGITUDE,
+         PROEXT_LATITUDE  = PRO_LATITUDE)
+
+# Those without
+grid_ctoid_coords = 
+  grid_ctoid %>% 
+  st_transform(crs = 4326) 
+
+grid_ctoid_coords$PROEXT_LONGITUDE = st_coordinates(grid_ctoid_coords)[,1]
+grid_ctoid_coords$PROEXT_LATITUDE = st_coordinates(grid_ctoid_coords)[,2]
+grid_ctoid_coords = grid_ctoid_coords %>% select(CELL_ID, PROEXT_LONGITUDE, PROEXT_LATITUDE) %>% st_drop_geometry()
+grid_ctoid_coords$PROEXT_LATITUDE %>% summary()
+
+potential_notobsed =
+  potential_all %>% 
+  filter(is.na(PRO_LONGITUDE)) %>% 
+  left_join(
+    grid_ctoid_coords, 
+    by = "CELL_ID", 
+  ) %>% 
+  select(names(potential_obsed))
+
+# bind them 
+only_potential_ctoid = 
+  rbind(
+    potential_obsed, 
+    potential_notobsed
+  ) %>% 
+  st_as_sf(coords = c("PROEXT_LONGITUDE", "PROEXT_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) %>% 
+  # bc of that filter, it's not thefull grid anymore, but only grid cells with at least one potential link 
+  # for the others, there is no distance to compute
+  filter(!CELL_NO_POTENTIAL_LINK) # this includes actual links with other intermediaries than coops 
+
+# plot(st_geometry(only_potential_ctoid)) don't plot, its too heavy at 3km cells
+
+if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
+   anyNA(only_potential_ctoid$BS_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
+
+rm(potential_obsed, potential_notobsed)
+# st_distance needs to work on same size df. 
+potential_itmpt = 
+  only_potential_ctoid %>% 
+  st_drop_geometry() %>% 
+  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
+
+only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <- 
+  st_distance(only_potential_ctoid, potential_itmpt, by_element = TRUE) %>% as.numeric()
+
+rm(potential_itmpt)
+
+# merge back to the full grid
+(init_nrow <- nrow(potential_all))
+potential_all = 
+  potential_all %>% 
+  left_join(only_potential_ctoid %>% 
+              select(CELL_ID, ACTUAL_COOP_LINK_ID, ACTUAL_OTHER_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
+              st_drop_geometry(), 
+            # (join by ACTUAL_OTHER_LINK_ID too, bc these links are also in only_potential_ctoid)
+            by = c("CELL_ID", "ACTUAL_COOP_LINK_ID", "ACTUAL_OTHER_LINK_ID", "POTENTIAL_COOP_BS_ID"))
+
+if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
+
+rm(only_potential_ctoid)
+
+# In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
+# Should only be 0 now 
+potential_all %>% 
+  mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
+    LINK_IS_ACTUAL ~ POTENTIAL_LINK_DISTANCE_METERS - ACTUAL_LINK_DISTANCE_METERS,
+    TRUE ~ NA
+  )) %>% 
+  pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
 
 # EXPORT -------
 

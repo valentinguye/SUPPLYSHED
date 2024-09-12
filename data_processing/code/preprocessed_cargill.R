@@ -25,7 +25,7 @@ civ_crs <- 32630
 
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
-source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 
 

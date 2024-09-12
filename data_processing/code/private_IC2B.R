@@ -78,7 +78,7 @@ departements <- s3read_using(
 # source(here::here("trase", "tools","traseviz", "R", "theme_trase.R"))
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
-source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 # This helper function is used to impute missing values within a group where the non-missing values are unique. 
 unique_unique <- function(col_name){
@@ -160,6 +160,17 @@ fn_clean_fullname_manual <- function(col_name){
   )
 }
 
+
+# Helper function, to make sure there is a single status by coop, in post-prod section.  
+unique_noNA <- function(col_name){
+  unq <- na.omit(unique(col_name))#[!is.na(unique(col_name))]
+  if(length(unq) == 0){
+    toret <- NA
+  } else {
+    toret <- unq
+  }
+  return(toret)
+}
 
 # --- CONSOLIDATE PRIVATE DATA WITH PUBLIC DISCLOSURES ----------
 
@@ -2855,41 +2866,92 @@ civ_seipcs %>%
 # (model.R, preprocessed_sustaincocoa..., direct_certified.R)
 civ_coop_bs_year = 
   civ_coop_bs_year %>% 
-  mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
-         COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
-         
-         TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
-         DISCLOSURE_SOURCES = if_else(DISCLOSURE_SOURCES == "" | DISCLOSURE_SOURCES == " ", NA, DISCLOSURE_SOURCES),
-         CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
-         
-         # characterize certifications
-         COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
-         
-         # this removes NAs because grepl("RA", NA) -> FALSE
-         COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
-         # detail certification
-         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
-         UTZ = grepl("UTZ", CERTIFICATIONS),
-         FT = grepl("FAIRTRADE", CERTIFICATIONS),
-         COOP_ONLY_RFA = RFA & !UTZ & !FT,
-         COOP_ONLY_UTZ = !RFA & UTZ & !FT,
-         COOP_ONLY_FT  = !RFA & !UTZ & FT,
-         COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
-         COOP_RFA_AND_FT  = RFA & !UTZ & FT,
-         COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
-         COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         
-         COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
-         
-         # characterize buyers
-         COOP_N_KNOWN_BUYERS = case_when(
-           !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
-           TRUE ~ 0
-         )) %>% 
-  # number of known buying stations per coop, to proxy size 
-  group_by(COOP_ID) %>% 
-  mutate(COOP_N_KNOWN_BS = length(unique(COOP_BS_ID))) %>% 
-  ungroup() 
+  rowwise() %>% 
+  mutate(
+     COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
+     COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
+     
+     # Currently, we ALLOW NA VALUES in IC2B variables
+     TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
+     CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
+     
+     # characterize certifications
+     COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
+     
+     # this removes NAs because grepl("RA", NA) -> FALSE
+     COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
+     # detail certification
+     RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
+     UTZ = grepl("UTZ", CERTIFICATIONS),
+     FT = grepl("FAIRTRADE", CERTIFICATIONS),
+     COOP_ONLY_RFA = RFA & !UTZ & !FT,
+     COOP_ONLY_UTZ = !RFA & UTZ & !FT,
+     COOP_ONLY_FT  = !RFA & !UTZ & FT,
+     COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
+     COOP_RFA_AND_FT  = RFA & !UTZ & FT,
+     COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
+     COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
+     
+     COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS) # see fn_standard_certification_names in private_IC2B.R
+    ) %>% 
+    # just easier they were short above
+    rename(
+      COOP_RFA = RFA,
+      COOP_UTZ = UTZ,
+      COOP_FT = FT
+    ) %>% 
+    
+    # Number buyers
+    mutate(COOP_N_KNOWN_BUYERS = case_when(
+        !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
+        TRUE ~ 0)
+    ) %>% 
+  
+    # Number of known buying stations per coop (across years), to proxy size 
+    group_by(COOP_ID) %>% 
+    mutate(COOP_N_KNOWN_BS = length(unique(COOP_BS_ID))) %>% 
+    ungroup() %>% 
+  
+    # Coop status (COOP-CA or SCOOPS)
+    mutate(COOP_STATUS = fn_recognize_coop_status(SUPPLIER_ABRVNAME),
+           COOP_STATUS = case_when(
+             is.na(COOP_STATUS) ~ fn_recognize_coop_status(SUPPLIER_FULLNAME), 
+             TRUE ~ COOP_STATUS
+           )) %>% 
+    # make sure there is unique coop status by coop ID
+    # Only five coops were found to apparently have the two statuses. 
+    # unique_mode also handles the replacement of NAs by the status when available in other obs. of that coop
+    group_by(COOP_ID) %>% 
+    mutate(COOP_STATUS = unique_mode(COOP_STATUS)) %>% 
+    ungroup() 
+  
+  
+  # no need to do it this way:         
+  # group_by(COOP_ID) %>% 
+  # mutate(
+  #   COOP_STATUS = 
+  #     case_when(
+  #       is.na(COOP_STATUS) ~ unique_noNA(COOP_STATUS),
+  #       TRUE ~ COOP_STATUS)
+  # ) %>% 
+  # ungroup() 
+# civ_coop_bs_year_tmp %>% 
+#   select(COOP_ID, COOP_BS_ID, COOP_STATUS, COOP_STATUS_2, everything()) %>%
+#   arrange(COOP_ID) %>%
+#   View()
+
+# civ_coop_bs_year_tmp$COOP_STATUS %>% unique()
+# civ_coop_bs_year_tmp$COOP_STATUS_2 %>% unique()
+# civ_coop_bs_year_tmp %>%
+#   select(COOP_ID, COOP_BS_ID, COOP_STATUS, everything()) %>%
+#   arrange(COOP_ID) %>%
+#   View()
+# bothstat =    
+# civ_coop_bs_year_tmp %>% 
+# rowwise() %>% 
+# filter("COOP-CA" %in% COOP_STATUS & "SCOOPS" %in% COOP_STATUS) 
+# bothstat$COOP_ID %>% unique()
+
 
 # EXPORT ---------------------
 dir.create(here("temp_data/private_IC2B"))

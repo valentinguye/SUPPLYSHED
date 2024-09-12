@@ -76,6 +76,17 @@ fn_clean_abrvname3 <- function(col_name){
 }
 
 
+fn_recognize_coop_status <- function(col_name){
+  case_when(
+    grepl(pattern = "SIMPLIFI|SCOOPS | SCOOPS$|SCOOPS-|-SCOOPS$", # there must be the S at the end, otherwise it's clear that it's a SCOOPS rather than a SCOOP CA. The S as prefix is common to both types potentially, so do not include patterns like: SCOOP | SCOOP$|SCOOP-|-SCOOP$|
+          x = col_name) ~ "SCOOPS", 
+    
+    grepl(pattern = "CONSEIL|ADMINISTRATION|COOP CA | COOP CA$|COOP-CA | COOP-CA$|COOPCA | COOPCA$|COOPCA-|-COOPCA$|COOP-CA-|-COOP-CA$", 
+          x = col_name) ~ "COOP-CA", 
+    
+    TRUE ~ NA
+  )
+}
 
 # old, not used  
 fn_clean_names <- function(col_name) {

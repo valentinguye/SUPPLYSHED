@@ -21,7 +21,7 @@ dir.create(here("temp_data", "preprocessed_sustain_cocoa"))
 civ_crs <- 32630
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
-source(here("code", "USEFUL_STUFF_manually_copy_pasted.R"))
+source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 
 vil = read_xlsx(here("input_data", "sustain_cocoa", "surveys_civ", "Village_level_survey_Cote_dIvoire_-_all_versions_-_False_-_2023-12-04-14-44-13.xlsx"), 
@@ -346,38 +346,6 @@ write_csv(toexport,
 
 potential_coopbs = 
   coopbs %>% 
-  mutate(COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
-         COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
-         
-         TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
-         DISCLOSURE_SOURCES = if_else(DISCLOSURE_SOURCES == "" | DISCLOSURE_SOURCES == " ", NA, DISCLOSURE_SOURCES),
-         CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
-         
-         # characterize certifications
-         COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),
-         
-         # this removes NAs because grepl("RA", NA) -> FALSE
-         COOP_CERTIFIED = grepl("RAINFOREST ALLIANCE|UTZ|FAIRTRADE", CERTIFICATIONS), #|FAIR FOR LIFE|BIOLOGIQUE
-         # detail certification
-         RFA = grepl("RAINFOREST ALLIANCE", CERTIFICATIONS),
-         UTZ = grepl("UTZ", CERTIFICATIONS),
-         FT = grepl("FAIRTRADE", CERTIFICATIONS),
-         COOP_ONLY_RFA = RFA & !UTZ & !FT,
-         COOP_ONLY_UTZ = !RFA & UTZ & !FT,
-         COOP_ONLY_FT  = !RFA & !UTZ & FT,
-         COOP_RFA_AND_UTZ = RFA & UTZ & !FT,
-         COOP_RFA_AND_FT  = RFA & !UTZ & FT,
-         COOP_UTZ_AND_FT  = !RFA & UTZ & FT,
-         COOP_RFA_AND_UTZ_AND_FT = RFA & UTZ & FT,
-         
-         COOP_HAS_SSI = grepl("[(]", CERTIFICATIONS), # see fn_standard_certification_names in private_IC2B.R
-         
-         # characterize buyers
-         COOP_N_KNOWN_BUYERS = case_when(
-           !is.na(TRADER_NAMES) ~ str_count(TRADER_NAMES, "[+]") + 1, 
-           TRUE ~ 0
-         )) %>% 
-  
   rename(COOP_N_FARMERS = TOTAL_FARMERS,
          COOP_ABRVNAME = SUPPLIER_ABRVNAME, 
          COOP_FULLNAME = SUPPLIER_FULLNAME, 
