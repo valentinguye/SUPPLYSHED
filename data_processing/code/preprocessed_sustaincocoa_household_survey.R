@@ -39,13 +39,14 @@ choices = read_xlsx(here("input_data", "sustain_cocoa", "surveys_civ", "ref_surv
                     col_names = TRUE) 
 
 # IC2B (private) 
-# filter to 2021 because we need a cross-section and it's the year when survey data is valid for 
+# filter to 2022 because we need a cross-section and it's the year when survey data is valid for 
 
 # ic2b = read.csv(here("input_data", "dataverse_files", "IC2B_coopyear.csv")) %>% 
 coopbs <- 
   read.csv(
     file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) %>% 
-  filter(YEAR == 2021) 
+  filter(YEAR == 2022) %>% 
+  select(-LVL_4_NAME)
 
 
 # Departements (districts)
@@ -54,6 +55,48 @@ departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
 departements = 
   st_transform(departements, crs = civ_crs)
 
+
+# Join volumes sold to every buyer ------------
+
+hhs_byb$buyer_cocoa_name_quant_b1 %>% summary()
+hhs_byb$buyer_cocoa_name_quant_unit_b1 %>% unique()
+hhs_byb$buyer_cocoa_name_quant_unit_b1 %>% table()
+
+hhs_byb %>% 
+  filter(buyer_cocoa_name_quant_unit_b1 == "") %>% 
+  pull(buyer_cocoa_name_quant_b1) %>% summary()
+
+hhs_volbyb =
+  hhs_byb %>% 
+  select(HH_SURVEY_ID, starts_with("buyer_cocoa_name_")) %>% 
+  mutate(
+    buyer_cocoa_name_VOLUME_KG_b1 = case_when(
+      buyer_cocoa_name_quant_unit_b1 == "kg"  ~ buyer_cocoa_name_quant_b1, 
+      buyer_cocoa_name_quant_unit_b1 == ""    ~ buyer_cocoa_name_quant_b1,
+      buyer_cocoa_name_quant_unit_b1 == "ton" ~ buyer_cocoa_name_quant_b1*1e3, 
+      buyer_cocoa_name_quant_unit_b1 == "bag" ~ buyer_cocoa_name_quant_b1*60
+    ), 
+    buyer_cocoa_name_VOLUME_KG_b2 = case_when(
+      buyer_cocoa_name_quant_unit_b2 == "kg"  ~ buyer_cocoa_name_quant_b2, 
+      buyer_cocoa_name_quant_unit_b2 == ""    ~ buyer_cocoa_name_quant_b2,
+      buyer_cocoa_name_quant_unit_b2 == "ton" ~ buyer_cocoa_name_quant_b2*1e3, 
+      buyer_cocoa_name_quant_unit_b2 == "bag" ~ buyer_cocoa_name_quant_b2*60,
+    ),
+    buyer_cocoa_name_VOLUME_KG_b3 = case_when(
+      buyer_cocoa_name_quant_unit_b3 == "kg"  ~ buyer_cocoa_name_quant_b3, 
+      buyer_cocoa_name_quant_unit_b3 == ""    ~ buyer_cocoa_name_quant_b3,
+      buyer_cocoa_name_quant_unit_b3 == "ton" ~ buyer_cocoa_name_quant_b3*1e3, 
+      buyer_cocoa_name_quant_unit_b3 == "bag" ~ buyer_cocoa_name_quant_b3*60,
+    )
+  )
+
+
+hhs = 
+  hhs %>% 
+  left_join(
+    hhs_volbyb %>% select(HH_SURVEY_ID, starts_with("buyer_cocoa_name_VOLUME_KG")), 
+    by = "HH_SURVEY_ID"
+  )
 
 # Join with IC2B -----
 
@@ -88,78 +131,109 @@ hhs_links =
   select(HH_SURVEY_ID, starts_with("buyer_cocoa_name_")) %>% 
   # When the name is "other", give the value reported in the corresponding column
   mutate(
-    COOP_ABRV_NAME_1 = case_when(
+    BUYER_NAME_1 = case_when(
       buyer_cocoa_name_1 == "other" ~ buyer_cocoa_name_other_1, 
       TRUE ~ buyer_cocoa_name_1
     ),
-    COOP_ABRV_NAME_2 = case_when(
+    BUYER_NAME_2 = case_when(
       buyer_cocoa_name_2 == "other" ~ buyer_cocoa_name_other_2, 
       TRUE ~ buyer_cocoa_name_2
     ),
-    COOP_ABRV_NAME_3 = case_when(
+    BUYER_NAME_3 = case_when(
       buyer_cocoa_name_3 == "other" ~ buyer_cocoa_name_other_3, 
       TRUE ~ buyer_cocoa_name_3
-    ),
-    COOP_ABRV_NAME_4 = case_when(
-      buyer_cocoa_name_4 == "other" ~ buyer_cocoa_name_other_4, 
-      TRUE ~ buyer_cocoa_name_4
     )
+    # this adds no info and there is no volume var. for buyer 4 anyway.  
+    # BUYER_NAME_4 = case_when(
+    #   buyer_cocoa_name_4 == "other" ~ buyer_cocoa_name_other_4, 
+    #   TRUE ~ buyer_cocoa_name_4
+    # )
   ) %>% 
   # reshape to have one row per HH-buyer link
   pivot_longer(
-    cols = starts_with("COOP_ABRV_NAME_"), 
-    values_to = "COOP_ABRV_NAME"
+    cols = starts_with("BUYER_NAME_"), 
+    values_to = "BUYER_NAME"
   ) %>% 
+  rename(BUYER_RANK = name) %>% 
+  # adjust the non-pivoted volume vars: 
+  mutate(LINK_VOLUME_KG = case_when(
+    BUYER_RANK == "BUYER_NAME_1" ~ buyer_cocoa_name_VOLUME_KG_b1,
+    BUYER_RANK == "BUYER_NAME_2" ~ buyer_cocoa_name_VOLUME_KG_b2,
+    BUYER_RANK == "BUYER_NAME_3" ~ buyer_cocoa_name_VOLUME_KG_b3,
+    TRUE ~ NA
+  )) %>%
   
   # convert the keys responded in buyer_cocoa_name into names
-  left_join(sc_coop_names %>% rename(COOP_ABRV_NAME_EXTERN = COOP_ABRV_NAME), 
-            by = join_by("COOP_ABRV_NAME" == "COOP_SURVEY_KEY")) %>% 
-  mutate(COOP_ABRV_NAME = case_when(
-    !is.na(COOP_ABRV_NAME_EXTERN) ~ COOP_ABRV_NAME_EXTERN, 
-    TRUE ~ COOP_ABRV_NAME
+  left_join(sc_coop_names, # %>% rename(BUYER_NAME_EXTERN = COOP_ABRV_NAME), 
+            by = join_by("BUYER_NAME" == "COOP_SURVEY_KEY")) %>% 
+  mutate(BUYER_NAME = case_when(
+    !is.na(COOP_ABRV_NAME) ~ COOP_ABRV_NAME, 
+    TRUE ~ BUYER_NAME
   )) 
-  hhs_links$COOP_ABRV_NAME %>% str_trans() %>% unique()
+  hhs_links$BUYER_NAME %>% str_trans() %>% unique()
   
   # Now clean these strings
   hhs_links = 
     hhs_links %>% 
-    mutate(COOP_ABRV_NAME = str_trans(COOP_ABRV_NAME), 
-           COOP_ABRV_NAME = case_when(
-             COOP_ABRV_NAME %in% c("", " ", "NA", "N A", "999", "1", "COOPERATIVE 1", "N[\\]A", "N[/]A", "N[//]A") | grepl("OUBLIE|CONNAIS PAS", COOP_ABRV_NAME) ~ NA, 
-             TRUE ~ COOP_ABRV_NAME
+    mutate(BUYER_NAME = str_trans(BUYER_NAME), 
+           BUYER_NAME = case_when(
+             BUYER_NAME %in% c("", " ", "NA", "N A", "999", "1", "COOPERATIVE 1", "N[\\]A", "N[/]A", "N[//]A") | grepl("OUBLIE|CONNAIS PAS", BUYER_NAME) ~ NA, 
+             TRUE ~ BUYER_NAME
            ), 
-           COOP_ABRV_NAME = case_when(
-             COOP_ABRV_NAME == "SOCIETE COOPERATIVE AGRICOLE DE YAKASSE-ATTOBROU" ~ "COOPROYA", 
-             COOP_ABRV_NAME == "COOPERATIVE DES PRODUCTEURS ASSOCIES DE L'AGNEBY" ~ "COOPAA", 
-             TRUE ~ COOP_ABRV_NAME
+           BUYER_NAME = case_when(
+             BUYER_NAME == "SOCIETE COOPERATIVE AGRICOLE DE YAKASSE-ATTOBROU" ~ "COOPROYA", 
+             BUYER_NAME == "COOPERATIVE DES PRODUCTEURS ASSOCIES DE L'AGNEBY" ~ "COOPAA", 
+             TRUE ~ BUYER_NAME
            ),
-           IS_BUYER_COOP = if_else(grepl("COOP", COOP_ABRV_NAME), TRUE, NA),
+           IS_BUYER_COOP = if_else(grepl("COOP", BUYER_NAME), TRUE, NA),
            IS_BUYER_COOP = case_when(
-             grepl("PISTEUR|LIBANAIS|ACHETEUR", COOP_ABRV_NAME) ~ FALSE,
+             grepl("PISTEUR|LIBANAIS|ACHETEUR", BUYER_NAME) ~ FALSE,
              TRUE ~ IS_BUYER_COOP
            ), 
            
            # Make simplified acronyms
-           COOP_ABRV_NAME = str_squish(gsub("(COOPERATIVE)|COOPERATIVE|COOPERATIVES|(COOPERATIVE DU VILLAGE)", "", COOP_ABRV_NAME)),
-           COOP_SIMPLIF_ABRV_NAME = fn_clean_abrvname3(fn_clean_abrvname2(fn_clean_abrvname1(COOP_ABRV_NAME))), 
-           COOP_SIMPLIF_ABRV_NAME = case_when(
-             COOP_SIMPLIF_ABRV_NAME == "C A S B" ~ "CASB",
-             COOP_SIMPLIF_ABRV_NAME %in% c("", " ", "NA", "N A") ~ NA, 
-             TRUE ~ COOP_SIMPLIF_ABRV_NAME
+           BUYER_NAME = str_squish(gsub("(COOPERATIVE)|COOPERATIVE|COOPERATIVES|(COOPERATIVE DU VILLAGE)", "", BUYER_NAME)),
+           BUYER_SIMPLIF_NAME = fn_clean_abrvname3(fn_clean_abrvname2(fn_clean_abrvname1(BUYER_NAME))), 
+           BUYER_SIMPLIF_NAME = case_when(
+             BUYER_SIMPLIF_NAME == "C A S B" ~ "CASB",
+             BUYER_SIMPLIF_NAME %in% c("", " ", "NA", "N A") ~ NA, 
+             TRUE ~ BUYER_SIMPLIF_NAME
              )
            )
-  (simplif_names = sort(unique(hhs_links$COOP_SIMPLIF_ABRV_NAME)))
+  (simplif_names = sort(unique(hhs_links$BUYER_SIMPLIF_NAME)))
   
   # this doesn't catch all weird characters but so be it. 
-  grep("N[\\]A", x = hhs_links$COOP_ABRV_NAME, value = T)
-  grep("N[\]A", x = hhs_links$COOP_ABRV_NAME, value = T)
+  grep("N[\\]A", x = hhs_links$BUYER_NAME, value = T)
+  # grep("N[\]A", x = hhs_links$BUYER_NAME, value = T)
   
   # coopbs %>% filter(grepl("C A S B", SUPPLIER_ABRVNAME))
   
 hhs_links %>% 
-  distinct(COOP_ABRV_NAME, .keep_all = T) %>% 
-  select(COOP_ABRV_NAME, COOP_SIMPLIF_ABRV_NAME) %>% 
+  distinct(BUYER_NAME, .keep_all = T) %>% 
+  select(BUYER_NAME, BUYER_SIMPLIF_NAME) %>% 
   View()
+
+# Based on this, remove links with buyers with no info at all (i.e. that can hardly be considered a link)
+nrow(hhs_links)
+hhs_links = 
+  hhs_links %>% 
+  filter(!(is.na(BUYER_SIMPLIF_NAME) & is.na(IS_BUYER_COOP)))
+nrow(hhs_links)
+# this is many rows removed, because for every HH there were rows for all 4 buyers, 
+# but buyers 2 to 4 were often left empty. 
+
+# One row is known to be a coop although it's simplified name was cleaned to NA. 
+hhs_links %>% 
+  filter(is.na(BUYER_SIMPLIF_NAME) & !is.na(IS_BUYER_COOP))
+
+# Some (~50) of these links are duplicated, for some reason. Remove now to avoid confusion when joining IC2B
+# hhs_links %>% arrange(HH_SURVEY_ID) %>% View()
+# hhs_links %>% filter(HH_SURVEY_ID=="ffnxs") %>% View()
+hhs_links =
+  hhs_links %>% 
+  distinct(HH_SURVEY_ID, BUYER_SIMPLIF_NAME, .keep_all = TRUE) %>% 
+  # and remove now useless variables 
+  select(!starts_with("buyer_cocoa_name"))
 
 
 ## Prepare IC2B to join --------
@@ -183,13 +257,13 @@ coopbs_tomatch =
 ## Join coop survey with IC2B -------
 
 #  To give IC2B attributes (at bs-level) to survey coop data 
-hhs_links_bs = 
+hhs_links_all = 
   hhs_links %>% 
-  # inner_join to work only on links with coops
-  inner_join(coopbs_tomatch, 
-             by = join_by("COOP_SIMPLIF_ABRV_NAME" == "SIMPLIF_ABRVNAME"), 
+  # BUT KEEP LINKS WITH OTHER THINGS THAN IC2B COOPS 
+  left_join(coopbs_tomatch, 
+             by = join_by("BUYER_SIMPLIF_NAME" == "SIMPLIF_ABRVNAME"), 
              multiple = "all") # multiple matches are expected, coops have several buying stations in IC2B.
-
+ 
 # This introduces duplicates for different reasons: 
 # - an abbreviated name in survey data may match several distinct coops with the same abbreviated name 
 # - an abbreviated name in survey data may match a single coop but with several buying stations
@@ -201,32 +275,103 @@ hhs_links_bs =
 # Currently we do nearest match. 
 
 coopbs_tomatch$COOP_BS_ID %>% unique() %>% length()
-hhs_links_bs$COOP_BS_ID %>% unique() %>% length()
+hhs_links_all$COOP_BS_ID %>% unique() %>% na.omit() %>% length()
 
-# names(hhs_links_bs)
-hhs_links_bs %>% 
+# names(hhs_links_all)
+hhs_links_all %>% 
   select(COOP_ID, COOP_POINT_ID, COOP_BS_ID, HH_SURVEY_ID,
          COOP_ABRV_NAME, 
-         SUPPLIER_ABRVNAME, COOP_SIMPLIF_ABRV_NAME, SUPPLIER_FULLNAME, 
+         SUPPLIER_ABRVNAME, BUYER_SIMPLIF_NAME, SUPPLIER_FULLNAME, 
          BS_LONGITUDE, BS_LATITUDE) %>% 
   View()
 
-# not all households have a link with at least 1 bs
-hhs_links_bs$HH_SURVEY_ID %>% unique() %>% length()
-hhs_links$HH_SURVEY_ID %>% unique() %>% length()
-hhs$HH_SURVEY_ID %>% unique() %>% length()
+# many households don't have a link with a BS
+hhs_links_all %>% filter(is.na(COOP_BS_ID)) %>% nrow()
 
 
-# Spatialize -----------
+# Other vars ------------------
 
-sfhhs_links_bs = 
-  #hhs_bs
-  hhs_links_bs %>% 
-  # first, join the village GPS data (this matches perfectly)
+## Coop/other indicator -------------
+## update it based on matches with IC2B
+hhs_links_all = 
+  hhs_links_all %>% 
+  mutate(IS_BUYER_COOP = case_when(
+    !is.na(COOP_BS_ID) ~ TRUE, 
+    TRUE ~ IS_BUYER_COOP)) 
+
+# and deem all other cases as other buyers than coops, except for a few exceptions, recognized from there
+hhs_links_all %>% 
+  filter(is.na(IS_BUYER_COOP)) %>% 
+  pull(BUYER_SIMPLIF_NAME) %>% unique() %>% sort()
+
+exceptions = c("ECOPAC", "EECOPAKCA", "GVC", "SC CAOSI", "SCOOCS3A", "SCPCCT CA2", "SCPCCT1", 
+               "SKFAT", "SKFRA", "SOCADPD", "SOCOPGA", "SOKOSAT", 
+               "SPAAD MAN", "SPAD", "SPAD SARL", "SPAD TOUTOUKO 1", "SPADGAGNAO", "SPADGAGNOA", "SPCCT", 
+               "URCG", "UTZ", "VIE", "WACA JACA", "ZPA") 
+hhs_links_all = 
+  hhs_links_all %>% 
+  mutate(IS_BUYER_COOP = case_when(
+    BUYER_SIMPLIF_NAME %in% exceptions ~ TRUE, 
+    TRUE ~ FALSE)) 
+
+summary(hhs_links_all$IS_BUYER_COOP)
+
+
+## Volumes ---------------
+# LINK_VOLUME_KG was actually produced in the reshape above, after pivot_longer
+
+# Here we just handle volume outliers 
+hhs_links_all$LINK_VOLUME_KG %>% summary()
+vol_outliers = boxplot.stats(hhs_links_all$LINK_VOLUME_KG, coef = 2)$out %>% sort()
+
+hhs_links_all$LINK_VOLUME_KG %>% summary()
+
+hhs_links_all = 
+  hhs_links_all %>% 
+  mutate(LINK_VOLUME_KG = case_when(
+    LINK_VOLUME_KG %in% vol_outliers ~ median(hhs_links_all$LINK_VOLUME_KG), 
+    TRUE ~ LINK_VOLUME_KG
+  ))
+
+hhs_links_all$LINK_VOLUME_KG %>% summary()
+
+
+## Village name  -------------
+hhs_links_all = 
+  hhs_links_all %>% 
+  left_join(hhs_morevars %>% 
+              st_drop_geometry() %>% 
+              select(HH_SURVEY_ID, PRO_VILLAGE_NAME = intd_village),
+            by = "HH_SURVEY_ID") 
+
+anyNA(hhs_links_all$PRO_VILLAGE_NAME)
+
+
+## Link ID ------------
+
+# At this stage, hhs_links_all has unique, rather valid, links with both buyers found in IC2B and other buyers
+
+# Create a link ID that uniquely identifies them
+hhs_links_all = 
+  hhs_links_all %>% 
+  # group by buyer simplif name and coop bs id necessary because the latter is many times NAs for HH not matched with IC2B.
+  group_by(HH_SURVEY_ID, BUYER_SIMPLIF_NAME, COOP_BS_ID) %>% 
+  mutate(LINK_ID = cur_group_id()) %>% 
+  ungroup()
+
+stopifnot(hhs_links_all$LINK_ID %>% unique() %>% length() == nrow(hhs_links_all))
+
+
+# SPATIAL OPERATIONS-----------
+
+# Join village coordinates
+sfhhs_links_all = 
+  hhs_links_all %>% 
+  # first, join the village GPS data (this matches perfectly) and name
   inner_join(hhs_morevars %>% 
-               select(HH_SURVEY_ID, intd_village, 
+               select(HH_SURVEY_ID, 
                       X_loc_location_x_y_latitude, X_loc_location_x_y_longitude,
-                      loc_y_2, loc_x_2, avlat, avlong), 
+                      avlat, avlong), # loc_y_2, loc_x_2, these not necessary
              by = "HH_SURVEY_ID") %>% 
   
   mutate(
@@ -235,7 +380,7 @@ sfhhs_links_bs =
     avlong = as.numeric(avlong),
     avlat = as.numeric(avlat),
     PRO_LONGITUDE = case_when(
-      is.na(X_loc_location_x_y_longitude) ~ avlong, 
+      is.na(X_loc_location_x_y_longitude) ~ avlong, # replaces 165 NAs
       TRUE ~ X_loc_location_x_y_longitude
     ),
     PRO_LATITUDE = case_when(
@@ -248,124 +393,166 @@ sfhhs_links_bs =
   filter(PRO_LATITUDE > 4 & PRO_LONGITUDE < 2) %>%
   st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
-
-  # no row lost! 
-
-  # DO SOME 
-  # sfhhs_links_bs %>% 
-  #   select(HH_SURVEY_ID, intd_village, 
-  #          X_loc_location_x_y_latitude, X_loc_location_x_y_longitude,
-  #          loc_y_2, loc_x_2, avlat, avlong)
-  # 
-  # sfhhs_links_bs %>% select(avlat, avlong) %>% summary()
-  # sfhhs_links_bs$loc_x_2 %>% unique()
-  # sfhhs_links_bs$loc_y_2 %>% unique()
   
-  
-nrow(hhs_links_bs)
-nrow(sfhhs_links_bs)
+# no row lost! 
+nrow(sfhhs_links_all) == nrow(hhs_links_all)
 
-### Add departments
-sfhhs_links_bs <- 
-  sfhhs_links_bs %>% 
+sfhhs_links_all %>% 
+  filter(is.na(X_loc_location_x_y_latitude)) %>% nrow()
+sfhhs_links_all %>% 
+  filter(is.na(X_loc_location_x_y_latitude) & !is.na(X_loc_location_x_y_longitude)) %>% nrow()
+sfhhs_links_all %>% 
+  filter(is.na(X_loc_location_x_y_latitude) & !is.na(avlat)) %>% nrow()
+
+
+## HH departments --------------
+sfhhs_links_all <- 
+  sfhhs_links_all %>% 
   st_join(departements[,c("LVL_4_CODE", "LVL_4_NAME")],
           join = st_intersects) 
 
-## Make distance var ------------
 
+## Distance ------------
+
+# Not all links can be given a distance, because some are with non-IC2B buyers. 
+# (coops not matched or other than coops)
+# So we work on the subset for which the distance can be calculated and add it back
+
+sfhhs_links_bs = 
+  sfhhs_links_all %>% 
+  filter(!is.na(BS_LONGITUDE)) 
+  
 # start from the above, not the merger
 hhs_links_sfbs = 
   sfhhs_links_bs %>% 
   st_drop_geometry() %>% 
-  # filter(!is.na(BS_LONGITUDE)) %>% 
   st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
-nrow(hhs_links_sfbs)
 
-ggplot()+
-  geom_sf(data = sfhhs_links_bs, col = "grey")  +
-  geom_sf(data = hhs_links_sfbs, aes(col=COOP_SIMPLIF_ABRV_NAME))  +
-  geom_sf(data = departements, fill = "transparent")
-
-ggplot()+
-  geom_sf(data = sfhhs_links_bs, aes(col = COOP_SIMPLIF_ABRV_NAME))  +
-  geom_sf(data = hhs_links_sfbs, col="black")  +
-  geom_sf(data = departements, fill = "transparent")
+stopifnot(nrow(hhs_links_sfbs) == nrow(sfhhs_links_bs))
 
 hhs_links_sfbs$LINK_DISTANCE_METERS <- 
   st_distance(sfhhs_links_bs, hhs_links_sfbs, by_element = TRUE)
 
 summary(hhs_links_sfbs$LINK_DISTANCE_METERS)
 
-hhs_links_bs = 
-  hhs_links_sfbs %>% 
-  st_drop_geometry()
+stopifnot(!is.na(hhs_links_sfbs$COOP_BS_ID))
 
 
+## Keep closest BS / homonym coop ---------------
 
-# Keep closest BS / homonym coop ---------------
-# For a given village, keep only the closest buying station of the closest coop among the possibly several 
+# For a given household, keep only the closest buying station of the closest coop among the possibly several 
 # buying stations (of possibly different coops) having the same abbreviated name
 # So leave the closest abbreviated name of every village 
-hhs_links_closestbs =
-  hhs_links_bs %>% 
-  group_by(VILLAGE_SURVEY_ID, COOP_ABRV_NAME) %>% 
+hhs_links_sfbs_closest =
+  hhs_links_sfbs %>% 
+  group_by(HH_SURVEY_ID, COOP_ABRV_NAME) %>% 
   mutate(SMALLEST_DIST = min(LINK_DISTANCE_METERS),
-         LINK_ID = cur_group_id(), 
          IS_CLOSEST_DUPLI = duplicated(SMALLEST_DIST),
          ANY_CLOSEST_DUPLI = anyDuplicated(SMALLEST_DIST)) %>% 
   ungroup() %>% 
-  filter(LINK_DISTANCE_METERS == SMALLEST_DIST) %>% 
-  # remove the two links (72 and 73) where there are still conflicts that we cannot resolve 
-  filter(!LINK_ID %in% c(72, 73))
+  filter(LINK_DISTANCE_METERS == SMALLEST_DIST) 
 
-# hhs_links_closestbs %>% 
-#   select(LINK_ID, SMALLEST_DIST, ANY_CLOSEST_DUPLI, 
-#          COOP_ID, COOP_POINT_ID, COOP_BS_ID, VILLAGE_SURVEY_ID,
-#          COOP_ABRV_NAME, 
-#          SUPPLIER_ABRVNAME, COOP_SIMPLIF_ABRV_NAME, SUPPLIER_FULLNAME, 
-#          BS_LONGITUDE, BS_LATITUDE) %>% 
-#   arrange(desc(LINK_ID), desc(SMALLEST_DIST)) %>% 
-#   View()
-
-# check that this goes back to one row per village-abrv name link 
-if(hhs_links_closestbs$LINK_ID %>% unique() %>% length() != nrow(hhs_links_closestbs)){
+# check that this goes back to one row per HH-abrv name link 
+if(hhs_links_sfbs_closest$LINK_ID %>% unique() %>% length() != nrow(hhs_links_sfbs_closest)){
   stop("unexpected structure")
 }
 
-hhs_links_closestbs$VILLAGE_SURVEY_ID %>% unique() %>% length() 
-nrow(hhs_links_closestbs) 
+## Remove outlier matches ---------
+summary(hhs_links_sfbs_closest$LINK_DISTANCE_METERS)
+
+# toplot = 
+#   rbind(sfhhs_links_bs %>% mutate(COOPERATIVE = FALSE), 
+#         hhs_links_sfbs_closest %>% mutate(COOPERATIVE = TRUE) %>% 
+#           select(names(sfhhs_links_bs), COOPERATIVE)
+#         )
+# ggplot() +
+#   geom_sf(data = departements, fill = "transparent") +
+#   geom_sf(data = toplot %>% filter(COOPERATIVE), aes(col=BUYER_SIMPLIF_NAME), fill = "black", shape = 16)  +
+#   geom_sf(data = toplot %>% filter(!COOPERATIVE), aes(col=BUYER_SIMPLIF_NAME), shape = 4, size = 2)  +
+#   labs(title = "", col = "Matched coop names", shape = "Coops") +
+#   theme_minimal()
+
+# hhs_links_sfbs_closest$HH_SURVEY_ID %>% unique() %>% length() 
+# nrow(hhs_links_sfbs_closest) 
+
+# There seems to be a few obivous outliers  
+dist_outliers = boxplot.stats(hhs_links_sfbs_closest$LINK_DISTANCE_METERS, coef = 2)$out %>% sort()
+
+# removing first those that are outliers AND are not in the same district
+hhs_links_sfbs_closest = 
+  hhs_links_sfbs_closest %>% 
+  filter(!(LINK_DISTANCE_METERS %in% dist_outliers & DISTRICT_GEOCODE != LVL_4_CODE))
+# ... removes all distance outliers 
+hhs_links_sfbs_closest %>% 
+  filter(LINK_DISTANCE_METERS %in% dist_outliers) %>% View()
+
+# toplot = 
+#   rbind(sfhhs_links_bs %>% mutate(COOPERATIVE = FALSE), 
+#         hhs_links_sfbs_closest %>% mutate(COOPERATIVE = TRUE) %>% 
+#           select(names(sfhhs_links_bs), COOPERATIVE)
+#   )
+# ggplot() +
+#   geom_sf(data = departements, fill = "transparent") +
+#   geom_sf(data = toplot %>% filter(COOPERATIVE), aes(col=BUYER_SIMPLIF_NAME), fill = "black", shape = 16)  +
+#   geom_sf(data = toplot %>% filter(!COOPERATIVE), aes(col=BUYER_SIMPLIF_NAME), shape = 4, size = 2)  +
+#   labs(title = "", col = "Matched coop names", shape = "Coops") +
+#   theme_minimal()
+
+## Merge back -------
+# with all other links
+hhs_links_all = 
+  hhs_links_all %>% 
+  left_join(hhs_links_sfbs_closest %>% 
+              st_drop_geometry() %>% 
+              select(LINK_ID, PRO_LONGITUDE, PRO_LATITUDE, 
+                     LINK_DISTANCE_METERS, LVL_4_CODE, LVL_4_NAME), 
+            by = "LINK_ID") 
+
+summary(hhs_links_all$LINK_DISTANCE_METERS)
 
 
-# Add links with other buyers than coops... would be here but it's only 5 obs. so don't bother for now. 
-# Identify these links
-hhs_otherlinks = 
-  hhs_links %>% 
-  filter(is.na(COOP_ABRV_NAME))
+# no duplicates to remove
+nrow(hhs_links_all)
+hhs_links_all %>% 
+  distinct(HH_SURVEY_ID, PRO_VILLAGE_NAME, BUYER_SIMPLIF_NAME, COOP_BS_ID, .keep_all = TRUE) %>% nrow()
 
-hhs_otherlinks$village_cocoa_buyer %>% unique()
-hhs_otherlinks$VILLAGE_SURVEY_ID %>% unique() %>% length()
-# it's only five villages that don't sell to a coop at all. 
+# hhs_links_all %>% 
+#   group_by(HH_SURVEY_ID, PRO_VILLAGE_NAME, BUYER_SIMPLIF_NAME, COOP_BS_ID) %>%
+#   filter(n()>1) %>% View()
+
+
+
+# hhs_links_all = 
+#   hhs_links_all %>% 
+#   group_by(PRO_VILLAGE_NAME) %>% 
+#   mutate(VILLAGE_BUYER_VOLUME_KG = sum(LINK_VOLUME_KG, na.rm = TRUE)) %>% 
+#   ungroup() %>% 
+#   mutate(LINK_VILLAGE_REL_SIZE = LINK_VOLUME_KG / VILLAGE_BUYER_VOLUME_KG)
 
 
 # Export ----
 
 toexport = 
-  hhs_links_closestbs %>% 
-  mutate(YEAR = 2021, 
+  hhs_links_all %>% 
+  mutate(YEAR = 2022, 
          DATA_SOURCE = "SUSTAINCOCOA",
-         PRO_ID = paste0("SUSTAINCOCOA_VILLAGE_",VILLAGE_SURVEY_ID)) %>% 
+         PRO_ID = paste0("SUSTAINCOCOA_HH_",HH_SURVEY_ID),
+         ACTUAL_LINK_ID = paste0("SUSTAINCOCOA_HH_",LINK_ID)) %>% 
   select(YEAR, PRO_ID, COOP_BS_ID, 
+         ACTUAL_LINK_ID,
          BS_LONGITUDE, BS_LATITUDE,
          LINK_DISTANCE_METERS, 
+         LINK_VOLUME_KG,
+         # PRO_VILLAGE_NAME,
          # PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
          # PRO_DEPARTMENT_NAME = LVL_4_NAME,
          PRO_LONGITUDE, PRO_LATITUDE)
 
 
 write_csv(toexport,
-          file = here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"),
+          file = here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv"),
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)

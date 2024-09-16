@@ -29,24 +29,20 @@ source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 # READ ------------ 
 
 # Departements (districts)
-departements <- s3read_using(
-  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson", 
-  bucket = "trase-storage",
-  FUN = read_sf,
-  #sheet = "Cacao", 
-  #skip = 3,
-  opts = c("check_region" = T)
-)
+departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
 
-kit_farm_production <- 
-  read_delim(
-    get_object("cote_divoire/cocoa/production_estimates/kit_farm_yield_observations.csv",
-               bucket = "trase-storage",
-               check_region = T),
-    delim = ";"
-  ) %>%
-  mutate(cocoa_prod_total_tonnes = cocoa_prod_total_kgs/1000) %>% 
-  select(cocoa_prod_total_tonnes)
+departements = 
+  st_transform(departements, crs = civ_crs)
+
+# kit_farm_production <- 
+#   read_delim(
+#     get_object("cote_divoire/cocoa/production_estimates/kit_farm_yield_observations.csv",
+#                bucket = "trase-storage",
+#                check_region = T),
+#     delim = ";"
+#   ) %>%
+#   mutate(cocoa_prod_total_tonnes = cocoa_prod_total_kgs/1000) %>% 
+#   select(cocoa_prod_total_tonnes)
 
 
 # 'cocoa_UCLouvain which contains both producer information (1,219 producers) and buyer information (170 buyers).'
@@ -486,11 +482,11 @@ section3a =
 jrc = 
   jrc %>% 
   mutate(
-    producer_id = interview__key
-    #producer_id = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)
+    PRODUCER_ID = interview__key
+    #PRODUCER_ID = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)
   )
 
-jrc$producer_id %>% unique() %>% na.omit() %>% length()
+jrc$PRODUCER_ID %>% unique() %>% na.omit() %>% length()
 jrc$interview__key %>% unique() %>% length()
 nrow(jrc)
 
@@ -501,6 +497,34 @@ jrc =
 
 jrc$s00q10__zd %>% unique() %>% length()
 is.na(jrc$s00q10__zd) %>% sum()
+
+# There is no producer id var in buyer roster, since it is at the buyer level. 
+# jrc_buyer_roster   = 
+#   jrc_buyer_roster   %>% 
+#   mutate(PRODUCER_ID = interview__key)
+# we can remove all-var duplicates still
+jrc_buyer_roster   = 
+  jrc_buyer_roster   %>% 
+  distinct()
+
+# Same in section3a
+section3a = 
+  section3a %>% 
+  distinct()
+
+section3a = 
+  section3a %>% 
+  mutate(PRODUCER_ID = interview__key)
+
+# For some reasons, there are a few (~15) obs. that are duplicates in both producer ID and buyer ID, but
+# not in buyer attributes in section3a apparently. So just remove these duplicates 
+# section3a %>% 
+#   group_by(PRODUCER_ID, JRC_BUYER_ID) %>% 
+#   filter(n() > 1) %>% View()
+section3a = 
+  section3a %>% 
+  distinct(PRODUCER_ID, JRC_BUYER_ID, .keep_all = TRUE)
+
 
 ### Make booleans -------
 jrc = 
@@ -790,7 +814,11 @@ write_csv(jrc_coops_merge,
 # One represents the producer end (and coords), while the other represents the intermediary end (and coords).  
 # In other words, we just want to split the jrc object in two... 
 
-## Filter geo-located links -----------
+## Link variables ----------------
+
+### Distance producer-intermediary -------------
+
+### Filter geo-located links
 # We need spatial info on both ends
 jrc_geo <- 
   jrc %>% 
@@ -798,12 +826,12 @@ jrc_geo <-
            !is.na(ITM_LONGITUDE) & !is.na(ITM_LATITUDE)) 
 
 # this is 662 producers linked with 118 buyers
-jrc_geo$producer_id %>% unique() %>% length()
+jrc_geo$PRODUCER_ID %>% unique() %>% length()
 jrc_geo$JRC_BUYER_ID %>% unique() %>% length()
 # of which 159 producers are linked with 29 cooperatives. 
 jrc_geo %>% 
   filter(IS_COOP) %>% 
-  pull(producer_id) %>% 
+  pull(PRODUCER_ID) %>% 
   unique %>% 
   length()
 jrc_geo %>% 
@@ -839,20 +867,56 @@ if(!all.equal(pro_sf$interview__key, itm_sf$interview__key)){
   stop()
 }
 
-## Distance producer-intermediary 
-
 # Since the filtering is the same (on the availability of coordinates for both ends), both subsets have the same rows      
 jrc_geo$LINK_DISTANCE_METERS <- 
   st_distance(pro_sf, itm_sf, by_element = TRUE)
 
-
-
 jrc_geo$LINK_DISTANCE_METERS %>% summary()
 
-ggplot(jrc_geo, aes(x=LINK_DISTANCE_METERS)) + 
-  geom_histogram() +
-  theme(axis.title.y = element_blank()) + 
-  labs(x = "Producer-intermediary distance") 
+# ggplot(jrc_geo, aes(x=LINK_DISTANCE_METERS)) + 
+#   geom_histogram() +
+#   theme(axis.title.y = element_blank()) + 
+#   labs(x = "Producer-intermediary distance") 
+
+
+### Volumes ------------
+intersect(section3a$JRC_BUYER_ID, jrc_geo$JRC_BUYER_ID)
+jrc_geo$JRC_BUYER_ID %>% anyNA()
+# section3a %>% filter(is.na(JRC_BUYER_ID)) %>% View()
+
+# check that all buyer ids in jrc_geo have a match in section3a 
+# (not necessarily the case because we removed some rows without coordinates to obtain jrc_geo)
+stopifnot(
+  length(setdiff(jrc_geo$JRC_BUYER_ID, section3a$JRC_BUYER_ID)) == 0 
+)
+
+jrc_geo =
+  jrc_geo %>% 
+  inner_join(section3a %>% select(PRODUCER_ID, JRC_BUYER_ID, 
+                                  LINK_VOLUME_KG = kg_both_season), 
+            by = c("PRODUCER_ID", "JRC_BUYER_ID")) # section3a is a producer-level data set, so we match on both producer and buyer ids.  
+            # multiple = "all") 
+# multiple are not expected, because although one producer may have several buyers in section3a, we removed these as they were very few and not properly given a different buyer ID. 
+
+if(jrc_geo$JRC_BUYER_ID %>% anyNA()){stop("unexpected introduction of NAs")}
+
+# section3a %>% distinct(PRODUCER_ID, JRC_BUYER_ID) %>% nrow()
+
+
+### Link ID ------------
+
+# Create a link ID that uniquely identifies them
+jrc_geo = 
+  jrc_geo %>% 
+  # group by buyer simplif name and coop bs id necessary because the latter is many times NAs for HH not matched with IC2B.
+  group_by(PRODUCER_ID, JRC_BUYER_ID) %>% 
+  mutate(LINK_ID = cur_group_id()) %>% 
+  ungroup()
+
+stopifnot(jrc_geo$LINK_ID %>% unique() %>% length() == nrow(jrc_geo))
+
+
+## Join with IC2B ---------
 
 ## Restrict to coops
 jrc_geo_coops = 
@@ -865,9 +929,8 @@ length(unique(jrc_coops_merge$JRC_BUYER_ID))
 jrc_geo_coops$LINK_DISTANCE_METERS %>% summary()
 
 
-# Join with IC2B -----
 
-## Prepare IC2B to join --------
+### Prepare IC2B to join --------
 coopbs = 
   coopbs %>% 
   filter(YEAR == 2019) %>% 
@@ -886,16 +949,19 @@ jrc_geo_coops =
 # they all match
 if(anyNA(jrc_geo_coops$COOP_BS_ID)){stop("not all observation is matched back with IC2B, which is not expected.")}
 if(
-  distinct(jrc_geo, producer_id) %>% nrow() == nrow(jrc_geo)
-   ){stop("producer_id is supposed to identify rows in jrc but this is not the case and will cause troubles")}
+  distinct(jrc_geo, PRODUCER_ID) %>% nrow() != nrow(jrc_geo)
+   ){stop("PRODUCER_ID is supposed to identify rows in jrc but this is not the case and will cause troubles")}
+
+### Merge back ---------- 
 
 # add this information back to all jrc geo links
 jrc_geo = 
   jrc_geo %>% 
   left_join(
-    jrc_geo_coops %>% select("producer_id", "COOP_BS_ID", "JRC_BUYER_ID"), 
-    by = "producer_id"
+    jrc_geo_coops %>% select("PRODUCER_ID", "COOP_BS_ID", "JRC_BUYER_ID"), 
+    by = "PRODUCER_ID"
   )
+
 
 ## Export --------------------
 
@@ -906,11 +972,15 @@ toexport =
   jrc_geo %>% 
   mutate(YEAR = 2019,
          DATA_SOURCE = "JRC", 
-         PRO_ID = paste0("JRC_FARMER_",producer_id)) %>% # jrc$i00q21__itw_date %>% unique()
+         PRO_ID = paste0("JRC_FARMER_",PRODUCER_ID),
+         ACTUAL_LINK_ID = paste0("JRC_FARMER_",LINK_ID)) %>% # jrc$i00q21__itw_date %>% unique()
   # keep only the variables that we can also compute in other data sources than JRC. 
-  select(YEAR, PRO_ID, IS_COOP, 
+  select(YEAR, PRO_ID, COOP_BS_ID, 
+         ACTUAL_LINK_ID,
+         IS_COOP, 
          LINK_DISTANCE_METERS, 
-         COOP_BS_ID, 
+         LINK_VOLUME_KG,
+         # PRO_VILLAGE_NAME = s00q10__zd,
          # PRO_DEPARTMENT_NAME = s00q7__dst,
          BS_LONGITUDE = ITM_LONGITUDE, # can be called BS_ now since it's only coops. 
          BS_LATITUDE = ITM_LATITUDE,
@@ -962,10 +1032,7 @@ link_itm <-
 
 ## Intermediary variables --------------
 
-link_itm <- 
-  left_join(section3a, 
-            itm, 
-            by = "JRC_BUYER_ID")
+
 
 
 

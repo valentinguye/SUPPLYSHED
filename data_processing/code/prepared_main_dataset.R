@@ -62,8 +62,19 @@ jrc_link_other =
 
 
 # Sustain-cocoa link data
-sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
+# sc_links_vil = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
+sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv"))
 
+# In SC data, in addition to just coop/other buyers, we have coops that didn't match IC2B
+sc_links_coops %>% 
+  sc_links %>% 
+  filter(is.na(BS_LONGITUDE))
+  
+
+
+
+
+# # # # #
 departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
 init_crs = st_crs(departements)
 departements = 
@@ -102,11 +113,13 @@ bnetd = rast(here("input_data/GEE/BNETD_binary_cocoa_settlements_3km.tif"))
 # Make template for the data frame consol, to frame the consolidation of every specific data set. 
 consol <- data.frame(
   "YEAR" = NA, 
+  "ACTUAL_LINK_ID" = NA,
   "PRO_ID" = NA, 
   "COOP_BS_ID" = NA, 
   "BS_LONGITUDE" = NA,
   "BS_LATITUDE" = NA,
   "LINK_DISTANCE_METERS" = NA, 
+  "LINK_VOLUME_KG" = NA, 
   # "PRO_DEPARTMENT_GEOCODE" = NA, 
   # "PRO_DEPARTMENT_NAME" = NA,
   "PRO_LONGITUDE" = NA, 
@@ -937,6 +950,31 @@ potential_all %>%
 
 saveRDS(potential_all, 
         here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", grid_size_m*1e-3, "km.Rdata")))
+
+
+
+# PROPORTIONAL VOLUMES -------
+# Make the outcome variable, i.e. the proportion of flows to coops rel to flows with other buyers
+hhs_links_all_tmp = 
+  hhs_links_all %>% 
+  # first, sum up individual link volumes within buyer type (coop, other or NA)
+  group_by(VILLAGE_SURVEY_NAME, IS_BUYER_COOP) %>% 
+  mutate(VILLAGE_TYPE_OF_BUYER_VOLUME_KG = case_when(
+    !is.na(IS_BUYER_COOP) ~ sum(BUYER_VOLUME_KG, na.rm = TRUE), 
+    TRUE ~ NA)
+  ) %>% 
+  # then, sum up links to coops + links to other (but exclude NAs)
+  group_by(VILLAGE_SURVEY_NAME) %>% 
+  mutate(
+    VILLAGE_COOP_OR_OTHER_BUYER_VOLUME_KG = sum(VILLAGE_TYPE_OF_BUYER_VOLUME_KG, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  # finally, divide volumes to either coop or other by volumes to both types 
+  mutate(
+    LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE = VILLAGE_TYPE_OF_BUYER_VOLUME_KG / VILLAGE_COOP_OR_OTHER_BUYER_VOLUME_KG) 
+
+hhs_links_all_tmp$IS_BUYER_COOP %>% summary()
+hhs_links_all_tmp$VILLAGE_TYPE_OF_BUYER_VOLUME_KG %>% summary()
+hhs_links_all_tmp$LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE %>% summary()
 
 
 

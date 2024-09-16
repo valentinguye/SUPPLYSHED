@@ -2783,7 +2783,8 @@ civ_coop_bs_year <-
          -starts_with("CERT_"),
          -DISCL_NUMBER_FARMERS, -CAM_BUYERS, -BUYER, -NOT_RFA, -NOT_FT,
          -NB_FARMERS_COMPANY_YEAR, -NUM_FARMERS, -NUM_FARMERS_EXTRAPOLATED, 
-         -NON_TRADER,-TRADER, -unique_company_link, -unique_trader_link) %>%
+         -NON_TRADER,-TRADER, -unique_company_link, -unique_trader_link, 
+         -LVL_4_NAME) %>%
   select(COOP_ID, COOP_BS_ID, COOP_POINT_ID, BUYING_STATION_IDS, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE, 
          DISTRICT_NAME, DISTRICT_GEOCODE,
          DISCLOSURE_SOURCES, TRADER_NAMES, CERTIFICATIONS, 
@@ -2820,7 +2821,8 @@ civ_seipcs <-
          -starts_with("CERT_"), # we remove cert_ vars (and make certifications var above) because those are at the link level, not the
          # flow, and there might be small differences (if two companies don't disclose the same info on certification about the same flow).
          -CAM_BUYERS, -NOT_RFA, -NOT_FT,
-         -unique_company_link, -unique_trader_link) %>% # -NON_TRADER,-TRADER, 
+         -unique_company_link, -unique_trader_link, 
+         -LVL_4_NAME) %>% # -NON_TRADER,-TRADER, 
   select(FLOW_ID, COOP_ID, BUYING_STATION_IDS, DISCL_YEAR, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, LATITUDE, LONGITUDE,
          DISTRICT_NAME, DISTRICT_GEOCODE,
          BUYER, COMPANY, TRADER_NAME, # KEEP TRACK OF TRADER_NAME, for SEI-PCS

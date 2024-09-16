@@ -337,7 +337,7 @@ toexport =
 
 
 write_csv(toexport,
-          file = here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"),
+          file = here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_village_links_standardized.csv"),
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)

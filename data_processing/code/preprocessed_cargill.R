@@ -28,16 +28,9 @@ civ_crs <- 32630
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 
-
 # Departements (districts)
-departements <- s3read_using(
-  object = "cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/CIV_DEPARTEMENTS.geojson",#"cote_divoire/spatial/BOUNDARIES/DEPARTEMENT/OUT/ci_departments_wgs84_level4.geojson",
-  bucket = "trase-storage",
-  FUN = read_sf,
-  #sheet = "Cacao",
-  #skip = 3,
-  opts = c("check_region" = T)
-)
+departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
+
 departements = 
   st_transform(departements, crs = civ_crs)
 
@@ -245,6 +238,18 @@ carg_pt_closestbs =
 # check that this goes back to the number of plots before we merged with multiple BS
 if(nrow(carg_pt_closestbs) != nrow(carg_pt)){stop('going back not correct')}
 
+# Link ID ------------
+
+# Create a link ID that uniquely identifies them
+carg_pt_closestbs = 
+  carg_pt_closestbs %>% 
+  # group by buyer simplif name and coop bs id necessary because the latter is many times NAs for HH not matched with IC2B.
+  group_by(FARMER_COD, COOP_BS_ID) %>% 
+  mutate(LINK_ID = cur_group_id()) %>% 
+  ungroup()
+
+stopifnot(carg_pt_closestbs$LINK_ID %>% unique() %>% length() == nrow(carg_pt_closestbs))
+
 # Export ----
 carg %>% 
   filter(grepl("DATE:2020", LOCATION_N)) %>% 
@@ -255,8 +260,11 @@ toexport =
   carg_pt_closestbs %>% 
   mutate(YEAR = 2019, 
          DATA_SOURCE = "CARGILL",
-         PRO_ID = paste0("CARGILL_FARMER_",FARMER_COD)) %>% 
-  select(YEAR, PRO_ID, COOP_BS_ID,  BS_LONGITUDE, BS_LATITUDE,
+         PRO_ID = paste0("CARGILL_FARMER_",FARMER_COD),
+         ACTUAL_LINK_ID = paste0("CARGILL_FARMER_",LINK_ID)) %>% 
+  select(YEAR, PRO_ID, COOP_BS_ID,  
+         ACTUAL_LINK_ID,
+         BS_LONGITUDE, BS_LATITUDE,
          LINK_DISTANCE_METERS, 
          # PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
          # PRO_DEPARTMENT_NAME = LVL_4_NAME,
