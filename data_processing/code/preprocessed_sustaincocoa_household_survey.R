@@ -185,10 +185,10 @@ hhs_links =
              BUYER_NAME == "COOPERATIVE DES PRODUCTEURS ASSOCIES DE L'AGNEBY" ~ "COOPAA", 
              TRUE ~ BUYER_NAME
            ),
-           IS_BUYER_COOP = if_else(grepl("COOP", BUYER_NAME), TRUE, NA),
-           IS_BUYER_COOP = case_when(
+           BUYER_IS_COOP = if_else(grepl("COOP", BUYER_NAME), TRUE, NA),
+           BUYER_IS_COOP = case_when(
              grepl("PISTEUR|LIBANAIS|ACHETEUR", BUYER_NAME) ~ FALSE,
-             TRUE ~ IS_BUYER_COOP
+             TRUE ~ BUYER_IS_COOP
            ), 
            
            # Make simplified acronyms
@@ -217,14 +217,14 @@ hhs_links %>%
 nrow(hhs_links)
 hhs_links = 
   hhs_links %>% 
-  filter(!(is.na(BUYER_SIMPLIF_NAME) & is.na(IS_BUYER_COOP)))
+  filter(!(is.na(BUYER_SIMPLIF_NAME) & is.na(BUYER_IS_COOP)))
 nrow(hhs_links)
 # this is many rows removed, because for every HH there were rows for all 4 buyers, 
 # but buyers 2 to 4 were often left empty. 
 
 # One row is known to be a coop although it's simplified name was cleaned to NA. 
 hhs_links %>% 
-  filter(is.na(BUYER_SIMPLIF_NAME) & !is.na(IS_BUYER_COOP))
+  filter(is.na(BUYER_SIMPLIF_NAME) & !is.na(BUYER_IS_COOP))
 
 # Some (~50) of these links are duplicated, for some reason. Remove now to avoid confusion when joining IC2B
 # hhs_links %>% arrange(HH_SURVEY_ID) %>% View()
@@ -295,26 +295,39 @@ hhs_links_all %>% filter(is.na(COOP_BS_ID)) %>% nrow()
 ## update it based on matches with IC2B
 hhs_links_all = 
   hhs_links_all %>% 
-  mutate(IS_BUYER_COOP = case_when(
+  mutate(BUYER_IS_COOP = case_when(
     !is.na(COOP_BS_ID) ~ TRUE, 
-    TRUE ~ IS_BUYER_COOP)) 
+    TRUE ~ BUYER_IS_COOP)) 
 
 # and deem all other cases as other buyers than coops, except for a few exceptions, recognized from there
 hhs_links_all %>% 
-  filter(is.na(IS_BUYER_COOP)) %>% 
+  filter(is.na(BUYER_IS_COOP)) %>% 
   pull(BUYER_SIMPLIF_NAME) %>% unique() %>% sort()
+# grep("ECID", coopbs$SUPPLIER_ABRVNAME, value = T)
 
-exceptions = c("ECOPAC", "EECOPAKCA", "GVC", "SC CAOSI", "SCOOCS3A", "SCPCCT CA2", "SCPCCT1", 
+exceptions = c("ECID",
+               "ECOPAC", "EECOPAKCA", "GBCI", "GVC", "KAYAT", "SC CAOSI", "SCOOCS3A", "SCPCCT CA2", "SCPCCT1", 
                "SKFAT", "SKFRA", "SOCADPD", "SOCOPGA", "SOKOSAT", 
                "SPAAD MAN", "SPAD", "SPAD SARL", "SPAD TOUTOUKO 1", "SPADGAGNAO", "SPADGAGNOA", "SPCCT", 
                "URCG", "UTZ", "VIE", "WACA JACA", "ZPA") 
+
+
 hhs_links_all = 
   hhs_links_all %>% 
-  mutate(IS_BUYER_COOP = case_when(
+  mutate(BUYER_IS_COOP = case_when(
     BUYER_SIMPLIF_NAME %in% exceptions ~ TRUE, 
-    TRUE ~ FALSE)) 
+    is.na(BUYER_IS_COOP) ~ FALSE,
+    TRUE ~ BUYER_IS_COOP)) 
 
-summary(hhs_links_all$IS_BUYER_COOP)
+summary(hhs_links_all$BUYER_IS_COOP)
+
+# hhs_links_all %>% 
+#   filter(BUYER_IS_COOP) %>% 
+#   pull(BUYER_SIMPLIF_NAME) %>% unique() %>% sort()
+# 
+# hhs_links_all %>% 
+#   filter(!BUYER_IS_COOP) %>% 
+#   pull(BUYER_SIMPLIF_NAME) %>% unique() %>% sort()
 
 
 ## Volumes ---------------
@@ -363,9 +376,10 @@ stopifnot(hhs_links_all$LINK_ID %>% unique() %>% length() == nrow(hhs_links_all)
 
 
 # SPATIAL OPERATIONS-----------
+nrow_save = nrow(hhs_links_all)
 
 # Join village coordinates
-sfhhs_links_all = 
+hhs_links_all = 
   hhs_links_all %>% 
   # first, join the village GPS data (this matches perfectly) and name
   inner_join(hhs_morevars %>% 
@@ -395,21 +409,25 @@ sfhhs_links_all =
   st_transform(civ_crs) 
   
 # no row lost! 
-nrow(sfhhs_links_all) == nrow(hhs_links_all)
+nrow_save == nrow(hhs_links_all)
 
-sfhhs_links_all %>% 
+hhs_links_all %>% 
   filter(is.na(X_loc_location_x_y_latitude)) %>% nrow()
-sfhhs_links_all %>% 
+hhs_links_all %>% 
   filter(is.na(X_loc_location_x_y_latitude) & !is.na(X_loc_location_x_y_longitude)) %>% nrow()
-sfhhs_links_all %>% 
+hhs_links_all %>% 
   filter(is.na(X_loc_location_x_y_latitude) & !is.na(avlat)) %>% nrow()
 
 
 ## HH departments --------------
-sfhhs_links_all <- 
-  sfhhs_links_all %>% 
+hhs_links_all <- 
+  hhs_links_all %>% 
   st_join(departements[,c("LVL_4_CODE", "LVL_4_NAME")],
-          join = st_intersects) 
+          join = st_intersects) %>% 
+  rename(
+    PRO_DEPARTMENT_GEOCODE = LVL_4_CODE,
+    PRO_DEPARTMENT_NAME = LVL_4_NAME,
+  ) 
 
 
 ## Distance ------------
@@ -419,7 +437,7 @@ sfhhs_links_all <-
 # So we work on the subset for which the distance can be calculated and add it back
 
 sfhhs_links_bs = 
-  sfhhs_links_all %>% 
+  hhs_links_all %>% 
   filter(!is.na(BS_LONGITUDE)) 
   
 # start from the above, not the merger
@@ -483,10 +501,10 @@ dist_outliers = boxplot.stats(hhs_links_sfbs_closest$LINK_DISTANCE_METERS, coef 
 # removing first those that are outliers AND are not in the same district
 hhs_links_sfbs_closest = 
   hhs_links_sfbs_closest %>% 
-  filter(!(LINK_DISTANCE_METERS %in% dist_outliers & DISTRICT_GEOCODE != LVL_4_CODE))
+  filter(!(LINK_DISTANCE_METERS %in% dist_outliers & DISTRICT_GEOCODE != PRO_DEPARTMENT_GEOCODE))
 # ... removes all distance outliers 
-hhs_links_sfbs_closest %>% 
-  filter(LINK_DISTANCE_METERS %in% dist_outliers) %>% View()
+# hhs_links_sfbs_closest %>% 
+#   filter(LINK_DISTANCE_METERS %in% dist_outliers) %>% View()
 
 # toplot = 
 #   rbind(sfhhs_links_bs %>% mutate(COOPERATIVE = FALSE), 
@@ -506,9 +524,11 @@ hhs_links_all =
   hhs_links_all %>% 
   left_join(hhs_links_sfbs_closest %>% 
               st_drop_geometry() %>% 
-              select(LINK_ID, PRO_LONGITUDE, PRO_LATITUDE, 
-                     LINK_DISTANCE_METERS, LVL_4_CODE, LVL_4_NAME), 
-            by = "LINK_ID") 
+              select(LINK_ID, 
+                     LINK_DISTANCE_METERS), 
+            by = "LINK_ID") %>% 
+  # and remove spatialness 
+  st_drop_geometry()
 
 summary(hhs_links_all$LINK_DISTANCE_METERS)
 
@@ -542,12 +562,13 @@ toexport =
          ACTUAL_LINK_ID = paste0("SUSTAINCOCOA_HH_",LINK_ID)) %>% 
   select(YEAR, PRO_ID, COOP_BS_ID, 
          ACTUAL_LINK_ID,
+         BUYER_IS_COOP,
          BS_LONGITUDE, BS_LATITUDE,
          LINK_DISTANCE_METERS, 
          LINK_VOLUME_KG,
          # PRO_VILLAGE_NAME,
-         # PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
-         # PRO_DEPARTMENT_NAME = LVL_4_NAME,
+         # PRO_DEPARTMENT_GEOCODE, 
+         # PRO_DEPARTMENT_NAME,
          PRO_LONGITUDE, PRO_LATITUDE)
 
 

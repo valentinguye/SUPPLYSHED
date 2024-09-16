@@ -261,9 +261,11 @@ toexport =
   mutate(YEAR = 2019, 
          DATA_SOURCE = "CARGILL",
          PRO_ID = paste0("CARGILL_FARMER_",FARMER_COD),
-         ACTUAL_LINK_ID = paste0("CARGILL_FARMER_",LINK_ID)) %>% 
+         ACTUAL_LINK_ID = paste0("CARGILL_FARMER_",LINK_ID), 
+         BUYER_IS_COOP = TRUE) %>% 
   select(YEAR, PRO_ID, COOP_BS_ID,  
          ACTUAL_LINK_ID,
+         BUYER_IS_COOP,
          BS_LONGITUDE, BS_LATITUDE,
          LINK_DISTANCE_METERS, 
          # PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 

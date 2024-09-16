@@ -552,7 +552,7 @@ if(nrow(jrc %>% filter(is.na(ITM_LATITUDE))) != nrow(jrc %>% filter(is.na(ITM_LA
 ### Recognize cooperatives ------------
 jrc = 
   jrc %>% 
-  mutate(IS_COOP = (grepl("coop", i01bq3__type) | grepl("coop", i01bq3_oth__type_oth)) & 
+  mutate(BUYER_IS_COOP = (grepl("coop", i01bq3__type) | grepl("coop", i01bq3_oth__type_oth)) & 
            # don't count them as coop, as they will have different values than in coops in scales etc. 
            i01bq3__type != "délégué de coopérative")
 
@@ -562,7 +562,7 @@ jrc =
 # filter to coops only 
 jrc_coops = 
   jrc %>% 
-  filter(IS_COOP) 
+  filter(BUYER_IS_COOP) 
 
 jrc_coops %>% 
   filter(i03aq1__nb_farmers > 0 | 
@@ -830,12 +830,12 @@ jrc_geo$PRODUCER_ID %>% unique() %>% length()
 jrc_geo$JRC_BUYER_ID %>% unique() %>% length()
 # of which 159 producers are linked with 29 cooperatives. 
 jrc_geo %>% 
-  filter(IS_COOP) %>% 
+  filter(BUYER_IS_COOP) %>% 
   pull(PRODUCER_ID) %>% 
   unique %>% 
   length()
 jrc_geo %>% 
-  filter(IS_COOP) %>% 
+  filter(BUYER_IS_COOP) %>% 
   pull(JRC_BUYER_ID) %>% 
   unique %>% 
   length()
@@ -921,7 +921,7 @@ stopifnot(jrc_geo$LINK_ID %>% unique() %>% length() == nrow(jrc_geo))
 ## Restrict to coops
 jrc_geo_coops = 
   jrc_geo %>% 
-  filter(IS_COOP)
+  filter(BUYER_IS_COOP)
 
 nrow(jrc_geo_coops)
 length(unique(jrc_geo_coops$JRC_BUYER_ID))
@@ -977,12 +977,12 @@ toexport =
   # keep only the variables that we can also compute in other data sources than JRC. 
   select(YEAR, PRO_ID, COOP_BS_ID, 
          ACTUAL_LINK_ID,
-         IS_COOP, 
+         BUYER_IS_COOP, 
          LINK_DISTANCE_METERS, 
          LINK_VOLUME_KG,
          # PRO_VILLAGE_NAME = s00q10__zd,
          # PRO_DEPARTMENT_NAME = s00q7__dst,
-         BS_LONGITUDE = ITM_LONGITUDE, # can be called BS_ now since it's only coops. 
+         BS_LONGITUDE = ITM_LONGITUDE, # called BS_ although it's not only coop's buying stations. 
          BS_LATITUDE = ITM_LATITUDE,
          PRO_LONGITUDE = s00q12__itw_longitude, 
          PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
