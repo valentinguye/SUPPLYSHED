@@ -74,19 +74,19 @@ hhs_volbyb =
       buyer_cocoa_name_quant_unit_b1 == "kg"  ~ buyer_cocoa_name_quant_b1, 
       buyer_cocoa_name_quant_unit_b1 == ""    ~ buyer_cocoa_name_quant_b1,
       buyer_cocoa_name_quant_unit_b1 == "ton" ~ buyer_cocoa_name_quant_b1*1e3, 
-      buyer_cocoa_name_quant_unit_b1 == "bag" ~ buyer_cocoa_name_quant_b1*60
+      buyer_cocoa_name_quant_unit_b1 == "bag" ~ buyer_cocoa_name_quant_b1*65
     ), 
     buyer_cocoa_name_VOLUME_KG_b2 = case_when(
       buyer_cocoa_name_quant_unit_b2 == "kg"  ~ buyer_cocoa_name_quant_b2, 
       buyer_cocoa_name_quant_unit_b2 == ""    ~ buyer_cocoa_name_quant_b2,
       buyer_cocoa_name_quant_unit_b2 == "ton" ~ buyer_cocoa_name_quant_b2*1e3, 
-      buyer_cocoa_name_quant_unit_b2 == "bag" ~ buyer_cocoa_name_quant_b2*60,
+      buyer_cocoa_name_quant_unit_b2 == "bag" ~ buyer_cocoa_name_quant_b2*65,
     ),
     buyer_cocoa_name_VOLUME_KG_b3 = case_when(
       buyer_cocoa_name_quant_unit_b3 == "kg"  ~ buyer_cocoa_name_quant_b3, 
       buyer_cocoa_name_quant_unit_b3 == ""    ~ buyer_cocoa_name_quant_b3,
       buyer_cocoa_name_quant_unit_b3 == "ton" ~ buyer_cocoa_name_quant_b3*1e3, 
-      buyer_cocoa_name_quant_unit_b3 == "bag" ~ buyer_cocoa_name_quant_b3*60,
+      buyer_cocoa_name_quant_unit_b3 == "bag" ~ buyer_cocoa_name_quant_b3*65,
     )
   )
 
@@ -250,7 +250,9 @@ coopbs_tomatch =
   #        ROUND_LATITUDE = round(LATITUDE, 2)) %>% 
   select(COOP_ID, COOP_POINT_ID, COOP_BS_ID, SIMPLIF_ABRVNAME, SUPPLIER_ABRVNAME, SUPPLIER_FULLNAME, DISTRICT_NAME,
          # ROUND_LATITUDE, ROUND_LONGITUDE,  
-         BS_LONGITUDE = LONGITUDE, BS_LATITUDE = LATITUDE, everything())  %>% 
+         BUYER_LONGITUDE = LONGITUDE, 
+         BUYER_LATITUDE = LATITUDE, 
+         everything())  %>% 
   arrange(SIMPLIF_ABRVNAME)
 
 
@@ -282,7 +284,7 @@ hhs_links_all %>%
   select(COOP_ID, COOP_POINT_ID, COOP_BS_ID, HH_SURVEY_ID,
          COOP_ABRV_NAME, 
          SUPPLIER_ABRVNAME, BUYER_SIMPLIF_NAME, SUPPLIER_FULLNAME, 
-         BS_LONGITUDE, BS_LATITUDE) %>% 
+         BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
   View()
 
 # many households don't have a link with a BS
@@ -438,13 +440,13 @@ hhs_links_all <-
 
 sfhhs_links_bs = 
   hhs_links_all %>% 
-  filter(!is.na(BS_LONGITUDE)) 
+  filter(!is.na(BUYER_LONGITUDE)) 
   
 # start from the above, not the merger
 hhs_links_sfbs = 
   sfhhs_links_bs %>% 
   st_drop_geometry() %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
 
@@ -556,15 +558,15 @@ hhs_links_all %>%
 
 toexport = 
   hhs_links_all %>% 
-  mutate(YEAR = 2022, 
+  mutate(LINK_YEAR = 2022, 
          DATA_SOURCE = "SUSTAINCOCOA",
          PRO_ID = paste0("SUSTAINCOCOA_HH_",HH_SURVEY_ID),
-         ACTUAL_LINK_ID = paste0("SUSTAINCOCOA_HH_",LINK_ID)) %>% 
+         LINK_ID_ONLYACTUAL = paste0("SUSTAINCOCOA_HH_",LINK_ID)) %>% 
   select(YEAR, PRO_ID, COOP_BS_ID, 
-         ACTUAL_LINK_ID,
+         LINK_ID_ONLYACTUAL,
          BUYER_IS_COOP,
-         BS_LONGITUDE, BS_LATITUDE,
-         LINK_DISTANCE_METERS, 
+         BUYER_LONGITUDE, BUYER_LATITUDE,
+         LINK_ACTUALONLY_DISTANCE_METERS = LINK_DISTANCE_METERS, # actual only because distance is computed for all potential links in prepared_main_dataset.R 
          LINK_VOLUME_KG,
          # PRO_VILLAGE_NAME,
          # PRO_DEPARTMENT_GEOCODE, 

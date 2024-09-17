@@ -37,8 +37,9 @@ source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
 coopbsy = read.csv(
   file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) %>% 
-  rename(BS_LONGITUDE = LONGITUDE, 
-         BS_LATITUDE = LATITUDE)
+  rename(BUYER_LONGITUDE = LONGITUDE, 
+         BUYER_LATITUDE = LATITUDE, 
+         LINK_YEAR = YEAR)
 
 licens19 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2019_GEOCODED.csv"))
 licens20 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2020_GEOCODED.csv"))
@@ -46,10 +47,13 @@ licens21 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2021_GEOCODED.c
 
 # Cargill link data
 carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv")) %>% 
-  mutate(BUYER_IS_COOP = TRUE) # can remove this once cargill rerun
+  # can remove this once cargill rerun
+  rename(LINK_YEAR = YEAR) %>% 
+  mutate(LINK_VOLUME_KG = NA) 
   
 # JRC link data
-jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))
+jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))%>% 
+  rename(LINK_YEAR = YEAR)
 
 # jrc_links_coops = 
 #   jrc_links %>% 
@@ -64,7 +68,8 @@ jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_stand
 
 # Sustain-cocoa link data
 # sc_links_vil = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
-sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv"))
+sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv")) %>% 
+  rename(LINK_YEAR = YEAR)
 
 # In SC data, in addition to just coop/other buyers, we have coops that didn't match IC2B
 # sc_links_coops =
@@ -93,9 +98,9 @@ production_dpt =
          production_2019, production_2020, production_2021, production_2022) %>%
   pivot_longer(cols = starts_with("production"),
                values_to = "COCOA_PRODUCTION_TONNES",
-               names_to = "YEAR",
+               names_to = "LINK_YEAR",
                names_prefix = "production_") %>%
-  mutate(YEAR = as.numeric(YEAR)) %>% 
+  mutate(LINK_YEAR = as.numeric(LINK_YEAR)) %>% 
   summarise(.by = LVL_4_CODE, 
             AVG_COCOA_PRODUCTION_TONNES = mean(COCOA_PRODUCTION_TONNES))
 
@@ -112,20 +117,37 @@ tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
 bnetd = rast(here("input_data/GEE/BNETD_binary_cocoa_settlements_3km.tif"))
 
 
+# coopbs_tmplt = coopbsy[235:240,]
+# example = head(carg_links)
+# example = 
+#   example %>% 
+#   mutate(FARM_ID = paste0("SUCDEN_FARMER_", 1:6), 
+#          FARM_LONGITUDE = PRO_LONGITUDE,
+#          FARM_LATITUDE = PRO_LATITUDE,
+#          COOP_ACRONYM = head(coopbs_tmplt$SIMPLIF_ABRVNAME),
+#          COOP_FULLNAME = head(coopbs_tmplt$SUPPLIER_FULLNAME),
+#          COOP_LONGITUDE = head(coopbs_tmplt$BUYER_LONGITUDE), 
+#          COOP_LATITUDE = head(coopbs_tmplt$BUYER_LATITUDE), 
+#          FARM_GEOMETRY = head(departements$geometry)) %>% 
+#   select(LINK_YEAR, starts_with("COOP_"), starts_with("FARM_"), -COOP_BS_ID)
+# example
+# 
+# write.xlsx(example, here("temp_data", "link_data_example.xlsx"))
+
 # CONSOLIDATE LINK DATA ---------------------
 
 # Consolidate all actual links, to both coops and other buyers (split later) 
 
 # Make template for the data frame consol, to frame the consolidation of every specific data set. 
 consol <- data.frame(
-  "YEAR" = NA, 
+  "LINK_YEAR" = NA, 
   "PRO_ID" = NA, 
   "COOP_BS_ID" = NA, 
-  "ACTUAL_LINK_ID" = NA,
+  "LINK_ID_ONLYACTUAL" = NA,
   "BUYER_IS_COOP" = NA,
-  "BS_LONGITUDE" = NA,
-  "BS_LATITUDE" = NA,
-  "LINK_DISTANCE_METERS" = NA, 
+  "BUYER_LONGITUDE" = NA,
+  "BUYER_LATITUDE" = NA,
+  "LINK_ACTUALONLY_DISTANCE_METERS" = NA, 
   "LINK_VOLUME_KG" = NA, 
   # "PRO_DEPARTMENT_GEOCODE" = NA, 
   # "PRO_DEPARTMENT_NAME" = NA,
@@ -158,14 +180,9 @@ consol <- full_join(consol, sc_links,
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
 # remove first rows that were just here for left_join-ing
-consol <- filter(consol, !is.na(YEAR))
-# for now remove for convenience
-# consol <- select(consol, -PRO_DEPARTMENT_NAME, -PRO_DEPARTMENT_GEOCODE)
-
-# follow model prefix guidelines 
-consol = 
-  consol %>% 
-  rename(ACTUAL_LINK_DISTANCE_METERS = LINK_DISTANCE_METERS)
+consol <- filter(consol, !is.na(LINK_YEAR))
+# for now remove bc not useful
+consol <- select(consol, -LINK_ID_ONLYACTUAL)
 
 
 ## Split coops/other links ---------------
@@ -173,8 +190,7 @@ consol =
 # Here, we want only those matched with IC2B.
 consol_IC2Bcoops = 
   consol %>% 
-  filter(!is.na(COOP_BS_ID)) %>% 
-  select(-BUYER_IS_COOP)
+  filter(!is.na(COOP_BS_ID))
 
 consol_other = 
   consol %>% 
@@ -193,9 +209,9 @@ nrow(consol_IC2Bcoops)
 consol_IC2Bcoops = 
   consol_IC2Bcoops %>% 
   group_by(PRO_ID, COOP_BS_ID) %>% 
-  mutate(ACTUAL_COOP_LINK_ID = cur_group_id()) %>% 
+  mutate(LINK_ID_COOPS = cur_group_id()) %>% 
   ungroup()
-if(consol_IC2Bcoops$ACTUAL_COOP_LINK_ID %>% unique() %>% length() != nrow(consol_IC2Bcoops)){stop()}
+if(consol_IC2Bcoops$LINK_ID_COOPS %>% unique() %>% length() != nrow(consol_IC2Bcoops)){stop()}
 
 # to investigate potential prb
 # consol_IC2Bcoops = 
@@ -210,43 +226,43 @@ if(consol_IC2Bcoops$ACTUAL_COOP_LINK_ID %>% unique() %>% length() != nrow(consol
 
 
 # Latest surveyed year, to take the panel of coops at this time.  
-latest_survey_year = max(consol_IC2Bcoops$YEAR, na.rm = TRUE)
+latest_survey_year = max(consol_IC2Bcoops$LINK_YEAR, na.rm = TRUE)
 latest_survey_year
 
 # Distance producer - intermediary 
-summary(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS)
+summary(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS)
 
-dist_outliers = boxplot.stats(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS, coef = 2)$out %>% sort()
+dist_outliers = boxplot.stats(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, coef = 2)$out %>% sort()
 consol_IC2Bcoops = 
   consol_IC2Bcoops %>% 
-  mutate(ACTUAL_LINK_DISTANCE_METERS = case_when(
-    ACTUAL_LINK_DISTANCE_METERS %in% dist_outliers ~ NA,
-    TRUE ~ ACTUAL_LINK_DISTANCE_METERS
+  mutate(LINK_ACTUALONLY_DISTANCE_METERS = case_when(
+    LINK_ACTUALONLY_DISTANCE_METERS %in% dist_outliers ~ NA,
+    TRUE ~ LINK_ACTUALONLY_DISTANCE_METERS
   ))
 
-(dist_meters_90pctl = quantile(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS, 0.9, na.rm = T) %>% round(-3))
-(dist_meters_95pctl = quantile(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS, 0.95, na.rm = T) %>% round(-3))
-(dist_meters_max = quantile(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS, 1, na.rm = T) %>% round(-3))
+(dist_meters_90pctl = quantile(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, 0.9, na.rm = T) %>% round(-3))
+(dist_meters_95pctl = quantile(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, 0.95, na.rm = T) %>% round(-3))
+(dist_meters_max = quantile(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, 1, na.rm = T) %>% round(-3))
 
 (dist_meters_threshold <- dist_meters_95pctl)
 
-summary(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS)
-sd(consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS[consol_IC2Bcoops$ACTUAL_LINK_DISTANCE_METERS], na.rm = TRUE)
+summary(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS)
+sd(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS[consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS], na.rm = TRUE)
 
 
 
 # Prepare coop location/buffer ---------------
-coopbsy$YEAR %>% summary()
+coopbsy$LINK_YEAR %>% summary()
 
 coopbs = 
   coopbsy %>% 
-  filter(YEAR == latest_survey_year)
+  filter(LINK_YEAR == latest_survey_year)
 #   distinct(COOP_BS_ID, .keep_all = TRUE)
 
 coopbs_sf = 
   coopbs %>% 
-  filter(!is.na(BS_LONGITUDE)) %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  filter(!is.na(BUYER_LONGITUDE)) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(crs = civ_crs) 
 
 # coopbs_buffered_sf =
@@ -271,7 +287,7 @@ coopbs_10km_buffer =
 # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
 # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
 # At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.5 x 0.5 km) or less.
-grid_size_m = 3000
+grid_size_m = 30000
 
 ## Limit to cocoa growing region 
 cocoa_departements = 
@@ -400,15 +416,15 @@ if(
 grid_actual = 
   grid_actual %>% 
   # mutate(TRAINING_SET_CELL = if_else(!is.na(PRO_ID), TRUE, FALSE)) %>% 
-  rename(ACTUAL_COOP_BS_ID = COOP_BS_ID)
+  rename(LINK_ACTUAL_COOP_BS_ID = COOP_BS_ID)
 
-# The number of NAs in ACTUAL_COOP_LINK_ID is the number of grid cells with no actual link
-grid_actual$ACTUAL_COOP_LINK_ID %>% summary()
+# The number of NAs in LINK_ID_COOPS is the number of grid cells with no actual link
+grid_actual$LINK_ID_COOPS %>% summary()
 
 # and this is the distribution of unique actual links by grid cell
 grid_actual %>% 
   group_by(CELL_ID) %>% 
-  mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(na.omit(ACTUAL_COOP_LINK_ID)))) %>% 
+  mutate(N_UNIQUE_ACTUAL_LINKS_BYGRID = length(unique(na.omit(LINK_ID_COOPS)))) %>% 
   ungroup() %>% 
   pull(N_UNIQUE_ACTUAL_LINKS_BYGRID) %>% summary()
 
@@ -416,9 +432,9 @@ grid_actual %>%
 # Dataframe of actual links, without geometry for further join, and with potential link id column to identify duplicates 
 actual = 
   grid_actual %>% 
-  filter(!is.na(ACTUAL_COOP_BS_ID)) %>% 
+  filter(!is.na(LINK_ACTUAL_COOP_BS_ID)) %>% 
   st_drop_geometry() %>% 
-  mutate(POTENTIAL_COOP_BS_ID = ACTUAL_COOP_BS_ID) # every actual coop is also a potential one in the model's terminology.  
+  mutate(LINK_POTENTIAL_COOP_BS_ID = LINK_ACTUAL_COOP_BS_ID) # every actual coop is also a potential one in the model's terminology.  
 
 nrow(grid_poly) # out of the 37975 3km grid cells, 
 actual$CELL_ID %>% unique() %>% length() # 510 3km cells have at least one actual link.  
@@ -432,50 +448,51 @@ potential =
   grid_ctoid %>% 
   st_join(
     coopbs_sf %>% 
-      select(COOP_BS_ID, BS_LONGITUDE, BS_LATITUDE), #
+      select(COOP_BS_ID, BUYER_LONGITUDE, BUYER_LATITUDE), #
     join = st_is_within_distance, 
     dist = as_units(dist_meters_threshold, "m"), 
     left = TRUE
   ) %>% 
   st_drop_geometry() %>% 
   rename( # use names that make sense in the dimensions post join
-    POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
+    LINK_POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
   # make colnames be identical with actual and thus with consol_IC2Bcoops.   
   mutate(
-    YEAR = NA, 
+    LINK_YEAR = NA, 
     PRO_ID = NA, 
-    ACTUAL_COOP_BS_ID = NA, 
-    ACTUAL_LINK_DISTANCE_METERS = NA, 
+    # LINK_ID_ONLYACTUAL = NA,
+    LINK_ACTUAL_COOP_BS_ID = NA, 
     PRO_LONGITUDE = NA, 
     PRO_LATITUDE = NA, 
-    ACTUAL_COOP_LINK_ID = NA, 
-    ACTUAL_LINK_ID = NA,
-    LINK_VOLUME_KG = NA
+    LINK_ID_COOPS = NA, 
+    LINK_ACTUALONLY_DISTANCE_METERS = NA, 
+    LINK_VOLUME_KG = NA, 
+    BUYER_IS_COOP = NA
   ) %>% 
   select(names(actual)) %>% 
 
   # Stack potential & actual and remove actual links counted twice
   rbind(actual) %>% 
   # identify origins 
-  mutate(IS_FROM_STJOIN = is.na(ACTUAL_COOP_LINK_ID)) %>% 
+  mutate(IS_FROM_STJOIN = is.na(LINK_ID_COOPS)) %>% 
   # identify duplicated coop ids within a grid cell
   # make sure that ALL duplicates are found, regardless of order. 
   group_by(CELL_ID) %>% 
-  mutate(DUP_LINK = duplicated(POTENTIAL_COOP_BS_ID) | duplicated(POTENTIAL_COOP_BS_ID, fromLast = TRUE)) %>% 
+  mutate(DUP_LINK = duplicated(LINK_POTENTIAL_COOP_BS_ID) | duplicated(LINK_POTENTIAL_COOP_BS_ID, fromLast = TRUE)) %>% 
   ungroup() %>% 
   # this identified duplicates including due to several actual links from this cell,
   # so remove rows that are duplicated coop ids, AND are from the spatial join, i.e. are not several actual links. 
   filter(!(DUP_LINK & IS_FROM_STJOIN)) %>% 
   # Number of reachable coop BS within a grid cell, regardless through how many links  
   group_by(CELL_ID) %>% 
-  mutate(CELL_N_BS_WITHIN_DIST = length(na.omit(unique(POTENTIAL_COOP_BS_ID)))) %>%  # use this, and not n(), for the variable to take value 0 when there's is no potential coop matched (i.e. potential link), rather than one row that has NA value 
+  mutate(CELL_N_BS_WITHIN_DIST = length(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)))) %>%  # use this, and not n(), for the variable to take value 0 when there's is no potential coop matched (i.e. potential link), rather than one row that has NA value 
   ungroup() %>% 
   # identify grid cells with no actual link 
   group_by(CELL_ID) %>% 
   mutate(CELL_NO_ACTUAL_LINK = all(IS_FROM_STJOIN)) %>% 
   ungroup() %>% 
   # OUTCOME VARIABLE - is the link actual or virtual??? 
-  mutate(LINK_IS_ACTUAL_COOP = !is.na(ACTUAL_COOP_LINK_ID))
+  mutate(LINK_IS_ACTUAL_COOP = !is.na(LINK_ID_COOPS))
 
 # potential %>% 
 #   filter((DUP_LINK & IS_FROM_STJOIN)) %>% View()
@@ -499,15 +516,15 @@ if(
 grid_ctoid %>% 
   st_join(
     coopbs_sf %>% 
-      select(COOP_BS_ID), #, BS_LONGITUDE, BS_LATITUDE
+      select(COOP_BS_ID), #, BUYER_LONGITUDE, BUYER_LATITUDE
     join = st_is_within_distance, 
     dist = as_units(dist_meters_threshold, "m"), 
     left = TRUE
   ) %>%
   st_drop_geometry() %>% 
-  rename(POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
+  rename(LINK_POTENTIAL_COOP_BS_ID = COOP_BS_ID) %>% 
   summarise(.by = CELL_ID, 
-            CELL_N_BS_WITHIN_DIST = length(unique(POTENTIAL_COOP_BS_ID))) %>% 
+            CELL_N_BS_WITHIN_DIST = length(unique(LINK_POTENTIAL_COOP_BS_ID))) %>% 
   inner_join(potential %>% 
               filter(CELL_NO_ACTUAL_LINK) %>% 
               select(CELL_ID, CELL_N_BS_WITHIN_DIST), 
@@ -527,29 +544,29 @@ if(
 # and there should not be any duplicated potential link within a grid and an actual link
 if(
 potential %>% 
-  group_by(CELL_ID, ACTUAL_COOP_LINK_ID) %>% 
-  mutate(ANY_DUPL_COOP = any(duplicated(POTENTIAL_COOP_BS_ID))) %>% 
+  group_by(CELL_ID, LINK_ID_COOPS) %>% 
+  mutate(ANY_DUPL_COOP = any(duplicated(LINK_POTENTIAL_COOP_BS_ID))) %>% 
   ungroup() %>% 
   pull(ANY_DUPL_COOP) %>% any()
 ){stop("something unexpected in the row deployment by the spatial join")}
 
-# Another check: that POTENTIAL_COOP_BS_ID is NA only in grid cells with no link at all. 
+# Another check: that LINK_POTENTIAL_COOP_BS_ID is NA only in grid cells with no link at all. 
 if(
 potential %>% 
   group_by(CELL_ID) %>% 
-  mutate(ANY_NA = any(is.na(POTENTIAL_COOP_BS_ID)), 
-         ALL_NA = all(is.na(POTENTIAL_COOP_BS_ID))) %>% 
+  mutate(ANY_NA = any(is.na(LINK_POTENTIAL_COOP_BS_ID)), 
+         ALL_NA = all(is.na(LINK_POTENTIAL_COOP_BS_ID))) %>% 
   ungroup() %>% 
   filter(ANY_NA != ALL_NA) %>% nrow() != 0
 ){stop("unexpected")}
 
 if(
   potential %>%
-  filter(ACTUAL_COOP_BS_ID == POTENTIAL_COOP_BS_ID) %>% 
+  filter(LINK_ACTUAL_COOP_BS_ID == LINK_POTENTIAL_COOP_BS_ID) %>% 
   nrow() != nrow(consol_IC2Bcoops_sf)
 ){stop("actual links were missed or duplicated")}
 # potential %>%
-#   filter(!is.na(ACTUAL_COOP_BS_ID)) %>%
+#   filter(!is.na(LINK_ACTUAL_COOP_BS_ID)) %>%
 #   nrow()
 
 # With this method, it's not exactly the same number, but very marginal. 
@@ -557,7 +574,7 @@ if(
 #   grid_actual %>% 
 #   st_centroid() %>% 
 #   st_join(
-#     coopbs_buffered_sf %>% select(COOP_BS_ID, BS_LONGITUDE, BS_LATITUDE),
+#     coopbs_buffered_sf %>% select(COOP_BS_ID, BUYER_LONGITUDE, BUYER_LATITUDE),
 #     join = st_intersects, 
 #     left = TRUE
 #   )
@@ -591,21 +608,21 @@ consol_other =
   st_join(cell_vars, 
           join = st_intersects,
           left = TRUE) %>% 
-  mutate(ACTUAL_OTHER_LINK_ID = row_number()) %>% 
+  mutate(LINK_ID_OTHERS = row_number()) %>% 
   st_drop_geometry()
 
-stopifnot(length(unique(consol_other$ACTUAL_OTHER_LINK_ID)) == nrow(consol_other))
+stopifnot(length(unique(consol_other$LINK_ID_OTHERS)) == nrow(consol_other))
 if(anyNA(potential$LINK_IS_ACTUAL_COOP)){stop("below operations needs that there's no NA in this indicator")}
 
 potential_all = 
   potential %>% 
   full_join(
-    consol_other,
+    consol_other %>% select(-COOP_BS_ID), # as this is only NAs
     by = intersect(colnames(potential), colnames(consol_other)), multiple = "all") %>% 
   # create indicator for these links
-  mutate(LINK_IS_ACTUAL_OTHER = !is.na(ACTUAL_OTHER_LINK_ID),
+  mutate(LINK_IS_ACTUAL_OTHER = !is.na(LINK_ID_OTHERS),
          # and correct LINK_IS_ACTUAL_COOP which otherwise has now NAs because of the merge
-         LINK_IS_ACTUAL_COOP = if_else(is.na(LINK_IS_ACTUAL_COOP), FALSE, LINK_IS_ACTUAL_COOP))
+         LINK_IS_ACTUAL_COOP = if_else(is.na(LINK_IS_ACTUAL_COOP), FALSE, LINK_IS_ACTUAL_COOP)) 
 
 names(potential_all)
 if(nrow(potential_all) != nrow(potential) + nrow(filter(consol, is.na(COOP_BS_ID)))){stop("some rows were unexpectedly matched")}
@@ -632,9 +649,14 @@ potential_all =
     # an actual link is either with a coop or with an other intermediary
     LINK_IS_ACTUAL = LINK_IS_ACTUAL_COOP | LINK_IS_ACTUAL_OTHER, 
     # a virtual link is a row that is not an actual link, but still matched a coopbs  
-    LINK_IS_VIRTUAL = !LINK_IS_ACTUAL & !is.na(POTENTIAL_COOP_BS_ID), 
+    LINK_IS_VIRTUAL = !LINK_IS_ACTUAL & !is.na(LINK_POTENTIAL_COOP_BS_ID), 
     # a potential link is either an actual or a virtual link
-    LINK_IS_POTENTIAL = LINK_IS_ACTUAL | LINK_IS_VIRTUAL) %>% 
+    LINK_IS_POTENTIAL = LINK_IS_ACTUAL | LINK_IS_VIRTUAL, 
+    # Adjust BUYER_IS_COOP to be true for all potential links with coops
+    BUYER_IS_COOP = case_when(
+      is.na(BUYER_IS_COOP) & LINK_IS_ACTUAL_COOP | LINK_IS_VIRTUAL ~ TRUE, 
+      TRUE ~ BUYER_IS_COOP
+    )) %>% 
     # based on this, characterize cells
   group_by(CELL_ID) %>% 
   mutate(
@@ -659,7 +681,7 @@ if(
 
 # check that actual links with coops are 
 if(!all.equal(potential_all %>% filter(LINK_IS_ACTUAL_COOP), 
-              potential_all %>% filter(POTENTIAL_COOP_BS_ID == ACTUAL_COOP_BS_ID))
+              potential_all %>% filter(LINK_POTENTIAL_COOP_BS_ID == LINK_ACTUAL_COOP_BS_ID))
 ){stop("unexpected")}
 
 if(anyNA(potential_all %>% select(LINK_IS_ACTUAL, 
@@ -688,8 +710,8 @@ potential_all %>%
 # ungroup() %>% 
 # mutate(CELL_POTENTIAL_LINK_ID = paste0(CELL_POTENTIAL_LINK_ID, "")) %>% 
 
-potential_all$ACTUAL_COOP_LINK_ID %>% unique() %>% length() 
-anyNA(potential_all$ACTUAL_COOP_LINK_ID)
+potential_all$LINK_ID_COOPS %>% unique() %>% length() 
+anyNA(potential_all$LINK_ID_COOPS)
 
 
 # ADD VARIABLES ----------------
@@ -744,9 +766,9 @@ potential_all =
 
 ### Nb other licensed buyers in cell's district -----------
 licens_panel = 
-  rbind(licens19 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2019),
-        licens20 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2020),
-        licens21 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(YEAR = 2021)) %>% 
+  rbind(licens19 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(LINK_YEAR = 2019),
+        licens20 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(LINK_YEAR = 2020),
+        licens21 %>% select(NOM, DENOMINATION, LVL_4_CODE) %>% mutate(LINK_YEAR = 2021)) %>% 
   arrange(NOM, DENOMINATION, LVL_4_CODE) %>% 
   group_by(NOM, DENOMINATION, LVL_4_CODE) %>% 
   # code from Trase work, don't bother, it's just an ID
@@ -756,7 +778,7 @@ licens_panel =
 (n_licbuy_dpt = 
     licens_panel %>% 
     filter(!is.na(LVL_4_CODE)) %>% 
-    summarise(.by = c(LVL_4_CODE, YEAR), 
+    summarise(.by = c(LVL_4_CODE, LINK_YEAR), 
               N_LICBUY_IN_DPT_YEAR = length(na.omit(unique(LICENSED_BUYER_ID)))) %>% 
     summarise(.by = LVL_4_CODE, 
               AVG_N_LICBUY_IN_DPT = mean(N_LICBUY_IN_DPT_YEAR)) %>% 
@@ -819,13 +841,13 @@ stopifnot(nrow(coopbs)==nrow(coopbs_ohe))
 
 # names(coopbs_ohe)
 # coopbs %>% 
-#   filter(!is.na(BS_LONGITUDE)) %>% 
+#   filter(!is.na(BUYER_LONGITUDE)) %>% 
 #   pull(TOTAL_FARMERS) %>% summary()
 
 potential_all = 
   potential_all %>% 
   left_join(coopbs_ohe, 
-            by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+            by = join_by(LINK_POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
 
 ### Terrain in BS buffers -------------
@@ -849,12 +871,13 @@ tri_coopbs_10km_buffer = st_read(dir_tri)
 
 tri_coopbs_10km_buffer = 
   tri_coopbs_10km_buffer %>% 
-  rename(COOP_BS_10KM_TRI = weighted_mean)
+  rename(COOP_BS_10KM_TRI = weighted_mean) %>% 
+  st_drop_geometry()
 
 potential_all = 
   potential_all %>% 
   left_join(tri_coopbs_10km_buffer, 
-            by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+            by = join_by(LINK_POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
 # This would have been the workflow with GEE
 # tri = rast(here("input_data/terrain/tri/tri.txt"))
@@ -878,7 +901,7 @@ coopbs_10km_buffer_lu =
 potential_all = 
   potential_all %>% 
   left_join(coopbs_10km_buffer_lu, 
-            by = join_by(POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+            by = join_by(LINK_POTENTIAL_COOP_BS_ID == COOP_BS_ID))
 
 names(potential_all)
 
@@ -931,14 +954,14 @@ only_potential_ctoid =
   
   # In addoition, remove the SC links with other buyers or unmatched coops bc they miss coordinates. 
   # but leave links between JRC producers and their geolocated other buyers. 
-  filter(!(grepl("SUSTAINCOCOA", PRO_ID) & is.na(ACTUAL_COOP_BS_ID))) 
+  filter(!(grepl("SUSTAINCOCOA", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
 
 # plot(st_geometry(only_potential_ctoid)) don't plot, its too heavy at 3km cells
 
 if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
-   anyNA(only_potential_ctoid$BS_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
+   anyNA(only_potential_ctoid$BUYER_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
 
-only_potential_ctoid %>% filter(is.na(BS_LONGITUDE)) %>% View()
+only_potential_ctoid %>% filter(is.na(BUYER_LONGITUDE)) %>% View()
 # these are the 415 other/non-IC2B from SC.
 
 rm(potential_obsed, potential_notobsed)
@@ -946,10 +969,10 @@ rm(potential_obsed, potential_notobsed)
 potential_itmpt = 
   only_potential_ctoid %>% 
   st_drop_geometry() %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
-only_potential_ctoid$POTENTIAL_LINK_DISTANCE_METERS <- 
+only_potential_ctoid$LINK_DISTANCE_METERS <- 
   st_distance(only_potential_ctoid, potential_itmpt, by_element = TRUE) %>% as.numeric()
 
 rm(potential_itmpt)
@@ -959,10 +982,10 @@ rm(potential_itmpt)
 potential_all = 
   potential_all %>% 
   left_join(only_potential_ctoid %>% 
-              select(CELL_ID, ACTUAL_COOP_LINK_ID, ACTUAL_OTHER_LINK_ID, POTENTIAL_COOP_BS_ID, POTENTIAL_LINK_DISTANCE_METERS) %>% 
+              select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS) %>% 
               st_drop_geometry(), 
-            # (join by ACTUAL_OTHER_LINK_ID too, bc these links are also in only_potential_ctoid)
-            by = c("CELL_ID", "ACTUAL_COOP_LINK_ID", "ACTUAL_OTHER_LINK_ID", "POTENTIAL_COOP_BS_ID"))
+            # (join by LINK_ID_OTHERS too, bc these links are also in only_potential_ctoid)
+            by = c("CELL_ID", "LINK_ID_COOPS", "LINK_ID_OTHERS", "LINK_POTENTIAL_COOP_BS_ID"))
 
 if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
 
@@ -972,13 +995,36 @@ rm(only_potential_ctoid)
 # Should only be 0 now 
 potential_all %>% 
   mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
-    LINK_IS_ACTUAL ~ POTENTIAL_LINK_DISTANCE_METERS - ACTUAL_LINK_DISTANCE_METERS,
+    LINK_IS_ACTUAL ~ LINK_DISTANCE_METERS - LINK_ACTUALONLY_DISTANCE_METERS,
     TRUE ~ NA
   )) %>% 
   pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
 
 
+# EXPORT -------
+# Export here the data for the second stage, to then work from a lighter object
+potential_all = 
+  potential_all %>% 
+  select(starts_with("LINK_"),
+         starts_with("CELL_"), 
+         starts_with("PRO_"), 
+         starts_with("COOP_"), 
+         starts_with("BUYER_"))
+
+names(potential_all)
+
+saveRDS(potential_all, 
+        here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", grid_size_m*1e-3, "km.Rdata")))
+
+
 # 1ST STAGE DATA --------------
+
+potential_all_fewer_vars = 
+  potential_all %>% 
+  select(starts_with("CELL_", ), 
+         starts_with("LINK_", ), 
+         starts_with("COOP_", ), 
+         !starts_with("COOP_DISTRICT_")) # this cannot be aggregated - we could do it for cell however... 
 
 ## Aggregate to cell-level ------------
 
@@ -988,7 +1034,29 @@ potential_all %>%
 
 # * Hence, we upscale the observation to the level of the cell. *
 
+# Re-adjust BUYER_IS_COOP to be true for all potential links
+potential_all = 
+  potential_all %>% 
+  mutate(BUYER_IS_COOP = case_when(
+    is.na(BUYER_IS_COOP) & LINK_IS_POTENTIAL ~ TRUE, 
+    TRUE ~ BUYER_
+  ))
 
+# the only rows where BUYER_IS_COOP is NA are in cells with no potential link
+potential_all$BUYER_IS_COOP %>% summary()
+potential_all %>% filter(is.na(BUYER_IS_COOP)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% summary()
+
+cell_fstg =
+  potential_all %>%
+  mutate(LINK_VOLUME_KG_COOPS = LINK_VOLUME_KG*BUYER_IS_COOP)
+#   # first, sum up individual link volumes within buyer type (coop, other or NA)
+#   group_by(CELL_ID, BUYER_IS_COOP) %>% 
+#   mutate(CELL_TYPE_OF_BUYER_VOLUME_KG = sum(LINK_VOLUME_KG, na.rm = TRUE) 
+#   summarise(.by = c(CELL_ID),
+#             # since there's volumes data for actual links only, we can just remove NAs in sums
+#             CELL_TYPE_OF_BUYER_VOLUME_KG = sum()
+#             
+#             )
 ### Topological vars ------------
 
 
@@ -997,21 +1065,15 @@ potential_all %>%
 
 
 
-# EXPORT -------
-
-saveRDS(potential_all, 
-        here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", grid_size_m*1e-3, "km.Rdata")))
-
-
 
 # PROPORTIONAL VOLUMES -------
 # Make the outcome variable, i.e. the proportion of flows to coops rel to flows with other buyers
 hhs_links_all_tmp = 
   hhs_links_all %>% 
   # first, sum up individual link volumes within buyer type (coop, other or NA)
-  group_by(VILLAGE_SURVEY_NAME, IS_BUYER_COOP) %>% 
+  group_by(VILLAGE_SURVEY_NAME, BUYER_IS_COOP) %>% 
   mutate(VILLAGE_TYPE_OF_BUYER_VOLUME_KG = case_when(
-    !is.na(IS_BUYER_COOP) ~ sum(BUYER_VOLUME_KG, na.rm = TRUE), 
+    !is.na(BUYER_IS_COOP) ~ sum(BUYER_VOLUME_KG, na.rm = TRUE), 
     TRUE ~ NA)
   ) %>% 
   # then, sum up links to coops + links to other (but exclude NAs)
@@ -1023,7 +1085,7 @@ hhs_links_all_tmp =
   mutate(
     LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE = VILLAGE_TYPE_OF_BUYER_VOLUME_KG / VILLAGE_COOP_OR_OTHER_BUYER_VOLUME_KG) 
 
-hhs_links_all_tmp$IS_BUYER_COOP %>% summary()
+hhs_links_all_tmp$BUYER_IS_COOP %>% summary()
 hhs_links_all_tmp$VILLAGE_TYPE_OF_BUYER_VOLUME_KG %>% summary()
 hhs_links_all_tmp$LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE %>% summary()
 
@@ -1057,6 +1119,6 @@ hhs_links_all_tmp$LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE %>% summary()
 #   vect(geom = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = "epsg:4326", keepgeom = TRUE) %>% 
 #   project(paste0("epsg:", civ_crs))
 # 
-# allcel_tr = rasterize(consol_sr, tmplt_sr, field = c("PRO_ID", "COOP_BS_ID", "ACTUAL_LINK_DISTANCE_METERS"), fun = function(x){length(unique(x))}) # by = names(consol_sr), 
+# allcel_tr = rasterize(consol_sr, tmplt_sr, field = c("PRO_ID", "COOP_BS_ID", "LINK_ACTUALONLY_DISTANCE_METERS"), fun = function(x){length(unique(x))}) # by = names(consol_sr), 
 # # function(x){factor(paste0(na.omit(unique(x)), collapse = ";"))}
 # rasterize(consol_sr, tmplt_sr, fun = "length") %>% values() %>% summary()

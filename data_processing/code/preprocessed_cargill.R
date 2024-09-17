@@ -195,14 +195,14 @@ if(bs_carg$COOP_ID %>% unique() %>% length() != length(unique(carg_pt$COOPERATIV
 # multiple matches are expected, because 3 of the 6 coops have several buying stations in IC2B.
 carg_pt_bs =
   carg_pt %>% 
-  left_join(bs_carg %>% select(SIMPLIF_ABRVNAME, BS_LONGITUDE = LONGITUDE, BS_LATITUDE = LATITUDE, 
+  left_join(bs_carg %>% select(SIMPLIF_ABRVNAME, BUYER_LONGITUDE = LONGITUDE, BUYER_LATITUDE = LATITUDE, 
                                COOP_BS_ID), # to be able to match back to IC2B. 
             by = join_by("SIMPLIF_COOPERATIV" == "SIMPLIF_ABRVNAME"), 
             multiple = "all") 
 
 carg_pt_sfbs = 
   carg_pt_bs %>% 
-  st_as_sf(coords = c("BS_LONGITUDE", "BS_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 # bs_carg %>% filter(SUPPLIER_ABRVNAME != SIMPLIF_ABRVNAME)
 
@@ -213,15 +213,15 @@ carg_sfpt_bs =
   st_transform(civ_crs) 
 
 
-ggplot()+
-  geom_sf(data = carg_sfpt_bs, col = "grey")  +
-  geom_sf(data = carg_pt_sfbs, aes(col=SIMPLIF_COOPERATIV))  +
-  geom_sf(data = departements, fill = "transparent")
-
-ggplot()+
-    geom_sf(data = carg_sfpt_bs, aes(col = SIMPLIF_COOPERATIV))  +
-    geom_sf(data = carg_pt_sfbs, col="black")  +
-    geom_sf(data = departements, fill = "transparent")
+# ggplot()+
+#   geom_sf(data = carg_sfpt_bs, col = "grey")  +
+#   geom_sf(data = carg_pt_sfbs, aes(col=SIMPLIF_COOPERATIV))  +
+#   geom_sf(data = departements, fill = "transparent")
+# 
+# ggplot()+
+#     geom_sf(data = carg_sfpt_bs, aes(col = SIMPLIF_COOPERATIV))  +
+#     geom_sf(data = carg_pt_sfbs, col="black")  +
+#     geom_sf(data = departements, fill = "transparent")
 
 carg_pt_bs$LINK_DISTANCE_METERS <- 
   st_distance(carg_sfpt_bs, carg_pt_sfbs, by_element = TRUE)
@@ -258,16 +258,17 @@ carg %>%
 
 toexport = 
   carg_pt_closestbs %>% 
-  mutate(YEAR = 2019, 
+  mutate(LINK_YEAR = 2019, 
          DATA_SOURCE = "CARGILL",
          PRO_ID = paste0("CARGILL_FARMER_",FARMER_COD),
-         ACTUAL_LINK_ID = paste0("CARGILL_FARMER_",LINK_ID), 
-         BUYER_IS_COOP = TRUE) %>% 
+         LINK_ID_ONLYACTUAL = paste0("CARGILL_FARMER_",LINK_ID), 
+         BUYER_IS_COOP = TRUE, 
+         LINK_VOLUME_KG = NA) %>% 
   select(YEAR, PRO_ID, COOP_BS_ID,  
-         ACTUAL_LINK_ID,
+         LINK_ID_ONLYACTUAL,
          BUYER_IS_COOP,
-         BS_LONGITUDE, BS_LATITUDE,
-         LINK_DISTANCE_METERS, 
+         BUYER_LONGITUDE, BUYER_LATITUDE,
+         LINK_ACTUALONLY_DISTANCE_METERS = LINK_DISTANCE_METERS, # actual only because distance is computed for all potential links in prepared_main_dataset.R 
          # PRO_DEPARTMENT_GEOCODE = LVL_4_CODE, 
          # PRO_DEPARTMENT_NAME = LVL_4_NAME,
          PRO_LONGITUDE, PRO_LATITUDE)
