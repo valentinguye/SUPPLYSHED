@@ -562,7 +562,7 @@ toexport =
          DATA_SOURCE = "SUSTAINCOCOA",
          PRO_ID = paste0("SUSTAINCOCOA_HH_",HH_SURVEY_ID),
          LINK_ID_ONLYACTUAL = paste0("SUSTAINCOCOA_HH_",LINK_ID)) %>% 
-  select(YEAR, PRO_ID, COOP_BS_ID, 
+  select(LINK_YEAR, PRO_ID, COOP_BS_ID, 
          LINK_ID_ONLYACTUAL,
          BUYER_IS_COOP,
          BUYER_LONGITUDE, BUYER_LATITUDE,

@@ -264,7 +264,7 @@ toexport =
          LINK_ID_ONLYACTUAL = paste0("CARGILL_FARMER_",LINK_ID), 
          BUYER_IS_COOP = TRUE, 
          LINK_VOLUME_KG = NA) %>% 
-  select(YEAR, PRO_ID, COOP_BS_ID,  
+  select(LINK_YEAR, PRO_ID, COOP_BS_ID,  
          LINK_ID_ONLYACTUAL,
          BUYER_IS_COOP,
          BUYER_LONGITUDE, BUYER_LATITUDE,

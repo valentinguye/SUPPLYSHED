@@ -27,9 +27,12 @@ dir.create(here("temp_data", "terrain"))
 dir.create(here("temp_data", "BNETD"))
 dir.create(here("temp_data", "prepared_main_dataset"))
 
-# Assets and functions -----------------------------------------------------
+# Assets, parameters & ext. functions -----------------------------------------------------
 # use the projected CRS used by BNETD for their 2020 land use map. 
 civ_crs <- 32630
+
+# Set this to 30000 to run a toy model, for tests etc.
+grid_size_m = 3000
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
@@ -46,14 +49,11 @@ licens20 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2020_GEOCODED.c
 licens21 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2021_GEOCODED.csv"))
 
 # Cargill link data
-carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv")) %>% 
-  # can remove this once cargill rerun
-  rename(LINK_YEAR = YEAR) %>% 
-  mutate(LINK_VOLUME_KG = NA) 
+carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv")) 
   
+
 # JRC link data
-jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))%>% 
-  rename(LINK_YEAR = YEAR)
+jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))
 
 # jrc_links_coops = 
 #   jrc_links %>% 
@@ -68,8 +68,7 @@ jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_stand
 
 # Sustain-cocoa link data
 # sc_links_vil = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
-sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv")) %>% 
-  rename(LINK_YEAR = YEAR)
+sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv"))
 
 # In SC data, in addition to just coop/other buyers, we have coops that didn't match IC2B
 # sc_links_coops =
@@ -199,7 +198,9 @@ consol_other =
 consol_other$BUYER_IS_COOP %>% summary()
 
 consol %>% filter(!is.na(COOP_BS_ID) & !BUYER_IS_COOP) %>% View()
-# Actual coop link stats ----------------
+
+
+# Actual link stats ----------------
 
 # Make ID for actual links WITH COOPS 
 # (actual links including other buyers exist already)
@@ -242,9 +243,11 @@ consol_IC2Bcoops =
 
 (dist_meters_90pctl = quantile(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, 0.9, na.rm = T) %>% round(-3))
 (dist_meters_95pctl = quantile(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, 0.95, na.rm = T) %>% round(-3))
+
 (dist_meters_max = quantile(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS, 1, na.rm = T) %>% round(-3))
 
-(dist_meters_threshold <- dist_meters_95pctl)
+# USE THE MAX BECAUSE WE WILL UNDERSAMPLE VIRTUAL LINKS LATER ON, EXPLICITLY RANDOMLY, IN THE MACHINE LEARNING MODEL. 
+dist_meters_threshold <- dist_meters_max
 
 summary(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS)
 sd(consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS[consol_IC2Bcoops$LINK_ACTUALONLY_DISTANCE_METERS], na.rm = TRUE)
@@ -287,7 +290,6 @@ coopbs_10km_buffer =
 # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
 # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
 # At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.5 x 0.5 km) or less.
-grid_size_m = 30000
 
 ## Limit to cocoa growing region 
 cocoa_departements = 
@@ -942,7 +944,7 @@ potential_notobsed =
   select(names(potential_obsed))
 
 # bind them 
-only_potential_ctoid = 
+only_potential_propt = 
   rbind(
     potential_obsed, 
     potential_notobsed
@@ -956,52 +958,64 @@ only_potential_ctoid =
   # but leave links between JRC producers and their geolocated other buyers. 
   filter(!(grepl("SUSTAINCOCOA", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
 
-# plot(st_geometry(only_potential_ctoid)) don't plot, its too heavy at 3km cells
+# plot(st_geometry(only_potential_propt)) don't plot, its too heavy at 3km cells
 
-if(only_potential_ctoid %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
-   anyNA(only_potential_ctoid$BUYER_LONGITUDE)){stop("only_potential_ctoid does not have the expected spatial attributes at this stage")}
+if(only_potential_propt %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
+   anyNA(only_potential_propt$BUYER_LONGITUDE)){stop("only_potential_propt does not have the expected spatial attributes at this stage")}
 
-only_potential_ctoid %>% filter(is.na(BUYER_LONGITUDE)) %>% View()
+only_potential_propt %>% filter(is.na(BUYER_LONGITUDE)) %>% View()
 # these are the 415 other/non-IC2B from SC.
 
 rm(potential_obsed, potential_notobsed)
 # st_distance needs to work on same size df. 
-potential_itmpt = 
-  only_potential_ctoid %>% 
+only_potential_itmpt = 
+  only_potential_propt %>% 
   st_drop_geometry() %>% 
   st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
-only_potential_ctoid$LINK_DISTANCE_METERS <- 
-  st_distance(only_potential_ctoid, potential_itmpt, by_element = TRUE) %>% as.numeric()
+only_potential_propt$LINK_DISTANCE_METERS <- 
+  st_distance(only_potential_propt, only_potential_itmpt, by_element = TRUE) %>% as.numeric()
 
-rm(potential_itmpt)
+rm(only_potential_itmpt)
 
 # merge back to the full grid
 (init_nrow <- nrow(potential_all))
 potential_all = 
   potential_all %>% 
-  left_join(only_potential_ctoid %>% 
+  left_join(only_potential_propt %>% 
               select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS) %>% 
               st_drop_geometry(), 
-            # (join by LINK_ID_OTHERS too, bc these links are also in only_potential_ctoid)
+            # (join by LINK_ID_OTHERS too, bc these links are also in only_potential_propt)
             by = c("CELL_ID", "LINK_ID_COOPS", "LINK_ID_OTHERS", "LINK_POTENTIAL_COOP_BS_ID"))
 
 if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
 
-rm(only_potential_ctoid)
-
 # In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
 # Should only be 0 now 
-potential_all %>% 
-  mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
-    LINK_IS_ACTUAL ~ LINK_DISTANCE_METERS - LINK_ACTUALONLY_DISTANCE_METERS,
-    TRUE ~ NA
-  )) %>% 
-  pull(DIFF_DIST_TO_CELL_VS_FARM) %>% summary()
+stopifnot(
+  potential_all %>% 
+    mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
+      LINK_IS_ACTUAL ~ LINK_DISTANCE_METERS - LINK_ACTUALONLY_DISTANCE_METERS,
+      TRUE ~ NA
+    )) %>% 
+    pull(DIFF_DIST_TO_CELL_VS_FARM) %>% round(1) %>% na.omit() %>% unique() == 0
+)
+
+### Add travel time -------------
+only_potential_coords = 
+  only_potential_propt %>% 
+  select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
+         PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE,
+  ) %>% 
+  st_drop_geometry() 
+
+write.csv(only_potential_coords, here("temp_data", "potential_links_coords.csv"))
+
+rm(only_potential_propt, only_potential_coords)
 
 
-# EXPORT -------
+## EXPORT -------
 # Export here the data for the second stage, to then work from a lighter object
 potential_all = 
   potential_all %>% 
@@ -1014,19 +1028,24 @@ potential_all =
 names(potential_all)
 
 saveRDS(potential_all, 
-        here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", grid_size_m*1e-3, "km.Rdata")))
+        here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
+
+
 
 
 # 1ST STAGE DATA --------------
+potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", grid_size_m*1e-3, "km.Rdata")))
 
-potential_all_fewer_vars = 
+potential_all = 
   potential_all %>% 
-  select(starts_with("CELL_", ), 
-         starts_with("LINK_", ), 
-         starts_with("COOP_", ), 
-         !starts_with("COOP_DISTRICT_")) # this cannot be aggregated - we could do it for cell however... 
+  select(!starts_with("COOP_DISTRICT_")) %>%  # this cannot be aggregated - we could do it for cell however... 
+  group_by(CELL_ID) %>% 
+  mutate(LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_DISTANCE_METERS))[5]) %>% 
+  ungroup() %>% 
+  mutate(LINK_POTENTIAL_IS_5_NEAREST = LINK_DISTANCE_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP) 
+  
 
-## Aggregate to cell-level ------------
+## Dependent variable ------------
 
 # Now that all that was possibly measured at link level has been measured, 
 # for both actual links with coops and with other buyers, we aggregate these
@@ -1034,60 +1053,219 @@ potential_all_fewer_vars =
 
 # * Hence, we upscale the observation to the level of the cell. *
 
-# Re-adjust BUYER_IS_COOP to be true for all potential links
-potential_all = 
-  potential_all %>% 
-  mutate(BUYER_IS_COOP = case_when(
-    is.na(BUYER_IS_COOP) & LINK_IS_POTENTIAL ~ TRUE, 
-    TRUE ~ BUYER_
-  ))
-
-# the only rows where BUYER_IS_COOP is NA are in cells with no potential link
+# the only rows where BUYER_IS_COOP is NA are in cells with no potential link 
+# (since adjustment in "Add virtual coop links" section)
 potential_all$BUYER_IS_COOP %>% summary()
 potential_all %>% filter(is.na(BUYER_IS_COOP)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% summary()
+potential_all %>% filter(!is.na(LINK_VOLUME_KG)) %>% nrow()
 
-cell_fstg =
+cell_depvars =
   potential_all %>%
-  mutate(LINK_VOLUME_KG_COOPS = LINK_VOLUME_KG*BUYER_IS_COOP)
-#   # first, sum up individual link volumes within buyer type (coop, other or NA)
-#   group_by(CELL_ID, BUYER_IS_COOP) %>% 
-#   mutate(CELL_TYPE_OF_BUYER_VOLUME_KG = sum(LINK_VOLUME_KG, na.rm = TRUE) 
-#   summarise(.by = c(CELL_ID),
-#             # since there's volumes data for actual links only, we can just remove NAs in sums
-#             CELL_TYPE_OF_BUYER_VOLUME_KG = sum()
-#             
-#             )
-### Topological vars ------------
-
-
-### Average IC2B vars
-
-
-
-
-
-# PROPORTIONAL VOLUMES -------
-# Make the outcome variable, i.e. the proportion of flows to coops rel to flows with other buyers
-hhs_links_all_tmp = 
-  hhs_links_all %>% 
-  # first, sum up individual link volumes within buyer type (coop, other or NA)
-  group_by(VILLAGE_SURVEY_NAME, BUYER_IS_COOP) %>% 
-  mutate(VILLAGE_TYPE_OF_BUYER_VOLUME_KG = case_when(
-    !is.na(BUYER_IS_COOP) ~ sum(BUYER_VOLUME_KG, na.rm = TRUE), 
-    TRUE ~ NA)
+  # mutate(LINK_VOLUME_KG_COOPS  = LINK_VOLUME_KG*BUYER_IS_COOP) %>% 
+  summarise(.by = "CELL_ID",
+            # This is the sum of the volumes of all actual links from a cell. 
+            CELL_VOLUME_KG = sum(LINK_VOLUME_KG, na.rm = TRUE),
+            # The only NAs that do not get counted are the cells with no potential link. 
+          # CELL_VOLUME_KG_COOPS = sum(LINK_VOLUME_KG_COOPS, na.rm = TRUE), 
+            # so multiplying by BUYER_IS_COOP makes NAs in these cells, and 0 for actual links with other buyers
+            CELL_VOLUME_KG_COOPS  = sum(LINK_VOLUME_KG*BUYER_IS_COOP, na.rm = TRUE), 
+            CELL_VOLUME_KG_OTHERS = sum(LINK_VOLUME_KG*!BUYER_IS_COOP, na.rm = TRUE) 
   ) %>% 
-  # then, sum up links to coops + links to other (but exclude NAs)
-  group_by(VILLAGE_SURVEY_NAME) %>% 
   mutate(
-    VILLAGE_COOP_OR_OTHER_BUYER_VOLUME_KG = sum(VILLAGE_TYPE_OF_BUYER_VOLUME_KG, na.rm = TRUE)) %>% 
-  ungroup() %>% 
-  # finally, divide volumes to either coop or other by volumes to both types 
-  mutate(
-    LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE = VILLAGE_TYPE_OF_BUYER_VOLUME_KG / VILLAGE_COOP_OR_OTHER_BUYER_VOLUME_KG) 
+    CELL_PROP_VOLUME_COOPS = case_when(
+      CELL_VOLUME_KG != 0 & !is.na(CELL_VOLUME_KG) ~ CELL_VOLUME_KG_COOPS / CELL_VOLUME_KG, 
+      TRUE ~ NA), 
+    CELL_PROP_VOLUME_OTHERS = case_when(
+      CELL_VOLUME_KG != 0 & !is.na(CELL_VOLUME_KG) ~ CELL_VOLUME_KG_OTHERS / CELL_VOLUME_KG, 
+      TRUE ~ NA)
+    )
+# (multiplying by BUYER_IS_COOP in the sum of summarise is rowwise, i.e. identical to doing it in a prior mutate)
+# identical(cell_depvars$CELL_VOLUME_KG_COOPS, cell_depvars$CELL_VOLUME_KG_COOPS2)
 
-hhs_links_all_tmp$BUYER_IS_COOP %>% summary()
-hhs_links_all_tmp$VILLAGE_TYPE_OF_BUYER_VOLUME_KG %>% summary()
-hhs_links_all_tmp$LINK_VILLAGE_TYPE_OF_BUYER_REL_SIZE %>% summary()
+# check that props sum to 1
+stopifnot(
+  cell_depvars %>% 
+    group_by(CELL_ID) %>% 
+    mutate(test = CELL_PROP_VOLUME_COOPS + CELL_PROP_VOLUME_OTHERS) %>% 
+    ungroup() %>% 
+    pull(test) %>% unique() %>% na.omit() == 1
+)
+
+cell_depvars$CELL_PROP_VOLUME_COOPS %>% summary()
+
+
+# potential_all$LINK_DISTANCE_METERS %>% summary()
+# potential_all %>% filter(is.na(LINK_DISTANCE_METERS)) %>% pull(CELL_ACTUAL_ONLYCOOP_LINK) %>% summary()
+# potential_all %>% filter(is.na(LINK_DISTANCE_METERS) & CELL_NO_POTENTIAL_LINK) %>% View() 
+
+
+## Cell level Xs -----------
+
+# there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.
+# it is important to remove these NAs so they don't make cell distance summaries NAs. 
+# Hence, the warning that Inf is thrown when no argument is found is expected, for all cells with only NAs. 
+cell_cellvars = 
+  potential_all %>% 
+  summarise(.by = "CELL_ID",
+
+            # Topological 
+            CELL_MIN_DISTANCE_METERS            = min(LINK_DISTANCE_METERS, na.rm = TRUE),
+            CELL_AVG_5_NEAREST_DISTANCE_METERS  = mean(head(sort(LINK_DISTANCE_METERS), 5), na.rm = TRUE),
+            # CELL_MED_DISTANCE_METERS            = median(LINK_DISTANCE_METERS, na.rm = TRUE),
+            CELL_N_BS_WITHIN_DIST               = unique(CELL_N_BS_WITHIN_DIST),
+            CELL_N_COOP_IN_DPT                  = unique(CELL_N_COOP_IN_DPT),
+            CELL_AVG_N_LICBUY_IN_DPT            = unique(CELL_AVG_N_LICBUY_IN_DPT),
+            
+            # Producer end
+            CELL_COCOA_HA      = unique(CELL_COCOA_HA), 
+            CELL_SETTLEMENT_HA = unique(CELL_SETTLEMENT_HA), 
+            CELL_TRI_MM        = unique(CELL_TRI_MM),
+            CELL_DISTRICT_GEOCODE = unique(CELL_DISTRICT_GEOCODE),
+            CELL_DISTRICT_NAME = unique(CELL_DISTRICT_NAME),
+            
+            # Indicators
+            CELL_NO_POTENTIAL_LINK     = unique(CELL_NO_POTENTIAL_LINK),
+            CELL_NO_ACTUAL_LINK        = unique(CELL_NO_ACTUAL_LINK),
+            CELL_ONLY_VIRTUAL_LINK     = unique(CELL_ONLY_VIRTUAL_LINK), 
+            CELL_ACTUAL_ONLYCOOP_LINK  = unique(CELL_ACTUAL_ONLYCOOP_LINK), 
+            CELL_ACTUAL_ONLYOTHER_LINK = unique(CELL_ACTUAL_ONLYOTHER_LINK), 
+            CELL_ACTUAL_BOTH_LINK      = unique(CELL_ACTUAL_BOTH_LINK), 
+            CELL_ACTUAL_LINK           = unique(CELL_ACTUAL_LINK),
+
+)
+
+stopifnot(
+  cell_cellvars %>% filter(is.infinite(CELL_MIN_DISTANCE_METERS)) %>% nrow() == 
+    sum(filter(potential_all, is.na(LINK_DISTANCE_METERS))$CELL_NO_POTENTIAL_LINK)
+)
+
+## Coop level Xs -----------
+# Do every average or sum over 1/ all potential coops; 2/ only the actual ones; 3/ the five closest ones. 
+
+### Dummies to proportions ------------------------
+# (averages of binary vars make proportions)
+fn_coop_binary_summary = function(COOP_VAR){
+  potential_all %>% 
+    summarise(.by = "CELL_ID", 
+              !!as.symbol(paste0("CELL_PROP_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
+              !!as.symbol(paste0("CELL_PROP_ACTUAL_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_ACTUAL_COOP, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_PROP_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*LINK_POTENTIAL_IS_5_NEAREST, na.rm = TRUE)
+    )
+}
+
+
+binary_coop_var_vect = c(
+  # Coop certification
+  "COOP_CERTIFIED",
+  "COOP_FT",
+  "COOP_RFA",
+  "COOP_UTZ",
+  # Coop SSIs
+  "COOP_HAS_SSI",
+  "COOP_SSI_CARGILL",
+  "COOP_SSI_BARRY",
+  "COOP_SSI_OLAM",
+  "COOP_SSI_ECOM",
+  "COOP_SSI_NESTLE",
+  "COOP_SSI_MONDELEZ",
+  "COOP_SSI_BLOMMER",
+  "COOP_SSI_CEMOI",
+  "COOP_SSI_HERSHEY",
+  "COOP_SSI_MARS",
+  "COOP_SSI_SUCDEN",
+  "COOP_SSI_PURATOS",
+  "COOP_SSI_OTHER",
+  # Coop status
+  "COOP_STATUS_SCOOPS",
+  "COOP_STATUS_COOP-CA"# repeat for COOP-CA, bc we don't always know (so it's not going to be perfectly colinear)
+)
+
+
+list_binary_summaries = list()
+for(coop_var in binary_coop_var_vect){
+  list_binary_summaries[[coop_var]] = fn_coop_binary_summary(COOP_VAR = coop_var)
+}
+cell_binaryvars = 
+  list_binary_summaries %>% 
+  bind_cols() %>%
+  mutate(CELL_ID = CELL_ID...1) %>% 
+  select(!starts_with("CELL_ID..."))
+  
+  
+  
+
+### Counts --------------------------
+fn_coop_count_summary = function(COOP_VAR){
+  potential_all %>% 
+    summarise(.by = "CELL_ID", 
+            !!as.symbol(paste0("CELL_COUNT_", COOP_VAR))           := sum(!!as.symbol(COOP_VAR), na.rm = TRUE),
+            !!as.symbol(paste0("CELL_COUNT_ACTUAL_", COOP_VAR))    := sum(!!as.symbol(COOP_VAR)*LINK_IS_ACTUAL_COOP, na.rm = TRUE),
+            !!as.symbol(paste0("CELL_COUNT_5_NEAREST_", COOP_VAR)) := sum(!!as.symbol(COOP_VAR)*LINK_POTENTIAL_IS_5_NEAREST, na.rm = TRUE)
+  )
+}
+
+count_coop_var_vect = c(
+  # Coop size
+  "COOP_FARMERS",
+  "COOP_FARMERS_FT",
+  "COOP_FARMERS_RFA",
+  "COOP_N_KNOWN_BUYERS",
+  "COOP_N_KNOWN_BS",  
+  # Coop surroundings
+  "COOP_BS_10KM_TRI",
+  "COOP_BS_10KM_COCOA_HA",
+  "COOP_BS_10KM_SETTLEMENT_HA"
+)
+
+list_count_summaries = list()
+for(coop_var in count_coop_var_vect){
+  list_count_summaries[[coop_var]] = fn_coop_count_summary(COOP_VAR = coop_var)
+}
+cell_countvars = 
+  list_count_summaries %>% 
+  bind_cols() %>%
+  mutate(CELL_ID = CELL_ID...1) %>% 
+  select(!starts_with("CELL_ID..."))
+
+## Merge all cell variables -------------
+cell_all = 
+  cell_depvars %>%  
+  inner_join(cell_cellvars, 
+             by = "CELL_ID") %>% 
+  inner_join(cell_binaryvars, 
+             by = "CELL_ID") %>% 
+  inner_join(cell_countvars, 
+             by = "CELL_ID")
+  
+stopifnot(potential_all$CELL_ID %>% unique() %>% length() == nrow(cell_all))
+
+# other checks
+prop_var_names = 
+  cell_all %>% 
+  select(starts_with("CELL_PROP_")) %>% 
+  names()
+checks_list = list()
+for(var in prop_var_names){
+  checks_list[[var]] = any(na.omit(cell_all[,var]) > 1)
+}
+if(
+  checks_list %>% unlist() %>% any()
+){stop("some variables are not proportions while they are expected so")}
+
+## EXPORT ----------------
+saveRDS(potential_all, 
+        here("temp_data", "prepared_main_dataset", paste0("cell_", grid_size_m*1e-3, "km.Rdata")))
+
+
+
+
+
+
+
+
+
+
+
 
 
 
