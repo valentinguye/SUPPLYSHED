@@ -2770,9 +2770,18 @@ civ %>% summarise(.by = DISCL_YEAR, NB_FARMERS = sum(TOTAL_FARMERS, na.rm = T)) 
 civ_coop_bs_year <- 
   civ %>% 
   group_by(COOP_ID, DISCL_YEAR) %>% # GROUP AT COOP LEVEL, TO HARMONIZE THESE INFO ACROSS BUYING STATIONS...
-  mutate(DISCLOSURE_SOURCES = paste0(na.omit(unique(COMPANY)), collapse = " + "), 
-         TRADER_NAMES = paste0(na.omit(unique(TRADER_NAME)), collapse = " + "), 
-         CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + ")) %>% 
+  mutate(
+    DISCLOSURE_SOURCES = paste0(na.omit(unique(COMPANY)), collapse = " + "), 
+    TRADER_NAMES = paste0(na.omit(unique(TRADER_NAME)), collapse = " + "), 
+    CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + "),
+  ) %>%
+  ungroup() %>% 
+  mutate(
+    DISCLOSURE_SOURCES = if_else(DISCLOSURE_SOURCES == "" | DISCLOSURE_SOURCES == " ", NA, DISCLOSURE_SOURCES),
+    TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
+    CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS)
+  ) %>% 
+
   group_by(COOP_ID) %>% 
   mutate(BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>% 
   ungroup() %>% 
@@ -2807,6 +2816,11 @@ civ_seipcs <-
   ) %>%
   group_by(COOP_ID, DISCL_YEAR, BUYER) %>% # GROUP AT COOP LEVEL, TO HARMONIZE THESE INFO ACROSS BUYING STATIONS...
   mutate(CERTIFICATIONS = paste0(na.omit(unique(unlist(CERT_LIST))), collapse = " + ")) %>% 
+  ungroup() %>% 
+  mutate(
+    CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS)
+  ) %>% 
+  
   group_by(COOP_ID) %>% 
   mutate(BUYING_STATION_IDS = paste0(unique(COOP_POINT_ID), collapse = " + ")) %>% 
   ungroup() %>%
@@ -2860,10 +2874,6 @@ civ_coop_bs_year =
   mutate(
      COOP_FARMERS_FT = if_else(is.na(TOTAL_FARMERS_FT), 0, TOTAL_FARMERS_FT),
      COOP_FARMERS_RFA = if_else(is.na(TOTAL_FARMERS_RFA), 0, TOTAL_FARMERS_RFA), 
-     
-     # Currently, we ALLOW NA VALUES in IC2B variables
-     TRADER_NAMES = if_else(TRADER_NAMES == "" | TRADER_NAMES == " ", NA, TRADER_NAMES),
-     CERTIFICATIONS = if_else(CERTIFICATIONS == "" | CERTIFICATIONS == " ", NA, CERTIFICATIONS),
      
      # characterize certifications
      COOP_CERTIFIED_OR_SSI = !is.na(CERTIFICATIONS),

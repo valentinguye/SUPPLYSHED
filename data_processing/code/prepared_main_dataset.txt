@@ -37,7 +37,6 @@ grid_size_m = 5000
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
-
 # Data set of the universe of cooperatives (private version of https://dataverse.uclouvain.be/dataset.xhtml?persistentId=doi:10.14428/DVN/YBWJOR) 
 coopbsy = read.csv(
   file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) %>% 
@@ -1287,36 +1286,3 @@ saveRDS(cell_all,
 
 
 
-
-
-# OLD CODE BITS ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### 
-
-
-# Switch geometry from the cell centroid to the polygon. - This takes ~15 minutes
-# grid_potential_poly =
-#   grid_actual %>%
-#   arrange(CELL_ID) %>% # because this may speed up 
-#   select(CELL_ID) %>%
-#   full_join(
-#     y = potential %>% 
-#           st_drop_geometry() %>%
-#           arrange(CELL_ID),
-#     by = "CELL_ID")
-# if(nrow(grid_potential_poly) != nrow(potential)){stop("the join did not work as expected")}
-
-
-# Use terra (rather than stars), because apparently stars::st_rasterize does not 
-# allow one to summarize the values of several points falling in the same grid cell. 
-# https://gis.stackexchange.com/questions/432367/how-to-apply-mean-min-max-merge-functions-on-a-vector-layer-to-create-a-stars-ra
-
-# the issue is that terra does not handle character values. 
-
-# # Make spatial links
-# consol_sr = 
-#   consol_IC2Bcoops %>% 
-#   vect(geom = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = "epsg:4326", keepgeom = TRUE) %>% 
-#   project(paste0("epsg:", civ_crs))
-# 
-# allcel_tr = rasterize(consol_sr, tmplt_sr, field = c("PRO_ID", "COOP_BS_ID", "LINK_ACTUALONLY_DISTANCE_METERS"), fun = function(x){length(unique(x))}) # by = names(consol_sr), 
-# # function(x){factor(paste0(na.omit(unique(x)), collapse = ";"))}
-# rasterize(consol_sr, tmplt_sr, fun = "length") %>% values() %>% summary()
