@@ -14,6 +14,7 @@ library(aws.s3)
 aws.signature::use_credentials()
 Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
 
+
 library(tidyverse)
 library(sf)
 library(readxl)
@@ -32,6 +33,7 @@ library(terra) # put it after {raster} such that it superceeds homonym functions
 library(exactextractr)
 library(stars)
 library(pals)
+library(modelsummary) # necessary to load it after DescTools
 
 ## Functions
 # Trase palettes etc. for plots
@@ -40,16 +42,123 @@ source(here("code", "theme_trase.R"))
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
-MODEL_RESOLUTION_KM = 3
+MODEL_RESOLUTION_KM = 5
 
 ## Assets
 
 # The cam at coop level is also needed for the exporting coop part (step 12)
 # coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) 
 
-main = readRDS(here("temp_data", "prepared_main_dataset", paste0("prepared_main_dataset_", MODEL_RESOLUTION_KM, "km.Rdata")))
+links = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", MODEL_RESOLUTION_KM, "km.Rdata")))
+
+cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL_RESOLUTION_KM, "km.Rdata"))) 
+
+```
+
+```{r}
+# Pre-processing to ease manipulation/display
+cells = 
+  cells %>% 
+    mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Train/test set", "Predict set")) 
+
+```
 
 
+# Cells descriptive statistics
+
+## Structure of the cell data
+```{r}
+# How many cells with actual links
+# cells %>% 
+#   select(!starts_with("CELL_PROP") & !starts_with("CELL_COUNT")) %>% 
+#   datasummary_skim()
+
+# export
+(datasummary(N + Percent()  ~ 
+              (`No potential link` = (CELL_NO_POTENTIAL_LINK==T)) + 
+              (`Only virtual links` = (CELL_ONLY_VIRTUAL_LINK==T)) + 
+              (`Actual links with cooperatives only` = (CELL_ACTUAL_ONLYCOOP_LINK==T)) + 
+              (`Actual links with other buyers only` = (CELL_ACTUAL_ONLYOTHER_LINK==T)) + 
+              (`Actual links with both` = (CELL_ACTUAL_BOTH_LINK==T)) + 
+              1, 
+              data = cells,
+              fmt = 1,
+              align = "ccccccc",
+              output = here("outputs", "cells_destat.png")))
+
+# ?tables::Heading
+
+```
+
+## Cell data features
+
+### Target in the train/test set 
+```{r}
+names(cells)
+
+(cells %>% 
+  filter(CELL_VOLUME_OBSERVED) %>% 
+  transmute(
+    # `Cell ID` = CELL_ID,
+    `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
+    `Cocoa output from cells (kg)` = CELL_VOLUME_KG) %>% 
+  datasummary_skim(output = here("outputs", "cells_train_volumes.png")))
+
+
+
+```
+
+### Cell data balance tests
+```{r}
+
+cells_features_tobalance =
+  cells %>% 
+  select(SPLIT, 
+         `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
+         `Avg. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
+         `Cocoa extent (ha)` = CELL_COCOA_HA,
+         `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+         `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
+         `Proportion of 5 nearest cooperatives certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
+         `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
+         `Proportion of 5 nearest cooperatives with CCP` = CELL_PROP_5_NEAREST_COOP_SSI_CARGILL,
+         `Proportion of 5 nearest cooperatives being COOP-CA` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
+         `Proportion of 5 nearest cooperatives being SCOOPS` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOP-CA`,
+         `Total # members of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
+         `Total # BS of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
+         `Avg. # buying companies in 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_N_KNOWN_BUYERS,
+         `Avg. TRI around 5 nearest cooperatives (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
+         `Avg. cocoa extent around 5 nearest cooperatives (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_COCOA_HA,
+         `Avg. settlements extent around 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
+         ) 
+
+(datasummary_balance(~SPLIT, 
+                      data = cells_features_tobalance, 
+                      stars = TRUE,
+                      # title = "Summaries and balance tests on cell data sets to train/test and to predict the cell share of cooperative outlet", 
+                      notes = "'BS' stands for cooperative buying stations.", 
+                     output = here("outputs", "cells_balance.png")))        
+  
+
+```
+
+
+# Links descriptive statistics
+
+## Structure of the link data 
+```{r}
+
+```
+
+## Features in the processed link data  
+```{r}
+links_features_tosum %>% 
+  mutate(LINK_YEAR = as.character(LINK_YEAR)) %>% 
+  select(starts_with("LINK_"), 
+         all_of("COOP_DISTRICT_NAME", "COOP_STATUS"))
+
+  
 ```
 
 ```{r}

@@ -32,7 +32,7 @@ dir.create(here("temp_data", "prepared_main_dataset"))
 civ_crs <- 32630
 
 # Set this to 30000 to run a toy model, for tests etc.
-grid_size_m = 5000
+grid_size_m = 7000
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
@@ -50,11 +50,13 @@ licens20 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2020_GEOCODED.c
 licens21 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2021_GEOCODED.csv"))
 
 # Cargill link data
-carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv")) 
+carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv")) %>% 
+  mutate(PRO_VILLAGE_NAME = NA)
   
 
 # JRC link data
-jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv"))
+jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv")) %>% 
+  select(!starts_with("VILLAGE_L"))
 
 # jrc_links_coops = 
 #   jrc_links %>% 
@@ -142,6 +144,7 @@ bnetd = rast(here("input_data/GEE/BNETD_binary_cocoa_settlements_3km.tif"))
 consol <- data.frame(
   "LINK_YEAR" = NA, 
   "PRO_ID" = NA, 
+  "PRO_VILLAGE_NAME" = NA,
   "COOP_BS_ID" = NA, 
   "LINK_ID_ONLYACTUAL" = NA,
   "BUYER_IS_COOP" = NA,
@@ -464,6 +467,7 @@ potential =
   mutate(
     LINK_YEAR = NA, 
     PRO_ID = NA, 
+    PRO_VILLAGE_NAME = NA,
     # LINK_ID_ONLYACTUAL = NA,
     LINK_ACTUAL_COOP_BS_ID = NA, 
     PRO_LONGITUDE = NA, 
@@ -658,7 +662,7 @@ potential_all =
     LINK_IS_POTENTIAL = LINK_IS_ACTUAL | LINK_IS_VIRTUAL, 
     # Adjust BUYER_IS_COOP to be true for all potential links with coops
     BUYER_IS_COOP = case_when(
-      is.na(BUYER_IS_COOP) & LINK_IS_ACTUAL_COOP | LINK_IS_VIRTUAL ~ TRUE, 
+      is.na(BUYER_IS_COOP) & (LINK_IS_ACTUAL_COOP | LINK_IS_VIRTUAL) ~ TRUE, 
       TRUE ~ BUYER_IS_COOP
     )) %>% 
     # based on this, characterize cells
@@ -716,6 +720,7 @@ potential_all %>%
 
 potential_all$LINK_ID_COOPS %>% unique() %>% length() 
 anyNA(potential_all$LINK_ID_COOPS)
+
 
 
 # ADD VARIABLES ----------------
@@ -823,13 +828,17 @@ coopbs_ohe =
     COOP_SSI_PURATOS = grepl("PURATOS", CERTIFICATIONS),
     COOP_SSI_OTHER = grepl("OTHER", CERTIFICATIONS)
   ) %>% 
-  mutate(tmp_value = TRUE) %>% 
+  ungroup() %>% 
+  mutate(tmp_value = TRUE, 
+         COOP_DISTRICT_NAME = DISTRICT_NAME) %>% # to be able to keep it, bc these non-ohe vars can be useful for summaries
   pivot_wider(names_from = DISTRICT_NAME, 
               names_prefix = "COOP_DISTRICT_",
               values_from = tmp_value,  
               values_fill = FALSE) %>% 
-  mutate(tmp_value = TRUE) %>% 
-  pivot_wider(names_from = COOP_STATUS, 
+  select(-COOP_DISTRICT_NA) %>% 
+  mutate(tmp_value = TRUE, 
+         STATUS = COOP_STATUS) %>% 
+  pivot_wider(names_from = STATUS, 
               names_prefix = "COOP_STATUS_",
               values_from = tmp_value,  
               values_fill = FALSE) %>% 
@@ -839,7 +848,7 @@ coopbs_ohe =
          COOP_FULLNAME = SUPPLIER_FULLNAME, 
          COOP_BUYERS = TRADER_NAMES, 
          COOP_CERTIFICATIONS = CERTIFICATIONS) %>% 
-  select(starts_with("COOP_"))
+  select(starts_with("COOP_")) 
   
 stopifnot(nrow(coopbs)==nrow(coopbs_ohe))
 
@@ -1012,7 +1021,7 @@ only_potential_coords =
   ) %>% 
   st_drop_geometry() 
 
-write.csv(only_potential_coords, here("temp_data", "potential_links_coords.csv"))
+# write.csv(only_potential_coords, here("temp_data", "potential_links_coords.csv"))
 
 rm(only_potential_propt, only_potential_coords)
 
@@ -1038,14 +1047,62 @@ rm(potential_all_save, potential)
 # 1ST STAGE DATA --------------
 potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
 
+## Under-sampling coop links ----------
+
+# As checked below if run without undersampling, and in SC preprocessing script, 
+# the cell's share of cooperative outlet is over-represented in the data. 
+# This is due to sampling biases towards farmers linked with cooperatives in SC data. 
+# These sampling biases can be at village and at household levels. 
+# We correct by under-sampling at household link level. 
+
+# So concretely, we want to FLAG some actual links between SC farmers and coops, to remove them when appropriate. 
+
+links_to_draw_in = 
+  potential_all %>% 
+  filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP) %>% 
+  (LINK_ID_COOPS) %>% unique()
+
+
+# Prepare 
+# there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.
+# it is important to remove these NAs so they don't make cell distance summaries NAs. 
+# Hence, the warning thrown by min() that Inf is returned when no argument is found is expected, for all cells with only NAs. 
+# but now we don't use min anymore anyway. 
+
 potential_all = 
   potential_all %>% 
-  select(!starts_with("COOP_DISTRICT_")) %>%  # this cannot be aggregated - we could do it for cell however... 
+  select(!starts_with("COOP_DISTRICT_"), -COOP_STATUS) %>%  # this cannot be aggregated - we could do it for cell however... 
   group_by(CELL_ID) %>% 
-  mutate(LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_DISTANCE_METERS))[5]) %>% 
+  arrange(LINK_DISTANCE_METERS) %>% # this matters
+  mutate(
+    # do avg distance of the 5 closest BS, rather than avg of the five smallest distances which may 
+    # well be to the same coop in the many cases where several actual links would exist with it. 
+  # LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_DISTANCE_METERS))[5]) %>% 
+    # na.omit because there may be NAs if in the smallest distances there is a JRC other buyer. 
+    LINK_5_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 5)), 
+    LINK_1_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 1))
+  # CELL_MIN_DISTANCE_METERS = min(LINK_DISTANCE_METERS, na.rm = TRUE)
+    ) %>% 
   ungroup() %>% 
-  mutate(LINK_POTENTIAL_IS_5_NEAREST = LINK_DISTANCE_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP) 
-  
+  rowwise() %>% 
+  mutate(
+   #LINK_IS_WITH_5_NEAREST_COOPS = LINK_DISTANCE_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP
+    LINK_IS_WITH_5_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_5_NEAREST_POTENTIAL_COOP_BS_ID, 
+    LINK_IS_WITH_1_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_1_NEAREST_POTENTIAL_COOP_BS_ID
+   #LINK_IS_WITH_1_NEAREST_COOPS = LINK_DISTANCE_METERS == CELL_MIN_DISTANCE_METERS
+        ) %>% 
+  ungroup() %>% 
+  select(-LINK_5_NEAREST_POTENTIAL_COOP_BS_ID)
+
+stopifnot(
+  potential_all %>% 
+    filter(LINK_IS_WITH_5_NEAREST_COOPS) %>% 
+    summarise(.by = "CELL_ID", 
+            TEST = length(unique(LINK_POTENTIAL_COOP_BS_ID))) %>% 
+    pull(TEST) %>% unique() <= 5 # sometimes there are fewer than 5 potential coops
+)
+
+
 
 ## Dependent variable ------------
 
@@ -1083,6 +1140,9 @@ cell_depvars =
             CELL_VOLUME_KG_OTHERS = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG*!BUYER_IS_COOP, na.rm = TRUE)) 
   ) %>% 
   mutate(
+    # Split indicator, between train/test and predict sets in 1st stage: 
+    CELL_VOLUME_OBSERVED = !is.na(CELL_VOLUME_KG),
+    
     CELL_PROP_VOLUME_COOPS = case_when(
       CELL_VOLUME_KG != 0 & !is.na(CELL_VOLUME_KG) ~ CELL_VOLUME_KG_COOPS / CELL_VOLUME_KG, 
       TRUE ~ NA), 
@@ -1123,29 +1183,32 @@ potential_all %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>%
 
 # there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.
 # it is important to remove these NAs so they don't make cell distance summaries NAs. 
-# Hence, the warning that Inf is thrown when no argument is found is expected, for all cells with only NAs. 
+# hence na.rm in the mean
 cell_cellvars = 
   potential_all %>% 
   summarise(.by = "CELL_ID",
-
+            
             # Topological 
-            CELL_MIN_DISTANCE_METERS            = min(LINK_DISTANCE_METERS, na.rm = TRUE),
-            CELL_AVG_5_NEAREST_DISTANCE_METERS  = mean(head(sort(LINK_DISTANCE_METERS), 5), na.rm = TRUE),
-            # CELL_MED_DISTANCE_METERS            = median(LINK_DISTANCE_METERS, na.rm = TRUE),
+            # unique to put equal weights on distances to the five distinct coop BS (not those with more actual links having more weights)
+            CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS  = mean(unique(LINK_IS_WITH_5_NEAREST_COOPS*LINK_DISTANCE_METERS), na.rm = TRUE),
+            # mean(head(sort(LINK_DISTANCE_METERS), 5), na.rm = TRUE),
+
+            CELL_MIN_DISTANCE_METERS                  = mean(unique(LINK_IS_WITH_1_NEAREST_COOPS*LINK_DISTANCE_METERS), na.rm = TRUE),
+            
             CELL_N_BS_WITHIN_DIST               = unique(CELL_N_BS_WITHIN_DIST),
             CELL_N_COOP_IN_DPT                  = unique(CELL_N_COOP_IN_DPT),
             CELL_AVG_N_LICBUY_IN_DPT            = unique(CELL_AVG_N_LICBUY_IN_DPT),
             
             # Producer end
-            CELL_COCOA_HA      = unique(CELL_COCOA_HA), 
-            CELL_SETTLEMENT_HA = unique(CELL_SETTLEMENT_HA), 
-            CELL_TRI_MM        = unique(CELL_TRI_MM),
+            CELL_COCOA_HA         = unique(CELL_COCOA_HA), 
+            CELL_SETTLEMENT_HA    = unique(CELL_SETTLEMENT_HA), 
+            CELL_TRI_MM           = unique(CELL_TRI_MM),
             CELL_DISTRICT_GEOCODE = unique(CELL_DISTRICT_GEOCODE),
-            CELL_DISTRICT_NAME = unique(CELL_DISTRICT_NAME),
+            CELL_DISTRICT_NAME    = unique(CELL_DISTRICT_NAME),
             
             # Indicators
             CELL_NO_POTENTIAL_LINK     = unique(CELL_NO_POTENTIAL_LINK),
-            CELL_NO_ACTUAL_LINK        = unique(CELL_NO_ACTUAL_LINK),
+            # CELL_NO_ACTUAL_LINK        = unique(CELL_NO_ACTUAL_LINK), # this isn't a correct structure var at this stage.  
             CELL_ONLY_VIRTUAL_LINK     = unique(CELL_ONLY_VIRTUAL_LINK), 
             CELL_ACTUAL_ONLYCOOP_LINK  = unique(CELL_ACTUAL_ONLYCOOP_LINK), 
             CELL_ACTUAL_ONLYOTHER_LINK = unique(CELL_ACTUAL_ONLYOTHER_LINK), 
@@ -1153,28 +1216,25 @@ cell_cellvars =
             CELL_ACTUAL_LINK           = unique(CELL_ACTUAL_LINK),
 
 )
-
-stopifnot(
-  cell_cellvars %>% filter(is.infinite(CELL_MIN_DISTANCE_METERS)) %>% nrow() == 
-    sum(filter(potential_all, is.na(LINK_DISTANCE_METERS))$CELL_NO_POTENTIAL_LINK)
-)
+cell_cellvars$CELL_MIN_DISTANCE_METERS %>% summary()
+cell_cellvars$CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS %>% summary()
+potential_all$LINK_DISTANCE_METERS %>% summary()
 
 ## Coop level Xs -----------
 # Do every average or sum over 1/ all potential coops; 2/ only the actual ones; 3/ the five closest ones. 
 
-### Dummies to proportions ------------------------
+### Mean binary ------------------------
 # (averages of binary vars make proportions)
-fn_coop_binary_summary = function(COOP_VAR){
+fn_coop_prop_summary = function(COOP_VAR){
   potential_all %>% 
     summarise(.by = "CELL_ID", 
               !!as.symbol(paste0("CELL_PROP_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
-              !!as.symbol(paste0("CELL_PROP_ACTUAL_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_ACTUAL_COOP, na.rm = TRUE),
-              !!as.symbol(paste0("CELL_PROP_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*LINK_POTENTIAL_IS_5_NEAREST, na.rm = TRUE)
+              !!as.symbol(paste0("CELL_PROP_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_PROP_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
     )
 }
 
-
-binary_coop_var_vect = c(
+coop_vars_toavg = c(
   # Coop certification
   "COOP_CERTIFIED",
   "COOP_FT",
@@ -1197,13 +1257,13 @@ binary_coop_var_vect = c(
   "COOP_SSI_OTHER",
   # Coop status
   "COOP_STATUS_SCOOPS",
-  "COOP_STATUS_COOP-CA"# repeat for COOP-CA, bc we don't always know (so it's not going to be perfectly colinear)
-)
+  "COOP_STATUS_COOP-CA" # repeat for COOP-CA, bc we don't always know (so it's not going to be perfectly colinear)
+  )
 
 
 list_binary_summaries = list()
-for(coop_var in binary_coop_var_vect){
-  list_binary_summaries[[coop_var]] = fn_coop_binary_summary(COOP_VAR = coop_var)
+for(coop_var in coop_vars_toavg){
+  list_binary_summaries[[coop_var]] = fn_coop_prop_summary(COOP_VAR = coop_var)
 }
 cell_binaryvars = 
   list_binary_summaries %>% 
@@ -1212,34 +1272,55 @@ cell_binaryvars =
   select(!starts_with("CELL_ID..."))
   
   
-  
-
-### Counts --------------------------
-fn_coop_count_summary = function(COOP_VAR){
+### Mean others ------------
+fn_coop_mean_summary = function(COOP_VAR){
   potential_all %>% 
     summarise(.by = "CELL_ID", 
-            !!as.symbol(paste0("CELL_COUNT_", COOP_VAR))           := sum(!!as.symbol(COOP_VAR), na.rm = TRUE),
-            !!as.symbol(paste0("CELL_COUNT_ACTUAL_", COOP_VAR))    := sum(!!as.symbol(COOP_VAR)*LINK_IS_ACTUAL_COOP, na.rm = TRUE),
-            !!as.symbol(paste0("CELL_COUNT_5_NEAREST_", COOP_VAR)) := sum(!!as.symbol(COOP_VAR)*LINK_POTENTIAL_IS_5_NEAREST, na.rm = TRUE)
-  )
+              !!as.symbol(paste0("CELL_AVG_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
+              !!as.symbol(paste0("CELL_AVG_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_AVG_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
+    )
 }
-
-count_coop_var_vect = c(
-  # Coop size
-  "COOP_FARMERS",
-  "COOP_FARMERS_FT",
-  "COOP_FARMERS_RFA",
-  "COOP_N_KNOWN_BUYERS",
-  "COOP_N_KNOWN_BS",  
+coop_othervars_toavg = c(
+  # and these are not binary, but we want to average them still (rather than sum, bc their values may overlap across coops)
+  "COOP_N_KNOWN_BUYERS",  
   # Coop surroundings
   "COOP_BS_10KM_TRI",
   "COOP_BS_10KM_COCOA_HA",
   "COOP_BS_10KM_SETTLEMENT_HA"
 )
 
+list_othermean_summaries = list()
+for(coop_var in coop_othervars_toavg){
+  list_othermean_summaries[[coop_var]] = fn_coop_mean_summary(COOP_VAR = coop_var)
+}
+cell_othermeanvars = 
+  list_othermean_summaries %>% 
+  bind_cols() %>%
+  mutate(CELL_ID = CELL_ID...1) %>% 
+  select(!starts_with("CELL_ID..."))
+
+### Sum --------------------------
+fn_coop_sum_summary = function(COOP_VAR){
+  potential_all %>% 
+    summarise(.by = "CELL_ID", 
+            !!as.symbol(paste0("CELL_COUNT_", COOP_VAR))           := sum(!!as.symbol(COOP_VAR), na.rm = TRUE),
+            !!as.symbol(paste0("CELL_COUNT_1_NEAREST_", COOP_VAR))    := sum(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
+            !!as.symbol(paste0("CELL_COUNT_5_NEAREST_", COOP_VAR)) := sum(!!as.symbol(COOP_VAR)*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
+  )
+}
+
+coop_vars_tosum = c(
+  # Coop size
+  "COOP_FARMERS",
+  "COOP_FARMERS_FT",
+  "COOP_FARMERS_RFA",
+  "COOP_N_KNOWN_BS"
+)
+
 list_count_summaries = list()
-for(coop_var in count_coop_var_vect){
-  list_count_summaries[[coop_var]] = fn_coop_count_summary(COOP_VAR = coop_var)
+for(coop_var in coop_vars_tosum){
+  list_count_summaries[[coop_var]] = fn_coop_sum_summary(COOP_VAR = coop_var)
 }
 cell_countvars = 
   list_count_summaries %>% 
@@ -1253,6 +1334,8 @@ cell_all =
   inner_join(cell_cellvars, 
              by = "CELL_ID") %>% 
   inner_join(cell_binaryvars, 
+             by = "CELL_ID") %>% 
+  inner_join(cell_othermeanvars, 
              by = "CELL_ID") %>% 
   inner_join(cell_countvars, 
              by = "CELL_ID")
@@ -1272,13 +1355,163 @@ if(
   checks_list %>% unlist() %>% any()
 ){stop("some variables are not proportions while they are expected so")}
 
+
+
+
+
 ## EXPORT ----------------
 saveRDS(cell_all, 
         here("temp_data", "prepared_main_dataset", paste0("cell_", grid_size_m*1e-3, "km.Rdata")))
 
 
+stop()
+# OPTIMAL CELL SIZE SEARCH -------------- 
+# check number of villages by cell, when village is known
+# first check that village names are not common in JRC and SC... 
+length(na.omit(unique(sc_links$PRO_VILLAGE_NAME))) + 
+  length(na.omit(unique(jrc_links$PRO_VILLAGE_NAME))) == 
+  length(na.omit(unique(consol$PRO_VILLAGE_NAME)))
+# it cannot anyway, because for JRC, the variable is coded in numbers. 
+
+candd_potential_all = potential_all
+# For JRC
+
+cell_n_jrc_vlg = list()
+for(grid_pot_size_km in c(5, 6, 7, 8, 9, 10)){ #  
+  
+  print(paste0(grid_pot_size_km, "km: "))
+        
+  candd_potential_all = 
+    readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_pot_size_km, "km.Rdata")))
+  
+  # number of cells per JRC village (the same cell can count for several villages)
+  jrc_vlg_n_cells = 
+    candd_potential_all %>% 
+    filter(grepl("JRC_", PRO_ID)) %>% 
+    summarise(.by = PRO_VILLAGE_NAME, 
+              # the number of cells over which every village spans (with potential double counting of cells)
+              VILLAGE_N_CELLS = length(na.omit(unique(CELL_ID)))) %>% 
+    arrange(desc(VILLAGE_N_CELLS))
+  # total - i.e. number of cells with some JRC info (does not reflect number of villages, bc of double counting)
+  # where 1 cell can have info from several villages and several cells can have info from the same village 
+  # print(
+  #   paste0("# villages with double counting : ", sum(jrc_vlg_n_cells$VILLAGE_N_CELLS)
+  #   ))
+
+  print(
+    paste0("# cells with JRC info: ", 
+           candd_potential_all %>% 
+             filter(grepl("JRC_", PRO_ID)) %>% 
+             distinct(CELL_ID) %>% nrow()
+    ))
+  print(
+    paste0("# villages contained in 1 single cell: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS==1) %>% nrow()
+    ))
+  print(
+    paste0("# villages spanning over more than 1 cell: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS>1) %>% nrow()
+    ))
+  
+  # number of JRC villages that a single cell encompasses 
+  cell_n_jrc_vlg[[grid_pot_size_km]] = 
+    candd_potential_all %>% 
+    filter(grepl("JRC_", PRO_ID)) %>% 
+    group_by(CELL_ID) %>% 
+    mutate(CELL_N_JRC_VILLAGES = length(na.omit(unique(PRO_VILLAGE_NAME)))) %>% 
+    ungroup() %>% 
+    # the number of cells that encompass one or more villages, for each nb of village encompassed
+    summarise(.by = CELL_N_JRC_VILLAGES, 
+              N_CELLS = length(unique(CELL_ID))) %>% 
+    arrange(CELL_N_JRC_VILLAGES)
+  
+  # number of villages (also having the two kinds of double counting)... 
+  # print(
+  #   cell_n_jrc_vlg[[grid_pot_size_km]] %>% 
+  #     mutate(N_DIST_VILLAGES = CELL_N_JRC_VILLAGES * N_CELLS) %>% 
+  #     pull(N_DIST_VILLAGES) %>% sum()
+  # )
+  
+  print(
+    paste0("# wasted villages: ", 
+           cell_n_jrc_vlg[[grid_pot_size_km]] %>% 
+                 mutate(N_WASTED_VILLAGES = (CELL_N_JRC_VILLAGES-1) * N_CELLS) %>%
+                 pull(N_WASTED_VILLAGES) %>% sum()
+    ))
+  
+  print(" ")
+
+}
+cell_n_jrc_vlg
 
 
+
+# Flawed approach 
+cell_n_jrc_store_flawed = list()
+for(grid_pot_size_km in c(8, 9, 10)){ # 5, 6, 7, 
+  
+  candd_potential_all = 
+    readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_pot_size_km, "km.Rdata")))
+  
+  candd_potential_all = 
+    candd_potential_all %>% 
+    group_by(CELL_ID) %>% 
+    mutate(CELL_N_JRC_VILLAGES = case_when(
+      grepl("JRC_", PRO_ID) ~ length(na.omit(unique(PRO_VILLAGE_NAME))), 
+      TRUE ~ 0
+    )) %>% 
+    ungroup()
+  
+  cell_n_jrc_store_flawed[[grid_pot_size_km]] = 
+    candd_potential_all %>% 
+    summarise(.by = CELL_N_JRC_VILLAGES, 
+              N_CELLS = length(unique(CELL_ID))) 
+  
+  print(
+    cell_n_jrc_store_flawed[[grid_pot_size_km]] %>% 
+      filter(CELL_N_JRC_VILLAGES>0) %>%
+      mutate(N_DIST_VILLAGES = CELL_N_JRC_VILLAGES * N_CELLS) %>% 
+      pull(N_DIST_VILLAGES) %>% sum()
+  )
+}
+cell_n_jrc_store_flawed
+
+print(paste0("There are ", 
+             length(na.omit(unique(potential_all$PRO_VILLAGE_NAME))),
+             " different sampled villages in JRC and SC surveys"))
+
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID) %>% 
+  mutate(CELL_N_VILLAGES = length(na.omit(unique(PRO_VILLAGE_NAME)))) %>% 
+  ungroup()
+potential_all %>% 
+  summarise(.by = CELL_N_VILLAGES, 
+            N_CELLS = length(unique(CELL_ID))) 
+
+# For SC 
+print(paste0("Just in the SUSTAINCOCOA survey, there are ", 
+             length(na.omit(unique(filter(potential_all, grepl("SUSTAINCOCOA_", PRO_ID))$PRO_VILLAGE_NAME))), 
+             " different sampled villages."
+))
+
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID) %>% 
+  mutate(CELL_N_SUSTAINCOCOA_VILLAGES = case_when(
+    str_contains(PRO_ID, "SUSTAINCOCOA_") ~ length(na.omit(unique(PRO_VILLAGE_NAME))), 
+    TRUE ~ 0
+  )) %>% 
+  ungroup()
+
+potential_all %>% 
+  summarise(.by = CELL_N_SUSTAINCOCOA_VILLAGES, 
+            N_CELLS = length(unique(CELL_ID))) 
+
+
+
+print(paste0("Just in the JRC survey, there are ", 
+             length(na.omit(unique(filter(potential_all, grepl("JRC_", PRO_ID))$PRO_VILLAGE_NAME))), 
+             " different sampled villages."
+))
 
 
 

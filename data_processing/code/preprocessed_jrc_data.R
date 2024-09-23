@@ -148,7 +148,6 @@ for(VAR in names(section3a)){
 # terminology: 
 # buyer = the company that eventually buys cocoa (e.g. Cargill)
 # itm = the intermediary between the producer and the buyer
-
 # Rename PRODUCER variables.
 jrc = 
   jrc %>% 
@@ -159,7 +158,7 @@ jrc =
     s00q7__dst = District,
     s00q8__spf = s00q8,
     s00q9__vil = s00q9,
-    s00q10__zd = Village,
+    PRO_VILLAGE_NAME = Village,
     s00q11__hh_id = s00q11,
     s00q12__itw_latitude = s00q12__Latitude,
     s00q12__itw_longitude = s00q12__Longitude,
@@ -483,7 +482,7 @@ jrc =
   jrc %>% 
   mutate(
     PRODUCER_ID = interview__key
-    #PRODUCER_ID = paste0("ZD-",s00q10__zd,"_HH-",s00q11__hh_id)
+    #PRODUCER_ID = paste0("ZD-",PRO_VILLAGE_NAME,"_HH-",s00q11__hh_id)
   )
 
 jrc$PRODUCER_ID %>% unique() %>% na.omit() %>% length()
@@ -495,8 +494,8 @@ jrc =
   jrc %>% 
   distinct()
 
-jrc$s00q10__zd %>% unique() %>% length()
-is.na(jrc$s00q10__zd) %>% sum()
+jrc$PRO_VILLAGE_NAME %>% unique() %>% length()
+is.na(jrc$PRO_VILLAGE_NAME) %>% sum()
 
 # There is no producer id var in buyer roster, since it is at the buyer level. 
 # jrc_buyer_roster   = 
@@ -525,6 +524,19 @@ section3a =
   section3a %>% 
   distinct(PRODUCER_ID, JRC_BUYER_ID, .keep_all = TRUE)
 
+### Village ID ----------
+jrc$PRO_VILLAGE_NAME %>% unique()
+jrc$PRO_VILLAGE_NAME %>% is.na() %>% sum()
+jrc$s00q7__dst %>% unique()
+
+jrc = 
+  jrc %>% 
+  group_by(s00q7__dst, s00q8__spf, s00q9__vil, PRO_VILLAGE_NAME) %>% 
+  mutate(PRO_VILLAGE_ID = cur_group_id()) %>% 
+  ungroup()
+
+jrc$PRO_VILLAGE_ID %>% unique() %>% length()
+jrc$PRO_VILLAGE_NAME %>% unique() %>% length()
 
 ### Make booleans -------
 jrc = 
@@ -814,10 +826,6 @@ write_csv(jrc_coops_merge,
 # One represents the producer end (and coords), while the other represents the intermediary end (and coords).  
 # In other words, we just want to split the jrc object in two... 
 
-## Link variables ----------------
-
-### Distance producer-intermediary -------------
-
 ### Filter geo-located links
 # We need spatial info on both ends
 jrc_geo <- 
@@ -840,18 +848,136 @@ jrc_geo %>%
   unique %>% 
   length()
 
-
+## Farmer localization ------------
 jrc_geo$s00q12__itw_longitude %>% summary()
 jrc_geo$s00q12__itw_latitude %>% summary()
 jrc_geo$BUYER_LONGITUDE %>% summary()
 jrc_geo$BUYER_LATITUDE %>% summary()
 
-pro_sf <- 
+# The following plot shows that some farmers reportedly belonging to the same villages are 
+# actually located very far appart. 
+village_bbox = 
+  jrc_geo %>% 
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) %>% 
+  st_simplify(dTolerance = 0.001) %>%
+  summarise(
+    .by = PRO_VILLAGE_ID,
+    geometry = st_as_sfc(st_bbox(st_union(geometry)))
+  ) %>% 
+  mutate(VILLAGE_BBOX_AREA_HA = set_units(st_area(geometry), "ha", na.rm = T)) %>% 
+  arrange(desc(VILLAGE_BBOX_AREA_HA))
+
+# Their clearly are outliers 
+# ggplot() +
+#   geom_sf(data = departements, fill = "transparent") +
+#   geom_sf(data = village_bbox, aes(col = as.character(PRO_VILLAGE_ID)), fill = "transparent") 
+
+
+(vlg_size_outliers = boxplot.stats(village_bbox$VILLAGE_BBOX_AREA_HA, coef = 2)$out %>% sort())
+
+# This may be due to the village ID being badly coded, but this is unlikely, because defining it as a 
+# the ID of groups defined as being in the same departement-spf-village-village name.
+jrc_geo$PRO_VILLAGE_ID %>% unique() %>% length()
+# So 81 IS the right number of villages. 
+# However, the coordinates of some farmers in some villages are probably unrealistic. 
+
+# To spot them, compute the distance of every farmer's location to their village's centroid. 
+village_ctoid = 
+  jrc_geo %>% 
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) %>% 
+  st_simplify(dTolerance = 0.001) %>%
+  summarise(
+    .by = PRO_VILLAGE_NAME,
+    geometry = st_union(geometry)
+  ) %>%
+  st_centroid() %>% 
+  st_transform(4326)
+
+village_ctoid$VILLAGE_LONGITUDE = st_coordinates(village_ctoid)[,"X"]
+village_ctoid$VILLAGE_LATITUDE = st_coordinates(village_ctoid)[,"Y"]
+
+jrc_geo = 
+  jrc_geo %>% 
+  inner_join(village_ctoid %>% st_drop_geometry(), 
+             by = "PRO_VILLAGE_NAME", 
+             multiple = "all")
+
+jrc_geo_prosf = 
   jrc_geo %>% 
   st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
 
-itm_sf <- 
+jrc_geo_vlgsf = 
+  jrc_geo %>% 
+  st_as_sf(coords = c("VILLAGE_LONGITUDE", "VILLAGE_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
+
+# make the distance of every farmer, to it's village centroid 
+if(!all.equal(jrc_geo_prosf$interview__key, jrc_geo_vlgsf$interview__key)){
+  stop()
+}
+jrc_geo$FARM_VLG_DISTANCE_METERS <- 
+  st_distance(jrc_geo_prosf, jrc_geo_vlgsf, by_element = TRUE) 
+
+jrc_geo$FARM_VLG_DISTANCE_METERS %>% summary()
+(farm_vlg_dist_outliers = boxplot.stats(jrc_geo$FARM_VLG_DISTANCE_METERS, coef = 2)$out %>% sort())
+
+# We do not remove all outliers, because some still make sense (being 2-5km away from the village centroid). 
+# Set the threshold at 5km. It's a bit arbitrary, but not too consequential because few obs. at stake. 
+# and remember it's 5km from the centroid of other farms in ther same village, not from the actual center. 
+# - it means that distance to these farms in opposite direction is greater. 
+
+# We want to remove as many of these oddly coded coordinates, without removing whole villages
+# Setting the threshold at 5, 4, or 3km still leaves 77 villages. 
+# Setting it at 2439 (the smallest outlier) though, removes 4 more villages. 
+# We want to keep these villages which possibly represent a kind of villages more spread apart. 
+jrc_aparts = 
+  jrc_geo %>% 
+  mutate(FARM_VLG_DISTANCE_METERS = as.numeric(FARM_VLG_DISTANCE_METERS)) %>% 
+  filter(FARM_VLG_DISTANCE_METERS >= 3000)  
+
+jrc_geo = 
+  jrc_geo %>% 
+  mutate(FARM_VLG_DISTANCE_METERS = as.numeric(FARM_VLG_DISTANCE_METERS)) %>% 
+  filter(FARM_VLG_DISTANCE_METERS < 3000)  
+
+# Of the 81 villages in total, 4 seem to have a problem in farm coordinates for all surveyd farmers.  
+jrc_geo %>% 
+  pull(PRO_VILLAGE_ID) %>% unique() %>% length()
+
+rm(jrc_geo_vlgsf, jrc_geo_prosf)
+
+# REDO the distribution of village areas, with outliers removed
+village_bbox_2 = 
+  jrc_geo %>% 
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) %>% 
+  st_simplify(dTolerance = 0.001) %>%
+  summarise(
+    .by = PRO_VILLAGE_ID,
+    geometry = st_as_sfc(st_bbox(st_union(geometry)))
+  ) %>% 
+  mutate(VILLAGE_BBOX_AREA_HA = set_units(st_area(geometry), "km2", na.rm = T)) %>% 
+  arrange(desc(VILLAGE_BBOX_AREA_HA))
+
+# Note the distribution of village bounding boxes
+village_bbox_2$VILLAGE_BBOX_AREA_HA %>% summary()
+village_bbox_2$VILLAGE_BBOX_AREA_HA %>% quantile(probs = seq(.7, 1, by = .05))
+village_bbox_2$VILLAGE_BBOX_AREA_HA %>% quantile(probs = seq(.95, 1, by = .01))
+
+rm(village_bbox_2)
+
+## Link variables ----------------
+
+### Distance producer-intermediary -------------
+jrc_geo_prosf = # redo it since we have removed rows to jrc_geo
+  jrc_geo %>% 
+  st_as_sf(coords = c("s00q12__itw_longitude", "s00q12__itw_latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
+
+jrc_geo_itmsf <- 
   jrc_geo %>% 
   st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
   st_transform(civ_crs) 
@@ -859,24 +985,28 @@ itm_sf <-
 # dept4326 <- st_transform(departements, crs = 4326)
 
 # ggplot() +
-#   geom_sf(data = pro_sf, aes(col = "black")) + 
-#   geom_sf(data = itm_sf, aes(col = "red")) +
+#   geom_sf(data = jrc_geo_prosf, aes(col = "black")) + 
+#   geom_sf(data = jrc_geo_itmsf, aes(col = "red")) +
 #   geom_sf(data = dept4326, fill = "transparent") 
 
-if(!all.equal(pro_sf$interview__key, itm_sf$interview__key)){
+if(!all.equal(jrc_geo_prosf$interview__key, jrc_geo_itmsf$interview__key)){
   stop()
 }
 
 # Since the filtering is the same (on the availability of coordinates for both ends), both subsets have the same rows      
 jrc_geo$LINK_DISTANCE_METERS <- 
-  st_distance(pro_sf, itm_sf, by_element = TRUE)
-
-jrc_geo$LINK_DISTANCE_METERS %>% summary()
+  st_distance(jrc_geo_prosf, jrc_geo_itmsf, by_element = TRUE)
 
 # ggplot(jrc_geo, aes(x=LINK_DISTANCE_METERS)) + 
 #   geom_histogram() +
 #   theme(axis.title.y = element_blank()) + 
 #   labs(x = "Producer-intermediary distance") 
+
+# Here, we do not remove these outliers, because they include very small distances, 
+# and because, unlike with the sustaincocoa data, we do not need to do it as a step to get to clean matches with IC2B. 
+jrc_geo$LINK_DISTANCE_METERS %>% summary()
+(dist_outliers = boxplot.stats(jrc_geo$LINK_DISTANCE_METERS, coef = 2)$out %>% sort())
+
 
 
 ### Volumes ------------
@@ -941,6 +1071,8 @@ coopbs =
 if(anyNA(jrc_geo_coops$JRC_BUYER_ID)){stop("the merge will match all non-JRC coops in IC2B")}
 if(nrow(coopbs) != length(unique(coopbs$COOP_BS_ID))){stop("there's a pb in coopbs")}
 
+### Match with IC2B -------
+
 jrc_geo_coops =
   jrc_geo_coops %>% 
   left_join(coopbs %>% select(JRC_BUYER_IDS, COOP_BS_ID), 
@@ -955,13 +1087,65 @@ if(
 ### Merge back ---------- 
 
 # add this information back to all jrc geo links
+nrchecks = nrow(jrc_geo)
 jrc_geo = 
   jrc_geo %>% 
   left_join(
-    jrc_geo_coops %>% select("PRODUCER_ID", "COOP_BS_ID", "JRC_BUYER_ID"), 
+    jrc_geo_coops %>% select("PRODUCER_ID", "COOP_BS_ID"), 
     by = "PRODUCER_ID"
   )
+stopifnot(nrow(jrc_geo) == nrchecks)
 
+
+# Checks -------------
+# Distribution of volumes between coops and other buyers, across the survey
+
+jrc_geo$LINK_VOLUME_KG %>% summary()
+jrc_geo %>% 
+  select(LINK_VOLUME_KG, BUYER_IS_COOP) %>% 
+  split(.$BUYER_IS_COOP) %>% map(summary)
+
+jrc_coop_vol_tonne = 
+  round(sum(filter(jrc_geo, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+jrc_other_vol_tonne = 
+  round(sum(filter(jrc_geo, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+
+(jrc_coop_vol_tonne / (jrc_coop_vol_tonne + jrc_other_vol_tonne))
+
+# And aggregating first by village 
+vlg_vols =
+  jrc_geo %>%
+  summarise(.by = "PRO_VILLAGE_NAME",
+            # This is the sum of the volumes of all actual links from a village. 
+            VLG_VOLUME_KG = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG, na.rm = TRUE)),
+            
+            # Now make the sum of the volumes to coops and to others specifically. 
+            # so multiplying by BUYER_IS_COOP makes 0 for actual links with other buyers than coops
+            VLG_VOLUME_KG_COOPS  = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG*BUYER_IS_COOP, na.rm = TRUE)), 
+            VLG_VOLUME_KG_OTHERS = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG*!BUYER_IS_COOP, na.rm = TRUE)) 
+  ) %>% 
+  mutate(
+    VLG_PROP_VOLUME_COOPS = case_when(
+      VLG_VOLUME_KG != 0 & !is.na(VLG_VOLUME_KG) ~ VLG_VOLUME_KG_COOPS / VLG_VOLUME_KG, 
+      TRUE ~ NA), 
+    VLG_PROP_VOLUME_OTHERS = case_when(
+      VLG_VOLUME_KG != 0 & !is.na(VLG_VOLUME_KG) ~ VLG_VOLUME_KG_OTHERS / VLG_VOLUME_KG, 
+      TRUE ~ NA)
+  )
+# it is very similar
+vlg_vols$VLG_PROP_VOLUME_COOPS %>% summary()
+
+paste0("There are ", 
+       nrow(jrc_geo), " farmer-buyer links, between ",
+       length(unique(jrc_geo$PRODUCER_ID)), " farmers located in ",
+       length(unique(jrc_geo$PRO_VILLAGE_NAME)), " villages and ",
+       length(unique(jrc_geo$JRC_BUYER_ID)), " buyers. ",
+       nrow(filter(jrc_geo, BUYER_IS_COOP)), " links are with cooperatives, ", 
+       nrow(filter(jrc_geo, !is.na(COOP_BS_ID))), " of which are links with IC2B, and ", 
+       nrow(filter(jrc_geo, !BUYER_IS_COOP)), " are links with another kind of buyers. ",
+       "Looking at the ", nrow(filter(jrc_geo, !is.na(LINK_VOLUME_KG))), " links with clean volume information, ",
+       "these farmers sell ", jrc_coop_vol_tonne, " tonnes to coops and ", jrc_other_vol_tonne, " tonnes to other buyers."
+)
 
 ## Export --------------------
 
@@ -981,10 +1165,12 @@ toexport =
          BUYER_IS_COOP, 
          LINK_ACTUALONLY_DISTANCE_METERS = LINK_DISTANCE_METERS, # actual only because distance is computed for all potential links in prepared_main_dataset.R 
          LINK_VOLUME_KG,
-         # PRO_VILLAGE_NAME = s00q10__zd,
+         PRO_VILLAGE_NAME,
          # PRO_DEPARTMENT_NAME = s00q7__dst,
          BUYER_LONGITUDE, # called BUYER_L although it's not only coop's buying stations. 
          BUYER_LATITUDE,
+         # VILLAGE_LONGITUDE,
+         # VILLAGE_LATITUDE,
          PRO_LONGITUDE = s00q12__itw_longitude, 
          PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
 

@@ -250,6 +250,15 @@ carg_pt_closestbs =
 
 stopifnot(carg_pt_closestbs$LINK_ID %>% unique() %>% length() == nrow(carg_pt_closestbs))
 
+# Checks ----------
+paste0("There are ", 
+       nrow(carg_pt_closestbs), " farmer-coop links, between ",
+       length(unique(carg_pt_closestbs$FARMER_COD)), " farmers, located in ",
+       length(unique(carg_pt_closestbs$LVL_4_CODE)), " departments, and ",
+       length(unique(carg_pt_closestbs$COOP_BS_ID)), " buying stations of ",
+       length(unique(carg_pt_closestbs$SIMPLIF_COOPERATIV)), " cooperatives."
+)
+
 # Export ----
 carg %>% 
   filter(grepl("DATE:2020", LOCATION_N)) %>% 
@@ -263,7 +272,8 @@ toexport =
          PRO_ID = paste0("CARGILL_FARMER_",FARMER_COD),
          LINK_ID_ONLYACTUAL = paste0("CARGILL_FARMER_",LINK_ID), 
          BUYER_IS_COOP = TRUE, 
-         LINK_VOLUME_KG = NA) %>% 
+         LINK_VOLUME_KG = NA,
+         PRO_VILLAGE_NAME = NA) %>% 
   select(LINK_YEAR, PRO_ID, COOP_BS_ID,  
          LINK_ID_ONLYACTUAL,
          BUYER_IS_COOP,

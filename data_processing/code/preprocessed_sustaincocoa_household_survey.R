@@ -311,7 +311,7 @@ coopbs_tomatch =
   arrange(SIMPLIF_ABRVNAME)
 
 
-## Join coop survey with IC2B -------
+## Join with IC2B -------
 
 #  To give IC2B attributes (at bs-level) to survey coop data 
 hhs_links_all_dups = 
@@ -710,7 +710,7 @@ toexport =
          BUYER_LONGITUDE, BUYER_LATITUDE,
          LINK_ACTUALONLY_DISTANCE_METERS = LINK_DISTANCE_METERS, # actual only because distance is computed for all potential links in prepared_main_dataset.R 
          LINK_VOLUME_KG,
-         # PRO_VILLAGE_NAME,
+         PRO_VILLAGE_NAME,
          # PRO_DEPARTMENT_GEOCODE, 
          # PRO_DEPARTMENT_NAME,
          PRO_LONGITUDE, PRO_LATITUDE)
