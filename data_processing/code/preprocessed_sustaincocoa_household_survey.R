@@ -33,6 +33,8 @@ hhs_byb = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "cocoa_sal
 hhs_morevars = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "respondent_CE_interview_details_270224.csv"))  %>% 
   rename(HH_SURVEY_ID = SID) 
 
+hhs_beyondb = read.csv(here("input_data", "sustain_cocoa", "surveys_civ", "cleaned_codes&PES.csv"))  %>% 
+  rename(HH_SURVEY_ID = SID) 
 
 choices = read_xlsx(here("input_data", "sustain_cocoa", "surveys_civ", "ref_survey_041223.xlsx"), 
                     sheet = "choices", 
@@ -66,6 +68,25 @@ departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
 
 departements = 
   st_transform(departements, crs = civ_crs)
+
+# Add BB status ------------
+# In every village, 8 farmers are sampled to be survey for they are beyond bean suppliers, and thus coop members. 
+# This is not random sampling, so we want to able to flag and remove these HHs. 
+
+# As confirmed by Federico, intd_interview_bb =="" means the HH "was not a bb supplier". 
+# And var programme apparently not useful here. 
+hhs_beyondb %>% filter(intd_interview_bb =="" & programme != "") %>% nrow()
+hhs = 
+  hhs %>% 
+  left_join(
+    hhs_beyondb %>% 
+      mutate(HH_IS_BB_SUPPLIER = intd_interview_bb != "") %>% 
+      select(HH_SURVEY_ID, HH_IS_BB_SUPPLIER), 
+    by = "HH_SURVEY_ID"
+  ) %>% 
+  # a few are not matched, count them as not supplying BB
+  mutate(HH_IS_BB_SUPPLIER = if_else(is.na(HH_IS_BB_SUPPLIER), FALSE, HH_IS_BB_SUPPLIER))
+
 
 
 # PREPARE VOLUMES ------------
@@ -121,6 +142,8 @@ hhs =
     by = "HH_SURVEY_ID"
   )
 
+
+
 # JOIN WITH IC2B -----
 
 # Join with HOUSEHOLD-level survey
@@ -151,7 +174,7 @@ glimpse(hhs)
 hhs_links = 
   hhs %>% 
   # remove unnecessary vars for now, incl. buyer_cocoa_name which is empty
-  select(HH_SURVEY_ID, starts_with("buyer_cocoa_name_")) %>% 
+  select(HH_SURVEY_ID, HH_IS_BB_SUPPLIER, starts_with("buyer_cocoa_name_")) %>% 
   # When the name is "other", give the value reported in the corresponding column
   mutate(
     BUYER_NAME_1 = case_when(
@@ -269,9 +292,9 @@ hhs_links =
   # and remove now useless variables 
   select(!starts_with("buyer_cocoa_name") & !c("COOP_ABRV_NAME"))
 
-hhs_links %>%
-  group_by(HH_SURVEY_ID, BUYER_SIMPLIF_NAME) %>%
-  filter(n() > 1) %>% View()
+# hhs_links %>%
+#   group_by(HH_SURVEY_ID, BUYER_SIMPLIF_NAME) %>%
+#   filter(n() > 1) %>% View()
 
 # hhs_links %>% 
 #   filter(grepl("PISTEUR", BUYER_SIMPLIF_NAME)) %>% View()
@@ -645,6 +668,9 @@ hhs_links_all %>%
 
 
 # Checks -------------
+
+## Including BB suppliers ----------
+
 # Distribution of volumes between coops and other buyers, across the survey
  
 hhs_links_all$LINK_VOLUME_KG %>% summary()
@@ -694,12 +720,59 @@ paste0("There are ",
        "these households sell ", sc_coop_vol_tonne, " tonnes to coops and ", sc_other_vol_tonne, " tonnes to other buyers."
 )
 
+## Excluding BB suppliers --------
+hhs_links_notbb = 
+  hhs_links_all %>% 
+  filter(!HH_IS_BB_SUPPLIER)
+
+sc_coop_vol_tonne = 
+  round(sum(filter(hhs_links_notbb, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+sc_other_vol_tonne = 
+  round(sum(filter(hhs_links_notbb, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+
+(sc_coop_vol_tonne / (sc_coop_vol_tonne + sc_other_vol_tonne))
+
+# And aggregating first by village 
+vlg_vols =
+  hhs_links_notbb %>%
+  summarise(.by = "PRO_VILLAGE_NAME",
+            # This is the sum of the volumes of all actual links from a village. 
+            VLG_VOLUME_KG = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG, na.rm = TRUE)),
+            
+            # Now make the sum of the volumes to coops and to others specifically. 
+            # so multiplying by BUYER_IS_COOP makes 0 for actual links with other buyers than coops
+            VLG_VOLUME_KG_COOPS  = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG*BUYER_IS_COOP, na.rm = TRUE)), 
+            VLG_VOLUME_KG_OTHERS = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG*!BUYER_IS_COOP, na.rm = TRUE)) 
+  ) %>% 
+  mutate(
+    VLG_PROP_VOLUME_COOPS = case_when(
+      VLG_VOLUME_KG != 0 & !is.na(VLG_VOLUME_KG) ~ VLG_VOLUME_KG_COOPS / VLG_VOLUME_KG, 
+      TRUE ~ NA), 
+    VLG_PROP_VOLUME_OTHERS = case_when(
+      VLG_VOLUME_KG != 0 & !is.na(VLG_VOLUME_KG) ~ VLG_VOLUME_KG_OTHERS / VLG_VOLUME_KG, 
+      TRUE ~ NA)
+  )
+# it is very similar
+vlg_vols$VLG_PROP_VOLUME_COOPS %>% summary()
+
+paste0("There are ", 
+       nrow(hhs_links_notbb), " HH-buyer links, between ",
+       length(unique(hhs_links_notbb$HH_SURVEY_ID)), " households located in ",
+       length(unique(hhs_links_notbb$PRO_VILLAGE_NAME)), " villages and ",
+       length(unique(hhs_links_notbb$BUYER_SIMPLIF_NAME)), " buyers. ",
+       nrow(filter(hhs_links_notbb, BUYER_IS_COOP)), " links are with cooperatives, ", 
+       nrow(filter(hhs_links_notbb, !is.na(COOP_BS_ID))), " of which are links with IC2B, and ", 
+       nrow(filter(hhs_links_notbb, !BUYER_IS_COOP)), " are links with another kind of buyers. ",
+       "Looking at the ", nrow(filter(hhs_links_notbb, !is.na(LINK_VOLUME_KG))), " links with clean volume information, ",
+       "these households sell ", sc_coop_vol_tonne, " tonnes to coops and ", sc_other_vol_tonne, " tonnes to other buyers."
+)
+
 # Export ----
 
 ## For supply shed model ---------
 # Standardize for supply shed model 
 toexport = 
-  hhs_links_all %>% 
+  hhs_links_notbb %>% 
   mutate(LINK_YEAR = 2022, 
          DATA_SOURCE = "SUSTAINCOCOA",
          PRO_ID = paste0("SUSTAINCOCOA_HH_",HH_SURVEY_ID),

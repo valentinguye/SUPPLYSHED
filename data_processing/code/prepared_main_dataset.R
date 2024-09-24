@@ -32,7 +32,7 @@ dir.create(here("temp_data", "prepared_main_dataset"))
 civ_crs <- 32630
 
 # Set this to 30000 to run a toy model, for tests etc.
-grid_size_m = 7000
+grid_size_m = 3000
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
@@ -923,7 +923,17 @@ if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")
 
 ## Link-level variables ----------------
 
-### Compute distances -------------
+### Link  ID ------------------
+# Make a full link id for convenience
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_ACTUAL_COOP_BS_ID, LINK_POTENTIAL_COOP_BS_ID) %>% 
+  mutate(LINK_POTENTIAL_ID = cur_group_id()) %>% 
+  ungroup()
+stopifnot(nrow(potential_all) == length(unique(potential_all$LINK_POTENTIAL_ID)))
+
+
+### Distances -------------
 # Between every buyer location and either the producer location when available, or the cell centroid otherwise.
 
 # Prepare the two kinds:
@@ -1013,7 +1023,7 @@ stopifnot(
     pull(DIFF_DIST_TO_CELL_VS_FARM) %>% round(1) %>% na.omit() %>% unique() == 0
 )
 
-### Add travel time -------------
+### Travel time -------------
 only_potential_coords = 
   only_potential_propt %>% 
   select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
@@ -1026,7 +1036,131 @@ only_potential_coords =
 rm(only_potential_propt, only_potential_coords)
 
 
-## EXPORT -------
+# SUB-SAMPLING ----------
+set.seed(8888)
+## SC coop links ------------------------
+
+# As checked below if run without sub-sampling, and in SC pre-processing script, 
+# the cell's share of cooperative outlet is over-represented in the data. 
+# This is due to sampling biases towards farmers linked with cooperatives in SC data. 
+# These sampling biases can be at village and at household levels. 
+# We correct by sub-sampling at household link level. 
+
+# So concretely, we want to remove some actual links between SC farmers and coops. 
+
+sc_coop_links = 
+  potential_all %>% 
+  filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP) %>% 
+  pull(LINK_POTENTIAL_ID) 
+
+sc_coop_share = 
+  sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) /
+  (sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) +
+     sum(filter(sc_links, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) ) 
+
+sc_coop_share_inrows = 
+  nrow(filter(sc_links, BUYER_IS_COOP)) / nrow(sc_links) 
+
+seipcs_direct_share = 0.45
+# this ratio is equal to 1 if coop sourcing = 50%
+target_coop_to_other_ratio = seipcs_direct_share / (1-seipcs_direct_share) # based on SEI-PCS v1.0 (2019) which equates direct sourcing (45%) to coop sourcing.  
+# but we use the share directly
+target_share = seipcs_direct_share
+
+# The sub-sample share is the share of obs. in a category we want to sample - i.e. to *KEEP* - to have a more balanced sample.  
+# Here: the pct of sc-coop links  
+# the lower the 'true' (target) coop sourcing share relative to the share in SC, the lower the sub-sample share, 
+# i.e. the fewer sc-coop links we want to sample.   
+(subsample_share = (target_share / sc_coop_share_inrows) * ((1 - sc_coop_share_inrows) / (1 - target_share)))
+# Derived from Equation: SHARE_ss * N_sc / T'_sc = SHARE_target 
+# where N_sc is the # of sc-coop links;
+# T_sc and T'_sc are the total # of sc links resp. before and after sub-sampling; 
+# with T'_sc = T_sc - N_sc(1-S_ss) (the correction implies the factor in the 2nd parenthesis)
+# and N_sc / T_sc = SHARE_sc = sc_coop_share_inrows
+# so the Equation means: 
+# apply the sub-sample share S_ss to N_sc, such that, reported to the total after sub-sampling, we obtain the target share. 
+
+sc_coop_links_tokeep = sample(sc_coop_links, size = round(subsample_share*length(sc_coop_links)))
+length(sc_coop_links_tokeep)
+
+# We can just FLAG, and not remove them, because sc-coop links are not going to cause 
+# target imbalance in 2nd stage and they make valuable information, so we want to keep them. 
+# US_SC = UnderSample SustainCocoa 
+potential_all = 
+  potential_all %>% 
+  # be a link outside the category of interest, or in the list of links under-sampled. 
+  mutate(LINK_TO_KEEP_TO_US_SC = (!LINK_POTENTIAL_ID %in% sc_coop_links) | 
+                                   LINK_POTENTIAL_ID %in% sc_coop_links_tokeep)
+
+stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_SC)) + round((1-subsample_share)*length(sc_coop_links)))
+
+rm(subsample_share, sc_coop_links, sc_coop_links_tokeep, 
+   target_share, seipcs_direct_share, target_coop_to_other_ratio, 
+   sc_coop_share_inrows, sc_coop_share)
+
+
+
+
+## Virtual links ------------------
+# Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
+# "the number of pairs that do not have a link to the number of pairs that do have a link."
+# but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives. 
+N_cells = potential_all$CELL_ID %>% unique() %>% length()
+M_coops = coopbs$COOP_BS_ID %>% unique() %>% length()
+E_links = potential_all %>% filter(LINK_IS_ACTUAL_COOP) %>% distinct(CELL_ID) %>% nrow() 
+
+(initial_imbalance = (N_cells*M_coops - E_links)/E_links)
+
+# we can also compute the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links). 
+# i.e. the ratio of virtual to actual links
+N_actual = potential_all %>% filter(LINK_IS_ACTUAL) %>% nrow()
+N_virtual = potential_all %>% filter(LINK_IS_VIRTUAL) %>% nrow()
+(current_imbalance = N_virtual / N_actual)
+    
+# Compute it as a share 
+(current_virtual_share = N_virtual / (N_actual + N_virtual))
+# note it can be computed as 
+current_imbalance/(current_imbalance + 1)
+# and 
+(current_actual_share = N_actual / (N_actual + N_virtual))
+# (or)
+1/(current_imbalance + 1)
+
+# Now, there are two possible targets: 
+# - 1 the target of perfect balance 
+target_no_imbalance_share = .5
+
+# - 2 the target of a 4 times lower imbalance, as in Mungo et al. 2023 who choose an sub-sampling ratio 4 times lower than the data imbalance 
+target_mungo_imbalance = current_imbalance/4
+target_mungo_share = 1 / (target_mungo_imbalance + 1)
+
+TARGET_SHARE_TO_USE = target_mungo_share
+
+# Apply the sub-sample share formula (see sc coop link sub-sampling above  for explanations)  
+subsample_share = (TARGET_SHARE_TO_USE / current_virtual_share) * ((1 - current_virtual_share) / (1 - TARGET_SHARE_TO_USE))
+
+# 
+virtual_links = 
+  potential_all %>% 
+  filter(LINK_IS_VIRTUAL) %>% 
+  pull(LINK_POTENTIAL_ID) 
+
+virtual_links_tokeep = sample(virtual_links, size = round(subsample_share*length(virtual_links)))
+length(virtual_links_tokeep)
+
+# US_SC = UnderSample SustainCocoa 
+potential_all = 
+  potential_all %>% 
+  # be a link outside the category of interest, or in the list of links under-sampled. 
+  mutate(LINK_TO_KEEP_TO_US_VIRTUAL = (!LINK_POTENTIAL_ID %in% virtual_links) | 
+                                        LINK_POTENTIAL_ID %in% virtual_links_tokeep)
+
+stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_VIRTUAL)) + 
+            round((1-subsample_share)*length(virtual_links)))
+
+
+
+# EXPORT -------
 # Export here the data for the second stage, to then work from a lighter object
 potential_all = 
   potential_all %>% 
@@ -1047,21 +1181,11 @@ rm(potential_all_save, potential)
 # 1ST STAGE DATA --------------
 potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
 
-## Under-sampling coop links ----------
-
-# As checked below if run without undersampling, and in SC preprocessing script, 
-# the cell's share of cooperative outlet is over-represented in the data. 
-# This is due to sampling biases towards farmers linked with cooperatives in SC data. 
-# These sampling biases can be at village and at household levels. 
-# We correct by under-sampling at household link level. 
-
-# So concretely, we want to FLAG some actual links between SC farmers and coops, to remove them when appropriate. 
-
-links_to_draw_in = 
+## Apply sub-sampling -------------
+# We apply only 1st stage sub-sampling. 
+potential_all_ss = 
   potential_all %>% 
-  filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP) %>% 
-  (LINK_ID_COOPS) %>% unique()
-
+  filter(LINK_TO_KEEP_TO_US_SC)
 
 # Prepare 
 # there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.

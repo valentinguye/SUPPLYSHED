@@ -176,9 +176,7 @@ training =
 
 test =
   train_test %>%
-  filter(!ROWNUM %in% training$ROWNUM) %>%
-  unnest(cols = c(data))
-main <- main %>% unnest(cols = c(data))
+  filter(!ROWNUM %in% training$ROWNUM) 
 
 ```
 
