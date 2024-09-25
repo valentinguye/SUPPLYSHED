@@ -46,8 +46,9 @@ coopbsy <-
   read.csv(
     file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
 
+# Spatial processing ---------
 
-# Farm centroids -------
+# make farm centroids 
 carg_pt =
   carg %>% 
   # Remove the few farms in Yamoussoukro which otherwise get matched to Socaan which is several departments away
@@ -58,26 +59,6 @@ carg_pt =
 # carg_pt %>%
 #   filter(LVL_4_NAME%in%c("YAMOUSSOUKRO", "AGNIBILEKRO")) %>%
 #   pull(FID)
-
-# Descriptive stats on farm bbox
-sf_use_s2(TRUE)
-carg_farm = 
-  carg_pt %>% 
-  # here it is projected so we can give it in meters. in lon/lat, this needs to be expressed in decimal degree and 1 decimal degree = 111.1 km at equator, so 0.0001 is good. 
-  st_simplify(dTolerance = 0.001) %>%
-  summarise(
-    .by = FARMER_COD,
-    geometry = st_union(geometry)
-  )
-carg_farm %>% filter(st_is_empty(geometry))
-
-carg_bbx = 
-  carg_farm %>% 
-  rowwise() %>% 
-  mutate(FARM_BBOX_HA = set_units(st_area(st_as_sfc(st_bbox(geometry))), "ha", na.rm = T))
-
-carg_bbx$FARM_BBOX_HA %>% summary()
-quantile(carg_bbx$FARM_BBOX_HA, 0.95)
 
 carg_pt$geometry
 sf_use_s2(TRUE)
@@ -249,6 +230,49 @@ carg_pt_closestbs =
   ungroup()
 
 stopifnot(carg_pt_closestbs$LINK_ID %>% unique() %>% length() == nrow(carg_pt_closestbs))
+
+
+# Spatial descriptives ----------
+
+# Descriptive stats on farm bbox
+sf_use_s2(TRUE)
+carg_farm = 
+  carg %>% 
+  # Remove the few farms in Yamoussoukro which otherwise get matched to Socaan which is several departments away
+  # (do it before centroids grouped by farmers)
+  filter(!FID%in%c(1156, 1176, 1181, 3076, 5053, 1173, 1160)) %>% 
+  filter(!st_is_empty(geometry)) %>% 
+  # here it is projected so we can give it in meters. in lon/lat, this needs to be expressed in decimal degree and 1 decimal degree = 111.1 km at equator, so 0.0001 is good. 
+  st_simplify(dTolerance = 0.001) %>%
+  summarise(
+    .by = FARMER_COD,
+    geometry = st_union(geometry)
+  )
+carg_farm %>% filter(st_is_empty(geometry))
+
+carg_farm = 
+  carg_farm %>% 
+  rowwise() %>% 
+  mutate(FARM_BBOX_KM2 = set_units(st_area(st_as_sfc(st_bbox(geometry))), "km2", na.rm = T)) %>% 
+  ungroup()
+
+# So 95% of the farms would hold within a 0.5x0.5km cell. 97% within a 1km2 cell. 
+carg_farm$FARM_BBOX_KM2 %>% summary()
+carg_farm$FARM_BBOX_KM2 %>% quantile(probs = seq(0, 1, by = .1))
+carg_farm$FARM_BBOX_KM2 %>% quantile(probs = seq(.95, 1, by = .01))
+
+carg_farm = 
+  carg_farm %>% 
+  mutate(`Farm size` = set_units(st_area(geometry), "ha"))
+
+carg_farm$`Farm size` %>% summary()
+carg_farm$`Farm size` %>% quantile(probs = seq(0, 1, by = .1))
+carg_farm$`Farm size` %>% quantile(probs = seq(.95, 1, by = .01))
+
+ggplot(carg_farm) + 
+  geom_histogram(aes(x = `Farm size`), binwidth=0.5,
+                 color="black", fill="lightgrey") + 
+  theme_minimal()
 
 # Checks ----------
 paste0("There are ", 

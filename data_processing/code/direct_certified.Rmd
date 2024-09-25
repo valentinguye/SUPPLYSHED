@@ -66,7 +66,7 @@ coopbsy <-
 
 
 # output summarized **AND POST TRASE FORMATTING*
-outsum22 <- read_delim(file = here("temp_data/SEIPCS_adapted_to_IC2B_V2/SEI_PCS_COTE_DIVOIRE_COCOA_2022.csv"), 
+outsum22_adapted <- read_delim(file = here("temp_data/SEIPCS_adapted_to_IC2B_V2/SEI_PCS_COTE_DIVOIRE_COCOA_2022.csv"), 
                        delim = ",",
                        col_types = cols(HS6 = col_character(),
                                         PRODUCT_B_CODE = col_character()))
@@ -80,7 +80,11 @@ out22 <-
   filter(! GEOCODE == "UNKNOWN") %>%
   select(-GEOCODE_COCOA)
 
+```
 
+# CERTIFIED VOLUMES IN TRASE DIRECT SOURCING 
+
+```{r}
 # ADDING USEFUL VARIABLES --------------------
 link = 
   link %>% 
@@ -144,8 +148,8 @@ out22 <-
          # this has NAs however
          CERTIFIED_OR_SSI = CERTIFICATIONS != "")
 
-outsum22 <- 
-  outsum22 %>% 
+outsum22_adapted <- 
+  outsum22_adapted %>% 
   mutate(IS_EXPCOOP = grepl(pattern = "[(]COOPERATIVE[)]", EXPORTER_GROUP_CLEAN),
          IS_INDIRECT = (LVL4_NAME_PROD == "INDIRECT SOURCING"),
          IS_UNKNOWN  = (LVL4_NAME_PROD == "UNKNOWN"),
@@ -185,7 +189,7 @@ outsum22 <-
 
 
 flow_sum_22 <- 
-  outsum22 %>% 
+  outsum22_adapted %>% 
     summarise(.by = YEAR, 
               VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT) / 1e6,
               CIF_MILLION_USD = sum(CIF_USD) / 1e6, 
@@ -208,11 +212,8 @@ flow_sum_22 <-
               PCT_EU = 100 * VOLUME_BEQ_EU_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES 
 
 )
-
 ```
 
-
-# CERTIFIED VOLUMES IN TRASE DIRECT SOURCING 
 
 ## Breaking down by destination
 ```{r}
@@ -804,9 +805,120 @@ ggplot(data = combinations_cert_ssi,
 
 ```
 
+
+# Sourcing breakdown to EU (for Nitidae)
 ```{r}
-# Most frequent combinations
+# output summarized **AND POST TRASE FORMATTING**
+outsum20 <- 
+  s3read_using(
+    object = "cote_divoire/cocoa/sei_pcs/v1.1.0/SEI_PCS_COTE_DIVOIRE_COCOA_2020.csv",
+    FUN = read_delim,
+    delim = ";",
+    bucket = "trase-storage",
+    col_types = cols(HS6 = col_character(),
+                     PRODUCT_B_CODE = col_character()),
+    opts = c("check_region" = T)
+  )
+
+outsum21 <- 
+  s3read_using(
+    object = "cote_divoire/cocoa/sei_pcs/v1.1.0/SEI_PCS_COTE_DIVOIRE_COCOA_2021.csv",
+    FUN = read_delim,
+    delim = ";",
+    bucket = "trase-storage",
+    col_types = cols(HS6 = col_character(),
+                     PRODUCT_B_CODE = col_character()),
+    opts = c("check_region" = T)
+  )
+
+outsum22 <- 
+  s3read_using(
+    object = "cote_divoire/cocoa/sei_pcs/v1.1.0/SEI_PCS_COTE_DIVOIRE_COCOA_2022.csv",
+    FUN = read_delim,
+    delim = ";",
+    bucket = "trase-storage",
+    col_types = cols(HS6 = col_character(),
+                     PRODUCT_B_CODE = col_character()),
+    opts = c("check_region" = T)
+  )
+
+# 2019 results, from v1.0.0 model, need some more formatting to match exactly results from v1.1.0 model
+outsum19 <- 
+  s3read_using(
+    object = "cote_divoire/cocoa/sei_pcs/v1.0.0/2021-11-24-SEI-PCS_CI_COCOA_2019_V1.0.0.csv",
+    FUN = read_delim,
+    delim = ";",
+    bucket = "trase-storage",
+    col_types = cols(HS6 = col_character(),
+                     PRODUCT_B_CODE = col_character()),
+    opts = c("check_region" = T)
+  ) %>% 
+  rename(EXPORTER_GROUP_CLEAN = EXPORTER_CLEAN, 
+         EXPORTER_CLEAN = EXPORTER,
+         CIF_USD = FOB, 
+         LVL4_TRASE_ID_PROD = LVL4_GEOCODE_PROD, 
+         LVL4_TRASE_ID_LH = LVL4_GEOCODE_LH) %>% 
+  mutate(EXPORTER = NA_character_) %>% 
+  select(names(outsum20))
+
+
 
 ```
 
+
+## Export 
+```{r}
+
+outsum_panel <- 
+  rbind(
+    outsum19,
+    outsum20, 
+    outsum21, 
+    outsum22
+  )
+
+# Other useful variables
+outsum_panel <- 
+  outsum_panel %>% 
+  mutate(IS_INDIRECT = (LVL4_NAME_PROD == "INDIRECT SOURCING"),
+         IS_UNKNOWN  = (LVL4_NAME_PROD == "UNKNOWN"),
+         IS_DIRECT = !IS_INDIRECT & !IS_UNKNOWN, 
+         IS_UNTRACED = !IS_DIRECT,
+         IS_DEST_EU = fn_is_in_eu(COUNTRY_OF_DESTINATION), 
+         IS_BEANS = (PRODUCT == "COCOA BEANS"),
+         IS_PASTE = (PRODUCT == "COCOA PASTE"),
+         IS_BUTTER = (PRODUCT == "COCOA BUTTER"),
+         IS_POWDER = (PRODUCT == "COCOA POWDER"))
+
+eu_flow_sum_panel <- 
+  outsum_panel %>% 
+  filter(IS_DEST_EU) %>% 
+    summarise(.by = YEAR, 
+              VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT) / 1e6,
+              CIF_MILLION_USD = sum(CIF_USD) / 1e6, 
+              VOLUME_BEQ_BEANS_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_BEANS) / 1e6,
+              VOLUME_BEQ_PASTE_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_PASTE) / 1e6,
+              VOLUME_BEQ_BUTTER_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_BUTTER) / 1e6,
+              VOLUME_BEQ_POWDER_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_POWDER) / 1e6,
+              
+              VOL_DIRECT_THOUSAND_TONNES =   sum(VOLUME_BEAN_EQUIVALENT*IS_DIRECT) / 1e6, 
+              VOL_INDIRECT_THOUSAND_TONNES = sum(VOLUME_BEAN_EQUIVALENT*IS_INDIRECT) / 1e6, 
+              VOL_UNKNOWN_THOUSAND_TONNES =  sum(VOLUME_BEAN_EQUIVALENT*IS_UNKNOWN) / 1e6, 
+              VOL_UNTRACED_THOUSAND_TONNES =  sum(VOLUME_BEAN_EQUIVALENT*IS_UNTRACED) / 1e6,
+              
+              PCT_DIRECT = 100 * VOL_DIRECT_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES, 
+              PCT_INDIRECT = 100 * VOL_INDIRECT_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES,
+              PCT_UNKNOWN = 100 * VOL_UNKNOWN_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES,
+              PCT_UNTRACED = 100 * VOL_UNTRACED_THOUSAND_TONNES / VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES 
+              ) %>% 
+  select(YEAR, VOLUME_BEAN_EQUIVALENT_THOUSAND_TONNES, CIF_MILLION_USD, 
+         starts_with("PCT_"), 
+         starts_with("VOL_"), 
+         everything())
+
+
+write.xlsx(eu_flow_sum_panel,
+              file = "C:/Users/guye/OneDrive - UCL/SUSTAINCOCOA/temp_data/content_Trase_release_2024/eu_annual_sourcing_cocoa_civ.xlsx")
+
+```
 

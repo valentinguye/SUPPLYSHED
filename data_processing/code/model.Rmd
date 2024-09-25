@@ -35,6 +35,8 @@ library(stars)
 library(pals)
 library(modelsummary) # necessary to load it after DescTools
 
+set.seed(8888)
+
 ## Functions
 # Trase palettes etc. for plots
 source(here("code", "theme_trase.R"))
@@ -42,7 +44,7 @@ source(here("code", "theme_trase.R"))
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
-MODEL_RESOLUTION_KM = 5
+MODEL_RESOLUTION_KM = 3
 
 ## Assets
 
@@ -84,11 +86,63 @@ cells =
               data = cells,
               fmt = 1,
               align = "ccccccc",
-              output = here("outputs", "cells_destat.png")))
+              output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
 
 # ?tables::Heading
 
 ```
+## Map of the cell data
+```{r}
+ggarrange(
+  ggplot(plot_geocode) +
+      geom_sf(aes(fill = VOL_UNTRACED), col = "white", linewidth = unit(0.002,"pt")) + 
+      labs(#title = "INDIRECT SOURCING, 2022", 
+           fill =  "") + 
+      scale_size_identity() +
+     
+      scale_fill_gradient(na.value = trase_palettes[["no_data"]],
+                          low = trase_palettes[["negative"]][1],
+                          high = trase_palettes[["negative"]][9],
+                          labels=unit_format(unit = "kMT", scale = 1e-3)) +
+
+      theme_minimal() +
+      scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+      scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+      theme(
+        legend.key.width = unit(1.5, "cm"),
+        legend.text = element_text(size = 12, face = "bold", family = "DM Sans", colour = trase_palettes[["legend"]]), # , face = "bold"
+        ),
+  
+  ggplot(plot_geocode) +
+    geom_sf(aes(fill = PCT_UNTRACED_GEOCODE), col = "white", linewidth = unit(0.002,"pt")) + 
+    labs(#title = "DIRECT SOURCING FROM COOPERATIVES \nIN PROPORTION TO PRODUCTION, 2022", 
+         fill =  "") + 
+    scale_size_identity() +
+    
+    # scale_fill_gradientn(colours = c(rev(trase_palettes[["commodities"]]), 
+    #                                    trase_palettes[["negative"]]),
+    #                      na.value = trase_palettes[["no_data"]],
+    #                      labels=unit_format(unit = "%")) + 
+    scale_fill_gradient(na.value = trase_palettes[["no_data"]],
+                        low = trase_palettes[["commodities"]][1],
+                        high = trase_palettes[["commodities"]][9], # TraseGreen_TraseGray_TraseRed
+                        labels=unit_format(unit = "%")) +
+    
+    theme_minimal() +
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+    theme(
+      legend.key.width = unit(1.5, "cm"),
+        legend.text = element_text(size = 12, face = "bold", family = "DM Sans", colour = trase_palettes[["legend"]]), # , face = "bold"
+       ),
+  
+  ncol = 2, nrow = 1, common.legend = FALSE, legend = "bottom",
+  widths = c(1, 1)
+) 
+
+```
+
+
 
 ## Cell data features
 
@@ -102,7 +156,7 @@ names(cells)
     # `Cell ID` = CELL_ID,
     `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
     `Cocoa output from cells (kg)` = CELL_VOLUME_KG) %>% 
-  datasummary_skim(output = here("outputs", "cells_train_volumes.png")))
+  datasummary_skim(output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_volumes.png"))))
 
 
 

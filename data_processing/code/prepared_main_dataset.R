@@ -1102,6 +1102,29 @@ rm(subsample_share, sc_coop_links, sc_coop_links_tokeep,
 
 
 ## Virtual links ------------------
+### Remove false negatives -------------------
+
+potential_all =
+  potential_all %>% 
+  group_by(CELL_ID) %>% 
+  mutate(LINK_POSSIBLE_FALSENEG = any(grepl("CARGILL_", PRO_ID)) & LINK_IS_VIRTUAL) %>% 
+  ungroup()
+
+potential_nofalneg = 
+  potential_all %>% 
+  filter(LINK_POSSIBLE_FALSENEG) 
+
+# ~95-99% of the data is removed 
+(nrow(potential_nofalneg) - nrow(potential_all))/nrow(potential_all)
+
+# potential_all %>% filter(CELL_ID == 23828) %>% select(LINK_POSSIBLE_FALSENEG, everything()) %>% View()
+
+# check that no cell is completely removed (it shouldn't)
+stopifnot(potential_nofalneg$CELL_ID %>% unique() %>% length() == nrow(grid_poly))
+
+
+### Random under-sampling --------------------
+
 # Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
 # "the number of pairs that do not have a link to the number of pairs that do have a link."
 # but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives. 
@@ -1121,6 +1144,7 @@ N_virtual = potential_all %>% filter(LINK_IS_VIRTUAL) %>% nrow()
 (current_virtual_share = N_virtual / (N_actual + N_virtual))
 # note it can be computed as 
 current_imbalance/(current_imbalance + 1)
+
 # and 
 (current_actual_share = N_actual / (N_actual + N_virtual))
 # (or)
@@ -1132,8 +1156,7 @@ target_no_imbalance_share = .5
 
 # - 2 the target of a 4 times lower imbalance, as in Mungo et al. 2023 who choose an sub-sampling ratio 4 times lower than the data imbalance 
 target_mungo_imbalance = current_imbalance/4
-target_mungo_share = 1 / (target_mungo_imbalance + 1)
-
+target_mungo_share = 1 / (target_mungo_imbalance + 1) # following above equivalence
 TARGET_SHARE_TO_USE = target_mungo_share
 
 # Apply the sub-sample share formula (see sc coop link sub-sampling above  for explanations)  
