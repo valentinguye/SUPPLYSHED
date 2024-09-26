@@ -34,6 +34,8 @@ library(exactextractr)
 library(stars)
 library(pals)
 library(modelsummary) # necessary to load it after DescTools
+library(ranger)
+library(parsnip)
 
 set.seed(8888)
 
@@ -44,7 +46,7 @@ source(here("code", "theme_trase.R"))
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
-MODEL_RESOLUTION_KM = 3
+MODEL_RESOLUTION_KM = 4
 
 ## Assets
 
@@ -59,16 +61,31 @@ cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL
 
 ```{r}
 # Pre-processing to ease manipulation/display
+
+# cells %>% select(ends_with("COOP-CA")) %>% names()
 cells = 
   cells %>% 
-    mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Train/test set", "Predict set")) 
+  mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Train/test set", "Predict set")) %>% 
+  rename(CELL_PROP_COOP_STATUS_COOPCA = `CELL_PROP_COOP_STATUS_COOP-CA`, 
+         CELL_PROP_1_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_1_NEAREST_COOP_STATUS_COOP-CA`, 
+         CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_5_NEAREST_COOP_STATUS_COOP-CA`)
+
+# (this is different from CELL_ACTUAL_LINK bc actual links don't always have volume attached)
+
+
+
+links = 
+  links %>% 
+  mutate(SPLIT = if_else(CELL_ANY_ACTUAL_COOP_LINK, "Train/test set", "Predict set")) %>% 
+  rename(COOP_STATUS_COOPCA = `COOP_STATUS_COOP-CA`)
 
 ```
 
 
-# Cells descriptive statistics
+# DESCRIPTIVES 
+## Cells des. stats.
 
-## Structure of the cell data
+### Structure of the cell data
 ```{r}
 # How many cells with actual links
 # cells %>% 
@@ -91,7 +108,7 @@ cells =
 # ?tables::Heading
 
 ```
-## Map of the cell data
+### Map of the cell data
 ```{r}
 ggarrange(
   ggplot(plot_geocode) +
@@ -144,9 +161,9 @@ ggarrange(
 
 
 
-## Cell data features
+### Cell data features
 
-### Target in the train/test set 
+#### Target in the train/test set 
 ```{r}
 names(cells)
 
@@ -162,7 +179,7 @@ names(cells)
 
 ```
 
-### Cell data balance tests
+#### Cell data balance tests
 ```{r}
 
 cells_features_tobalance =
@@ -198,14 +215,14 @@ cells_features_tobalance =
 ```
 
 
-# Links descriptive statistics
+## Links descriptive statistics
 
-## Structure of the link data 
+### Structure of the link data 
 ```{r}
 
 ```
 
-## Features in the processed link data  
+### Features in the processed link data  
 ```{r}
 links_features_tosum %>% 
   mutate(LINK_YEAR = as.character(LINK_YEAR)) %>% 
@@ -215,22 +232,221 @@ links_features_tosum %>%
   
 ```
 
+
+
+# FIRST STAGE 
+
+## Data split
+Resources on data split here: https://encord.com/blog/train-val-test-split/
 ```{r}
-training_size <- 0.9
+training_size <- 0.8
 
 # Split the data
-train_test =
-  main %>%
-  filter(!CELL_NO_ACTUAL_LINK) %>% 
-  mutate(ROWNUM = row_number())
+stg1_traintest =
+  cells %>%
+  filter(CELL_VOLUME_OBSERVED) 
 
-training =
-  train_test %>%
+stg1_topredict =
+  cells %>%
+  filter(!CELL_VOLUME_OBSERVED) %>% 
+  filter(!CELL_NO_POTENTIAL_LINK)
+
+stg1_training =
+  stg1_traintest %>%
   slice_sample(prop = training_size) 
 
-test =
-  train_test %>%
-  filter(!ROWNUM %in% training$ROWNUM) 
+stg1_test =
+  stg1_traintest %>%
+  filter(!CELL_ID %in% stg1_training$CELL_ID) 
 
 ```
 
+## Feature selection
+Use Boruta here https://cran.r-project.org/web/packages/Boruta/Boruta.pdf
+```{r}
+names(cells)
+anyNA(cells)
+
+stg1_allfeatures = 
+  cells %>% 
+  select(
+    ends_with("_HA"), CELL_TRI_MM, 
+    CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
+    CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, CELL_MIN_DISTANCE_METERS,
+    starts_with("CELL_PROP_5_NEAREST"), 
+    starts_with("CELL_AVG_5_NEAREST"), 
+    starts_with("CELL_COUNT_5_NEAREST")) %>% 
+  names() 
+  
+
+stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+
+
+
+
+```
+
+
+## Model fit 
+```{r}
+
+stg1_mfit = ranger(data = stg1_training, 
+                   formula = stg1_mformula,
+                   importance = 'permutation')
+
+print(stg1_mfit)
+
+```
+
+## Test 
+```{r}
+test_predictions <- predict(stg1_mfit, data=stg1_test)
+
+
+
+```
+## Predict 
+```{r}
+stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_topredict)$predictions
+
+stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+
+cells = 
+  cells %>% 
+  left_join(stg1_topredict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
+            by = "CELL_ID") %>% 
+  # this left NAs in cells not in the predict set, i.e. in the train/test set
+  mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
+    is.na(CELL_PRED_PROP_VOLUME_COOPS) ~ CELL_PROP_VOLUME_COOPS, 
+    TRUE ~ CELL_PRED_PROP_VOLUME_COOPS
+  ))
+
+cells$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+
+# at this stage, the NAs come from CELL_PROP_VOLUME_COOPS, in cells with no potential link at all 
+stopifnot(cells %>% filter(is.na(CELL_PRED_PROP_VOLUME_COOPS)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% all())
+
+
+
+
+
+
+```
+
+
+# SECOND STAGE 
+ KEEP ONLY LINKS WITH COOPS AND REMOVE ACTUAL LINKS WITH OTHERS
+ USE LINK_IS_ACTUAL_COOP ? 
+ 
+## Apply sub-sampling
+```{r}
+links_ss = 
+  links %>% 
+  filter(!LINK_POSSIBLE_FALSENEG) %>% 
+  filter(LINK_TO_KEEP_TO_US_VIRTUAL) # this is only TRUE currently. 
+
+```
+
+
+## Data split
+Resources on data split here: https://encord.com/blog/train-val-test-split/
+```{r}
+training_size <- 0.8
+
+# Split the data
+stg2_traintest =
+  links_ss %>%
+  filter(CELL_ACTUAL_LINK) 
+
+stg2_training =
+  stg2_traintest %>%
+  slice_sample(prop = training_size) 
+
+stg2_test =
+  stg2_traintest %>%
+  filter(!LINK_ID %in% stg2_training$LINK_ID) 
+
+```
+
+
+## Feature selection
+Use Boruta here https://cran.r-project.org/web/packages/Boruta/Boruta.pdf
+```{r}
+names(links)
+anyNA(links)
+
+stg1_allfeatures = 
+  cells %>% 
+  select(
+    ends_with("_HA"), CELL_TRI_MM, 
+    CELL_N_BS_WITHIN_DIST, # CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
+    # CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, CELL_MIN_DISTANCE_METERS,
+    LINK_DISTANCE_METERS,
+    starts_with("COOP_FARMERS"), 
+    COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
+    COOP_RFA, COOP_UTZ, COOP_FT,
+    starts_with("COOP_CERTIFIED"), 
+    COOP_HAS_SSI, 
+    starts_with("COOP_SSI_"), 
+    starts_with("COOP_DISTRICT_"), -COOP_DISTRICT_NAME,
+    starts_with("COOP_STATUS_"), 
+    starts_with("COOP_BS_10KM")
+    ) %>% 
+  names() 
+  
+
+stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+
+
+
+
+```
+
+
+
+
+## Model fit 
+```{r}
+
+stg1_mfit = ranger(data = stg1_training, 
+                   formula = stg1_mformula,
+                   importance = 'permutation')
+
+print(stg1_mfit)
+
+```
+
+## Test 
+```{r}
+test_predictions <- predict(stg1_mfit, data=stg1_test)
+
+
+
+```
+## Predict 
+```{r}
+stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_topredict)$predictions
+
+stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+
+cells = 
+  cells %>% 
+  left_join(stg1_topredict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
+            by = "CELL_ID") %>% 
+  # this left NAs in cells not in the predict set, i.e. in the train/test set
+  mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
+    is.na(CELL_PRED_PROP_VOLUME_COOPS) ~ CELL_PROP_VOLUME_COOPS, 
+    TRUE ~ CELL_PRED_PROP_VOLUME_COOPS
+  ))
+
+cells$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+
+# at this stage, the NAs come from CELL_PROP_VOLUME_COOPS, in cells with no potential link at all 
+stopifnot(cells %>% filter(is.na(CELL_PRED_PROP_VOLUME_COOPS)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% all())
+
+
+
+
+
+
+```

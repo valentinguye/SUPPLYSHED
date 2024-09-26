@@ -32,7 +32,7 @@ dir.create(here("temp_data", "prepared_main_dataset"))
 civ_crs <- 32630
 
 # Set this to 30000 to run a toy model, for tests etc.
-grid_size_m = 3000
+grid_size_m = 8000
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
@@ -201,7 +201,7 @@ consol_other =
 
 consol_other$BUYER_IS_COOP %>% summary()
 
-consol %>% filter(!is.na(COOP_BS_ID) & !BUYER_IS_COOP) %>% View()
+consol %>% filter(!is.na(COOP_BS_ID) & !BUYER_IS_COOP) %>% nrow()
 
 
 # Actual link stats ----------------
@@ -670,6 +670,9 @@ potential_all =
   mutate(
     CELL_NO_POTENTIAL_LINK = !any(LINK_IS_POTENTIAL),
     CELL_ONLY_VIRTUAL_LINK = any(LINK_IS_POTENTIAL) & !any(LINK_IS_ACTUAL),
+    # This is the variable to use to isolate train/test data
+    CELL_ANY_ACTUAL_COOP_LINK = any(LINK_IS_ACTUAL_COOP),
+    # below breakdown is just for descriptions
     CELL_ACTUAL_ONLYCOOP_LINK  = any(LINK_IS_ACTUAL_COOP)  & !any(LINK_IS_ACTUAL_OTHER),
     CELL_ACTUAL_ONLYOTHER_LINK = any(LINK_IS_ACTUAL_OTHER) & !any(LINK_IS_ACTUAL_COOP),
     CELL_ACTUAL_BOTH_LINK = any(LINK_IS_ACTUAL_OTHER) & any(LINK_IS_ACTUAL_COOP),
@@ -682,7 +685,7 @@ potential_all =
 # Check that the cell identifiers cover all cells
 if(
   potential_all %>% 
-  rowwise() %>% 
+  # rowwise() %>%
   mutate(CELL_ANY_CAT = CELL_NO_POTENTIAL_LINK + CELL_ONLY_VIRTUAL_LINK + CELL_ACTUAL_ONLYCOOP_LINK + CELL_ACTUAL_ONLYOTHER_LINK + CELL_ACTUAL_BOTH_LINK) %>% 
   filter(CELL_ANY_CAT != 1) %>% nrow() > 0  
 ){stop("Categories don't cover all cells")}
@@ -729,7 +732,7 @@ potential_all_save = potential_all
 
 init_nrow_pa = nrow(potential_all) # # just to check that this section does not add any row
 
-## Cell-level variables ------------------
+## Cell-level topological variables ------------------
 
 ### Nb of potential coops -------- 
 # was computed above (CELL_N_BS_WITHIN_DIST), because useful in a test. 
@@ -769,7 +772,13 @@ potential_all =
   potential_all %>% 
   left_join(n_coops_dpt %>% select(CELL_N_COOP_IN_DPT = N_COOP_IN_DPT, # this is a cell level var
                                    DISTRICT_GEOCODE), 
-            by = join_by(CELL_DISTRICT_GEOCODE == DISTRICT_GEOCODE))
+            by = join_by(CELL_DISTRICT_GEOCODE == DISTRICT_GEOCODE)) %>% 
+  # in departments where there are no IC2B coops, the left_join gives NAs, 
+  # --> replace by 0. 
+  mutate(CELL_AVG_N_LICBUY_IN_DPT = if_else(is.na(CELL_AVG_N_LICBUY_IN_DPT), 
+                                            0, 
+                                            CELL_AVG_N_LICBUY_IN_DPT))
+
 
 
 
@@ -794,12 +803,53 @@ licens_panel =
     arrange(desc(AVG_N_LICBUY_IN_DPT)))
 
 (sum(n_licbuy_dpt$AVG_N_LICBUY_IN_DPT)) 
+(mean_n_dpt_licbuy = mean(n_licbuy_dpt$AVG_N_LICBUY_IN_DPT))
+(median_n_dpt_licbuy = median(n_licbuy_dpt$AVG_N_LICBUY_IN_DPT))
 
 potential_all = 
   potential_all %>% 
   left_join(n_licbuy_dpt %>% select(CELL_AVG_N_LICBUY_IN_DPT = AVG_N_LICBUY_IN_DPT, # this is a cell level var
                                    LVL_4_CODE), 
-            by = join_by(CELL_DISTRICT_GEOCODE == LVL_4_CODE))
+            by = join_by(CELL_DISTRICT_GEOCODE == LVL_4_CODE)) %>% 
+  # in departments where no licensed buyers are known, the left_join gives NAs, 
+  # but replace by 0. 
+  mutate(CELL_AVG_N_LICBUY_IN_DPT = if_else(is.na(CELL_AVG_N_LICBUY_IN_DPT), 
+                                            0, 
+                                            CELL_AVG_N_LICBUY_IN_DPT))
+
+### Nearest coop(s) -------------- 
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID) %>% 
+  arrange(LINK_DISTANCE_METERS) %>% # this matters
+  mutate(
+    # do avg distance of the 5 closest BS, rather than avg of the five smallest distances which may 
+    # well be to the same coop in the many cases where several actual links would exist with it. 
+    # LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_DISTANCE_METERS))[5]) %>% 
+    # na.omit because there may be NAs if in the smallest distances there is a JRC other buyer. 
+    LINK_5_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 5)), 
+    LINK_1_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 1))
+    # CELL_MIN_DISTANCE_METERS = min(LINK_DISTANCE_METERS, na.rm = TRUE)
+  ) %>% 
+  ungroup() %>% 
+  rowwise() %>% 
+  mutate(
+    #LINK_IS_WITH_5_NEAREST_COOPS = LINK_DISTANCE_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP
+    LINK_IS_WITH_5_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_5_NEAREST_POTENTIAL_COOP_BS_ID, 
+    LINK_IS_WITH_1_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_1_NEAREST_POTENTIAL_COOP_BS_ID
+    #LINK_IS_WITH_1_NEAREST_COOPS = LINK_DISTANCE_METERS == CELL_MIN_DISTANCE_METERS
+  ) %>% 
+  ungroup() %>% 
+  select(-LINK_5_NEAREST_POTENTIAL_COOP_BS_ID, 
+         -LINK_1_NEAREST_POTENTIAL_COOP_BS_ID)
+
+stopifnot(
+  potential_all %>% 
+    filter(LINK_IS_WITH_5_NEAREST_COOPS) %>% 
+    summarise(.by = "CELL_ID", 
+              TEST = length(unique(LINK_POTENTIAL_COOP_BS_ID))) %>% 
+    pull(TEST) %>% unique() <= 5 # sometimes there are fewer than 5 potential coops
+)
 
 
 ## Coop/BS-level variables ---------------------------
@@ -928,9 +978,9 @@ if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")
 potential_all = 
   potential_all %>% 
   group_by(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_ACTUAL_COOP_BS_ID, LINK_POTENTIAL_COOP_BS_ID) %>% 
-  mutate(LINK_POTENTIAL_ID = cur_group_id()) %>% 
+  mutate(LINK_ID = cur_group_id()) %>% 
   ungroup()
-stopifnot(nrow(potential_all) == length(unique(potential_all$LINK_POTENTIAL_ID)))
+stopifnot(nrow(potential_all) == length(unique(potential_all$LINK_ID)))
 
 
 ### Distances -------------
@@ -1051,7 +1101,7 @@ set.seed(8888)
 sc_coop_links = 
   potential_all %>% 
   filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP) %>% 
-  pull(LINK_POTENTIAL_ID) 
+  pull(LINK_ID) 
 
 sc_coop_share = 
   sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) /
@@ -1089,8 +1139,8 @@ length(sc_coop_links_tokeep)
 potential_all = 
   potential_all %>% 
   # be a link outside the category of interest, or in the list of links under-sampled. 
-  mutate(LINK_TO_KEEP_TO_US_SC = (!LINK_POTENTIAL_ID %in% sc_coop_links) | 
-                                   LINK_POTENTIAL_ID %in% sc_coop_links_tokeep)
+  mutate(LINK_TO_KEEP_TO_US_SC = (!LINK_ID %in% sc_coop_links) | 
+                                   LINK_ID %in% sc_coop_links_tokeep)
 
 stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_SC)) + round((1-subsample_share)*length(sc_coop_links)))
 
@@ -1107,37 +1157,59 @@ rm(subsample_share, sc_coop_links, sc_coop_links_tokeep,
 potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
-  mutate(LINK_POSSIBLE_FALSENEG = any(grepl("CARGILL_", PRO_ID)) & LINK_IS_VIRTUAL) %>% 
-  ungroup()
+  mutate(CELL_HAS_FALSENEG = any(grepl("CARGILL_", PRO_ID))) %>% 
+  ungroup() %>% 
+  mutate(LINK_POSSIBLE_FALSENEG = CELL_HAS_FALSENEG & LINK_IS_VIRTUAL)
 
-potential_nofalneg = 
-  potential_all %>% 
-  filter(LINK_POSSIBLE_FALSENEG) 
+# keep working on the same object actually, because when aggregating to cells for 1st stage, 
+# we want to have all the virtual links from Cargill cells. The fact that they can 
+# be false negatives is no problem in 1st stage, because these cells are in the predict set then. 
+# potential_nofalneg = 
+#   potential_all %>% 
+#   filter(!LINK_POSSIBLE_FALSENEG) 
 
-# ~95-99% of the data is removed 
-(nrow(potential_nofalneg) - nrow(potential_all))/nrow(potential_all)
+# Removes ~200-300 cells
+potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(CELL_ID) %>% unique() %>% length()
 
-# potential_all %>% filter(CELL_ID == 23828) %>% select(LINK_POSSIBLE_FALSENEG, everything()) %>% View()
+# ~2-3% of the data is removed 
+(nrow(filter(potential_all, !LINK_POSSIBLE_FALSENEG)) - nrow(potential_all))/nrow(potential_all)
+
+# potential_all %>% filter(CELL_HAS_FALSENEG) %>% select(LINK_POSSIBLE_FALSENEG, everything()) %>% View()
+# potential_all %>% filter(CELL_ID == 11657) %>% select(LINK_POSSIBLE_FALSENEG, everything()) %>% View()
 
 # check that no cell is completely removed (it shouldn't)
-stopifnot(potential_nofalneg$CELL_ID %>% unique() %>% length() == nrow(grid_poly))
+stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
+            pull(CELL_ID) %>% unique() %>% length() == nrow(grid_poly)
+          )
+potential_all$CELL_ID %>% unique() %>% length()
 
 
-### Random under-sampling --------------------
+### Random sub-sampling --------------------
+
+# Make separate object for convenience 
+traintest_2dstg = 
+  potential_all %>% 
+  # Imbalance should be computed in the train/test set only. 
+  filter(CELL_ACTUAL_LINK) %>% 
+  # Moreover, imbalance should be computed with all the possible false negatives removed. 
+  filter(!LINK_POSSIBLE_FALSENEG)
+# order in the above filters is inconsequential
 
 # Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
 # "the number of pairs that do not have a link to the number of pairs that do have a link."
 # but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives. 
-N_cells = potential_all$CELL_ID %>% unique() %>% length()
-M_coops = coopbs$COOP_BS_ID %>% unique() %>% length()
-E_links = potential_all %>% filter(LINK_IS_ACTUAL_COOP) %>% distinct(CELL_ID) %>% nrow() 
+(N_cells = traintest_2dstg$CELL_ID %>% unique() %>% length())
+(M_coops = coopbs$COOP_BS_ID %>% unique() %>% length())
+(E_links = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
+# this is the same as 
+E_links == consol_IC2Bcoops %>% nrow()
 
 (initial_imbalance = (N_cells*M_coops - E_links)/E_links)
 
 # we can also compute the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links). 
 # i.e. the ratio of virtual to actual links
-N_actual = potential_all %>% filter(LINK_IS_ACTUAL) %>% nrow()
-N_virtual = potential_all %>% filter(LINK_IS_VIRTUAL) %>% nrow()
+(N_actual = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
+(N_virtual = traintest_2dstg$LINK_IS_VIRTUAL %>% sum())
 (current_imbalance = N_virtual / N_actual)
     
 # Compute it as a share 
@@ -1150,38 +1222,47 @@ current_imbalance/(current_imbalance + 1)
 # (or)
 1/(current_imbalance + 1)
 
-# Now, there are two possible targets: 
-# - 1 the target of perfect balance 
-target_no_imbalance_share = .5
+# Now, there are three possible targets: 
+  # - 1 do nothing because the imbalance is already limited by previous informed sub-sampling
+if(initial_imbalance/4 > current_imbalance){
+  print("It is not needed to further correct for class imbalance by random sub-sampling.")
+  # just make the variable exist to avoid bugs.
+  potential_all = 
+    potential_all %>% 
+    mutate(LINK_TO_KEEP_TO_US_VIRTUAL = TRUE)
+}else{
+  # - 2 the target of perfect balance 
+  target_no_imbalance_share = .5
+  # - 3 the target of a 4 times lower imbalance, as in Mungo et al. 2023 who choose an sub-sampling ratio 4 times lower than the data imbalance 
+  (target_mungo_imbalance = current_imbalance/4)
+  target_mungo_share = 1 / (target_mungo_imbalance + 1) # following above equivalence
+  
+  TARGET_SHARE_TO_USE = target_mungo_share
+  
+  # Apply the sub-sample share formula (see sc coop link sub-sampling above  for explanations)  
+  (subsample_share = (TARGET_SHARE_TO_USE / current_virtual_share) * ((1 - current_virtual_share) / (1 - TARGET_SHARE_TO_USE)))
+  
+  # Sample in virtual links 
+  virtual_links = 
+    # important to sample only in virtual links of the train-test set 
+    traintest_2dstg %>% 
+    filter(LINK_IS_VIRTUAL) %>% 
+    pull(LINK_ID) 
+  
+  virtual_links_tokeep = sample(virtual_links, size = round(subsample_share*length(virtual_links)))
+  length(virtual_links_tokeep)
+  
+  potential_all = 
+    potential_all %>% 
+    # be a link outside the category of interest, or in the list of links under-sampled. 
+    mutate(LINK_TO_KEEP_TO_US_VIRTUAL = (!LINK_ID %in% virtual_links) | 
+                                          LINK_ID %in% virtual_links_tokeep)
+  
+  stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_VIRTUAL)) + 
+              round((1-subsample_share)*length(virtual_links)))
+}
 
-# - 2 the target of a 4 times lower imbalance, as in Mungo et al. 2023 who choose an sub-sampling ratio 4 times lower than the data imbalance 
-target_mungo_imbalance = current_imbalance/4
-target_mungo_share = 1 / (target_mungo_imbalance + 1) # following above equivalence
-TARGET_SHARE_TO_USE = target_mungo_share
-
-# Apply the sub-sample share formula (see sc coop link sub-sampling above  for explanations)  
-subsample_share = (TARGET_SHARE_TO_USE / current_virtual_share) * ((1 - current_virtual_share) / (1 - TARGET_SHARE_TO_USE))
-
-# 
-virtual_links = 
-  potential_all %>% 
-  filter(LINK_IS_VIRTUAL) %>% 
-  pull(LINK_POTENTIAL_ID) 
-
-virtual_links_tokeep = sample(virtual_links, size = round(subsample_share*length(virtual_links)))
-length(virtual_links_tokeep)
-
-# US_SC = UnderSample SustainCocoa 
-potential_all = 
-  potential_all %>% 
-  # be a link outside the category of interest, or in the list of links under-sampled. 
-  mutate(LINK_TO_KEEP_TO_US_VIRTUAL = (!LINK_POTENTIAL_ID %in% virtual_links) | 
-                                        LINK_POTENTIAL_ID %in% virtual_links_tokeep)
-
-stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_VIRTUAL)) + 
-            round((1-subsample_share)*length(virtual_links)))
-
-
+rm(traintest_2dstg)
 
 # EXPORT -------
 # Export here the data for the second stage, to then work from a lighter object
@@ -1206,51 +1287,20 @@ potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_
 
 ## Apply sub-sampling -------------
 # We apply only 1st stage sub-sampling. 
-potential_all_ss = 
+potential_1st = 
   potential_all %>% 
   filter(LINK_TO_KEEP_TO_US_SC)
+
 
 # Prepare 
 # there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.
 # it is important to remove these NAs so they don't make cell distance summaries NAs. 
 # Hence, the warning thrown by min() that Inf is returned when no argument is found is expected, for all cells with only NAs. 
 # but now we don't use min anymore anyway. 
-
-potential_all = 
-  potential_all %>% 
-  select(!starts_with("COOP_DISTRICT_"), -COOP_STATUS) %>%  # this cannot be aggregated - we could do it for cell however... 
-  group_by(CELL_ID) %>% 
-  arrange(LINK_DISTANCE_METERS) %>% # this matters
-  mutate(
-    # do avg distance of the 5 closest BS, rather than avg of the five smallest distances which may 
-    # well be to the same coop in the many cases where several actual links would exist with it. 
-  # LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_DISTANCE_METERS))[5]) %>% 
-    # na.omit because there may be NAs if in the smallest distances there is a JRC other buyer. 
-    LINK_5_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 5)), 
-    LINK_1_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 1))
-  # CELL_MIN_DISTANCE_METERS = min(LINK_DISTANCE_METERS, na.rm = TRUE)
-    ) %>% 
-  ungroup() %>% 
-  rowwise() %>% 
-  mutate(
-   #LINK_IS_WITH_5_NEAREST_COOPS = LINK_DISTANCE_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP
-    LINK_IS_WITH_5_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_5_NEAREST_POTENTIAL_COOP_BS_ID, 
-    LINK_IS_WITH_1_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_1_NEAREST_POTENTIAL_COOP_BS_ID
-   #LINK_IS_WITH_1_NEAREST_COOPS = LINK_DISTANCE_METERS == CELL_MIN_DISTANCE_METERS
-        ) %>% 
-  ungroup() %>% 
-  select(-LINK_5_NEAREST_POTENTIAL_COOP_BS_ID)
-
-stopifnot(
-  potential_all %>% 
-    filter(LINK_IS_WITH_5_NEAREST_COOPS) %>% 
-    summarise(.by = "CELL_ID", 
-            TEST = length(unique(LINK_POTENTIAL_COOP_BS_ID))) %>% 
-    pull(TEST) %>% unique() <= 5 # sometimes there are fewer than 5 potential coops
-)
-
-
-
+potential_1st = 
+  potential_1st %>% 
+  select(!starts_with("COOP_DISTRICT_"), -COOP_STATUS)  # this cannot be aggregated - we could do it for cell however... 
+  
 ## Dependent variable ------------
 
 # Now that all that was possibly measured at link level has been measured, 
@@ -1260,21 +1310,21 @@ stopifnot(
 # * Hence, we upscale the observation to the level of the cell. *
 
 # About link volumes: 
-potential_all %>% filter(!is.na(LINK_VOLUME_KG)) %>% nrow()
-potential_all$LINK_VOLUME_KG %>% summary()
-potential_all %>% filter(!is.na(LINK_VOLUME_KG)) %>% View()
+potential_1st %>% filter(!is.na(LINK_VOLUME_KG)) %>% nrow()
+potential_1st$LINK_VOLUME_KG %>% summary()
+potential_1st %>% filter(!is.na(LINK_VOLUME_KG)) %>% View()
 
 
 
-potential_all$BUYER_IS_COOP %>% summary()
-potential_all %>% filter(is.na(BUYER_IS_COOP)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% summary()
+potential_1st$BUYER_IS_COOP %>% summary()
+potential_1st %>% filter(is.na(BUYER_IS_COOP)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% summary()
 
 # The if_else is because sum(., na.rm = T) returns 0 if . has only NAs. 
 # This is the case of cells with no actual link from JRC or SC. 
-# potential_all %>% group_by(CELL_ID) %>% filter(all(is.na(LINK_VOLUME_KG))) %>% ungroup() %>% filter(!CELL_NO_ACTUAL_LINK) %>% pull(PRO_ID) %>% grepl(pattern = "SUSTAIN|JRC") %>% any()
+# potential_1st %>% group_by(CELL_ID) %>% filter(all(is.na(LINK_VOLUME_KG))) %>% ungroup() %>% filter(!CELL_NO_ACTUAL_LINK) %>% pull(PRO_ID) %>% grepl(pattern = "SUSTAIN|JRC") %>% any()
 # So if_else makes sure that in these cases, cell-level volumes are NAs and not 0
 cell_depvars =
-  potential_all %>%
+  potential_1st %>%
   summarise(.by = "CELL_ID",
             # This is the sum of the volumes of all actual links from a cell. 
             CELL_VOLUME_KG = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG, na.rm = TRUE)),
@@ -1312,18 +1362,18 @@ cell_depvars$CELL_PROP_VOLUME_COOPS %>% summary()
 
 cell_depvars %>% filter(!is.na(CELL_VOLUME_KG_COOPS)) %>% nrow()
 
-potential_all %>% filter(LINK_VOLUME_KG == 0) %>% View()
+potential_1st %>% filter(LINK_VOLUME_KG == 0) %>% View()
 cell_depvars %>% filter(CELL_VOLUME_KG == 0) %>% nrow()
 
-potential_all %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>% 
+potential_1st %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>% 
   group_by(CELL_ID) %>% filter(n()>5) %>%
   arrange(CELL_ID) %>% 
   select(!starts_with("COOP_")) %>% 
   View()
 
-# potential_all$LINK_DISTANCE_METERS %>% summary()
-# potential_all %>% filter(is.na(LINK_DISTANCE_METERS)) %>% pull(CELL_ACTUAL_ONLYCOOP_LINK) %>% summary()
-# potential_all %>% filter(is.na(LINK_DISTANCE_METERS) & CELL_NO_POTENTIAL_LINK) %>% View() 
+# potential_1st$LINK_DISTANCE_METERS %>% summary()
+# potential_1st %>% filter(is.na(LINK_DISTANCE_METERS)) %>% pull(CELL_ACTUAL_ONLYCOOP_LINK) %>% summary()
+# potential_1st %>% filter(is.na(LINK_DISTANCE_METERS) & CELL_NO_POTENTIAL_LINK) %>% View() 
 
 
 ## Cell level Xs -----------
@@ -1332,7 +1382,7 @@ potential_all %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>%
 # it is important to remove these NAs so they don't make cell distance summaries NAs. 
 # hence na.rm in the mean
 cell_cellvars = 
-  potential_all %>% 
+  potential_1st %>% 
   summarise(.by = "CELL_ID",
             
             # Topological 
@@ -1365,7 +1415,7 @@ cell_cellvars =
 )
 cell_cellvars$CELL_MIN_DISTANCE_METERS %>% summary()
 cell_cellvars$CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS %>% summary()
-potential_all$LINK_DISTANCE_METERS %>% summary()
+potential_1st$LINK_DISTANCE_METERS %>% summary()
 
 ## Coop level Xs -----------
 # Do every average or sum over 1/ all potential coops; 2/ only the actual ones; 3/ the five closest ones. 
@@ -1373,7 +1423,7 @@ potential_all$LINK_DISTANCE_METERS %>% summary()
 ### Mean binary ------------------------
 # (averages of binary vars make proportions)
 fn_coop_prop_summary = function(COOP_VAR){
-  potential_all %>% 
+  potential_1st %>% 
     summarise(.by = "CELL_ID", 
               !!as.symbol(paste0("CELL_PROP_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
               !!as.symbol(paste0("CELL_PROP_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
@@ -1421,7 +1471,7 @@ cell_binaryvars =
   
 ### Mean others ------------
 fn_coop_mean_summary = function(COOP_VAR){
-  potential_all %>% 
+  potential_1st %>% 
     summarise(.by = "CELL_ID", 
               !!as.symbol(paste0("CELL_AVG_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
               !!as.symbol(paste0("CELL_AVG_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
@@ -1449,7 +1499,7 @@ cell_othermeanvars =
 
 ### Sum --------------------------
 fn_coop_sum_summary = function(COOP_VAR){
-  potential_all %>% 
+  potential_1st %>% 
     summarise(.by = "CELL_ID", 
             !!as.symbol(paste0("CELL_COUNT_", COOP_VAR))           := sum(!!as.symbol(COOP_VAR), na.rm = TRUE),
             !!as.symbol(paste0("CELL_COUNT_1_NEAREST_", COOP_VAR))    := sum(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
@@ -1487,7 +1537,7 @@ cell_all =
   inner_join(cell_countvars, 
              by = "CELL_ID")
   
-stopifnot(potential_all$CELL_ID %>% unique() %>% length() == nrow(cell_all))
+stopifnot(potential_1st$CELL_ID %>% unique() %>% length() == nrow(cell_all))
 
 # other checks
 prop_var_names = 
