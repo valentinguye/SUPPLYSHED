@@ -865,16 +865,19 @@ village_bbox =
     .by = PRO_VILLAGE_ID,
     geometry = st_as_sfc(st_bbox(st_union(geometry)))
   ) %>% 
-  mutate(VILLAGE_BBOX_AREA_HA = set_units(st_area(geometry), "ha", na.rm = T)) %>% 
-  arrange(desc(VILLAGE_BBOX_AREA_HA))
+  mutate(VILLAGE_BBOX_AREA_KM2 = set_units(st_area(geometry), "ha", na.rm = T)) %>% 
+  arrange(desc(VILLAGE_BBOX_AREA_KM2))
 
 # Their clearly are outliers 
 # ggplot() +
 #   geom_sf(data = departements, fill = "transparent") +
 #   geom_sf(data = village_bbox, aes(col = as.character(PRO_VILLAGE_ID)), fill = "transparent") 
+village_bbox$VILLAGE_BBOX_AREA_KM2 %>% summary()
+village_bbox$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.7, 1, by = .05))
+village_bbox$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.95, 1, by = .01)) 
 
 
-(vlg_size_outliers = boxplot.stats(village_bbox$VILLAGE_BBOX_AREA_HA, coef = 2)$out %>% sort())
+(vlg_size_outliers = boxplot.stats(village_bbox$VILLAGE_BBOX_AREA_KM2, coef = 2)$out %>% sort())
 
 # This may be due to the village ID being badly coded, but this is unlikely, because defining it as a 
 # the ID of groups defined as being in the same departement-spf-village-village name.
@@ -933,19 +936,22 @@ jrc_geo$FARM_VLG_DISTANCE_METERS %>% summary()
 # Setting the threshold at 5, 4, or 3km still leaves 77 villages. 
 # Setting it at 2439 (the smallest outlier) though, removes 4 more villages. 
 # We want to keep these villages which possibly represent a kind of villages more spread apart. 
+# Up to 10km does not seem absurd in a remote, rural context. 
+
 jrc_aparts = 
   jrc_geo %>% 
   mutate(FARM_VLG_DISTANCE_METERS = as.numeric(FARM_VLG_DISTANCE_METERS)) %>% 
-  filter(FARM_VLG_DISTANCE_METERS >= 3000)  
+  filter(FARM_VLG_DISTANCE_METERS >= 10000)  
 
 jrc_geo = 
   jrc_geo %>% 
   mutate(FARM_VLG_DISTANCE_METERS = as.numeric(FARM_VLG_DISTANCE_METERS)) %>% 
-  filter(FARM_VLG_DISTANCE_METERS < 3000)  
+  filter(FARM_VLG_DISTANCE_METERS < 10000)  
 
 # Of the 81 villages in total, 4 seem to have a problem in farm coordinates for all surveyd farmers.  
 jrc_geo %>% 
   pull(PRO_VILLAGE_ID) %>% unique() %>% length()
+
 
 rm(jrc_geo_vlgsf, jrc_geo_prosf)
 
@@ -959,15 +965,39 @@ village_bbox_2 =
     .by = PRO_VILLAGE_ID,
     geometry = st_as_sfc(st_bbox(st_union(geometry)))
   ) %>% 
-  mutate(VILLAGE_BBOX_AREA_HA = set_units(st_area(geometry), "km2", na.rm = T)) %>% 
-  arrange(desc(VILLAGE_BBOX_AREA_HA))
+  mutate(VILLAGE_BBOX_AREA_KM2 = set_units(st_area(geometry), "km2", na.rm = T)) %>% 
+  arrange(desc(VILLAGE_BBOX_AREA_KM2))
 
 # Note the distribution of village bounding boxes
-village_bbox_2$VILLAGE_BBOX_AREA_HA %>% summary()
-village_bbox_2$VILLAGE_BBOX_AREA_HA %>% quantile(probs = seq(.7, 1, by = .05))
-village_bbox_2$VILLAGE_BBOX_AREA_HA %>% quantile(probs = seq(.95, 1, by = .01))
+village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% summary()
+village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.7, 1, by = .05))
+village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.7, 1, by = .05))%>% sqrt()
+
+village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.8, 0.9, by = .01))
+
+village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.95, 1, by = .01)) 
+village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.95, 1, by = .01)) %>% sqrt()
 
 rm(village_bbox_2)
+
+## Remove poorly represented villages ----------
+
+# For the supply shed model specifically, we don't want villages that have too few 
+# farmers, because they would not represent the whole village (and cell) well.
+jrc_geo = 
+  jrc_geo %>% 
+  group_by(PRO_VILLAGE_NAME) %>% 
+  mutate(VILLAGE_N_FARMERS = n()) %>% 
+  ungroup() 
+
+jrc_geo %>% 
+  summarise(.by = VILLAGE_N_FARMERS, 
+            NUMBER_VILLAGES = length(unique(PRO_VILLAGE_NAME))) %>% 
+  arrange(VILLAGE_N_FARMERS)
+
+jrc_geo = 
+  jrc_geo %>% 
+  filter(VILLAGE_N_FARMERS > 2)
 
 ## Link variables ----------------
 

@@ -2866,8 +2866,7 @@ civ_seipcs %>%
 
 
 # POST-PROD VARIABLES ------------
- # this has not be run already, when we do run it, remove similar code from the other scripts that do it 
-# (model.R, preprocessed_sustaincocoa..., direct_certified.R)
+
 civ_coop_bs_year = 
   civ_coop_bs_year %>% 
   rowwise() %>% 

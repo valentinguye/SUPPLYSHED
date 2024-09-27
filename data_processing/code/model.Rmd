@@ -53,9 +53,19 @@ MODEL_RESOLUTION_KM = 4
 # The cam at coop level is also needed for the exporting coop part (step 12)
 # coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) 
 
+cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL_RESOLUTION_KM, "km.Rdata"))) 
+
 links = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", MODEL_RESOLUTION_KM, "km.Rdata")))
 
-cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL_RESOLUTION_KM, "km.Rdata"))) 
+# Remove cells where there is no reachable coops, because many features are missing there. We are not interested in describing, learning from, or predicting in these cells. Post-estimation we will recollect them by re-reading the above. 
+cells = 
+  cells %>% 
+  filter(!CELL_NO_POTENTIAL_LINK) 
+
+links = 
+  links %>% 
+  filter(!CELL_NO_POTENTIAL_LINK) 
+
 
 ```
 
@@ -76,10 +86,20 @@ cells =
 
 links = 
   links %>% 
-  mutate(SPLIT = if_else(CELL_ANY_ACTUAL_COOP_LINK, "Train/test set", "Predict set")) %>% 
-  rename(COOP_STATUS_COOPCA = `COOP_STATUS_COOP-CA`)
+  # mutate(SPLIT = if_else(CELL_ANY_ACTUAL_COOP_LINK, "Train/test set", "Predict set")) %>%
+  mutate(SPLIT = if_else(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK, "Train/test set", "Predict set")) %>%
+  rename(COOP_STATUS_COOPCA = `COOP_STATUS_COOP-CA`,
+         COOP_DISTRICT_SAN_PEDRO = `COOP_DISTRICT_SAN-PEDRO`,
+         COOP_DISTRICT_GRAND_LAHOU = `COOP_DISTRICT_GRAND-LAHOU`,
+         COOP_DISTRICT_YAKASSE_ATTOBROU = `COOP_DISTRICT_YAKASSE-ATTOBROU`,
+         COOP_DISTRICT_ZOUAN_HOUNIEN = `COOP_DISTRICT_ZOUAN-HOUNIEN`,
+         COOP_DISTRICT_KOUN_FAO = `COOP_DISTRICT_KOUN-FAO`,
+         COOP_DISTRICT_GRAND_BASSAM = `COOP_DISTRICT_GRAND-BASSAM`, 
+         COOP_DISTRICT_MBATTO = `COOP_DISTRICT_M'BATTO`)
 
 ```
+
+
 
 
 # DESCRIPTIVES 
@@ -244,12 +264,11 @@ training_size <- 0.8
 # Split the data
 stg1_traintest =
   cells %>%
-  filter(CELL_VOLUME_OBSERVED) 
+  filter(SPLIT == "Train/test set") 
 
 stg1_topredict =
   cells %>%
-  filter(!CELL_VOLUME_OBSERVED) %>% 
-  filter(!CELL_NO_POTENTIAL_LINK)
+  filter(SPLIT == "Predict set") 
 
 stg1_training =
   stg1_traintest %>%
@@ -298,7 +317,7 @@ print(stg1_mfit)
 
 ```
 
-## Test 
+## Evaluation 
 ```{r}
 test_predictions <- predict(stg1_mfit, data=stg1_test)
 
@@ -356,7 +375,11 @@ training_size <- 0.8
 # Split the data
 stg2_traintest =
   links_ss %>%
-  filter(CELL_ACTUAL_LINK) 
+  filter(SPLIT == "Train/test set") 
+
+stg2_topredict =
+  links_ss %>%
+  filter(SPLIT == "Predict set") 
 
 stg2_training =
   stg2_traintest %>%
@@ -372,11 +395,11 @@ stg2_test =
 ## Feature selection
 Use Boruta here https://cran.r-project.org/web/packages/Boruta/Boruta.pdf
 ```{r}
-names(links)
-anyNA(links)
+# names(links_ss)
+anyNA(links_ss)
 
-stg1_allfeatures = 
-  cells %>% 
+stg2_allfeatures = 
+  links_ss %>% 
   select(
     ends_with("_HA"), CELL_TRI_MM, 
     CELL_N_BS_WITHIN_DIST, # CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
@@ -394,8 +417,8 @@ stg1_allfeatures =
     ) %>% 
   names() 
   
-
-stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+grep("'", stg2_allfeatures, value = T)
+stg2_mformula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP ~ ", paste0(stg2_allfeatures, collapse = " + ")))
 
 
 
@@ -408,30 +431,30 @@ stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste
 ## Model fit 
 ```{r}
 
-stg1_mfit = ranger(data = stg1_training, 
-                   formula = stg1_mformula,
+stg2_mfit = ranger(data = stg2_training, 
+                   formula = stg2_mformula_allfeatures,
                    importance = 'permutation')
 
-print(stg1_mfit)
+print(stg2_mfit)
 
 ```
 
-## Test 
+## Evaluation 
 ```{r}
-test_predictions <- predict(stg1_mfit, data=stg1_test)
+test_predictions <- predict(stg2_mfit, data=stg2_test)
 
 
 
 ```
 ## Predict 
 ```{r}
-stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_topredict)$predictions
+stg2_topredict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg2_mfit, data=stg2_topredict)$predictions
 
-stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+stg2_topredict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
 
 cells = 
   cells %>% 
-  left_join(stg1_topredict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
+  left_join(stg2_topredict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
             by = "CELL_ID") %>% 
   # this left NAs in cells not in the predict set, i.e. in the train/test set
   mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(

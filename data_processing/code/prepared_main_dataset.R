@@ -32,7 +32,7 @@ dir.create(here("temp_data", "prepared_main_dataset"))
 civ_crs <- 32630
 
 # Set this to 30000 to run a toy model, for tests etc.
-grid_size_m = 8000
+grid_size_m = 9000
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
@@ -732,6 +732,123 @@ potential_all_save = potential_all
 
 init_nrow_pa = nrow(potential_all) # # just to check that this section does not add any row
 
+
+
+## Link-level variables ----------------
+
+### Link  ID ------------------
+# Make a full link id for convenience
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_ACTUAL_COOP_BS_ID, LINK_POTENTIAL_COOP_BS_ID) %>% 
+  mutate(LINK_ID = cur_group_id()) %>% 
+  ungroup()
+stopifnot(nrow(potential_all) == length(unique(potential_all$LINK_ID)))
+
+
+### Distances -------------
+# Between every buyer location and either the producer location when available, or the cell centroid otherwise.
+
+# Prepare the two kinds:
+
+# Those with exact producer location
+potential_obsed =
+  potential_all %>% 
+  filter(!is.na(PRO_LONGITUDE)) %>% 
+  mutate(PROEXT_LONGITUDE = PRO_LONGITUDE,
+         PROEXT_LATITUDE  = PRO_LATITUDE)
+
+# Those without
+grid_ctoid_coords = 
+  grid_ctoid %>% 
+  st_transform(crs = 4326) 
+
+grid_ctoid_coords$PROEXT_LONGITUDE = st_coordinates(grid_ctoid_coords)[,1]
+grid_ctoid_coords$PROEXT_LATITUDE = st_coordinates(grid_ctoid_coords)[,2]
+grid_ctoid_coords = grid_ctoid_coords %>% select(CELL_ID, PROEXT_LONGITUDE, PROEXT_LATITUDE) %>% st_drop_geometry()
+grid_ctoid_coords$PROEXT_LATITUDE %>% summary()
+
+potential_notobsed =
+  potential_all %>% 
+  filter(is.na(PRO_LONGITUDE)) %>% 
+  left_join(
+    grid_ctoid_coords, 
+    by = "CELL_ID", 
+  ) %>% 
+  select(names(potential_obsed))
+
+# bind them 
+only_potential_propt = 
+  rbind(
+    potential_obsed, 
+    potential_notobsed
+  ) %>% 
+  st_as_sf(coords = c("PROEXT_LONGITUDE", "PROEXT_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) %>% 
+  # bc of that filter, it's not the full grid anymore, but only grid cells with at least one potential link with a coop
+  filter(!CELL_NO_POTENTIAL_LINK) %>% # this includes actual links with other buyers than coops 
+  
+  # In addition, remove the SC links with other buyers or unmatched coops bc they miss coordinates. 
+  # but leave links between JRC producers and their geolocated other buyers. 
+  filter(!(grepl("SUSTAINCOCOA", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
+
+# plot(st_geometry(only_potential_propt)) don't plot, its too heavy at 3km cells
+
+if(only_potential_propt %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
+   anyNA(only_potential_propt$BUYER_LONGITUDE)){stop("only_potential_propt does not have the expected spatial attributes at this stage")}
+
+only_potential_propt %>% filter(is.na(BUYER_LONGITUDE)) %>% View()
+# these are the 415 other/non-IC2B from SC.
+
+rm(potential_obsed, potential_notobsed)
+# st_distance needs to work on same size df. 
+only_potential_itmpt = 
+  only_potential_propt %>% 
+  st_drop_geometry() %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  st_transform(civ_crs) 
+
+only_potential_propt$LINK_DISTANCE_METERS <- 
+  st_distance(only_potential_propt, only_potential_itmpt, by_element = TRUE) %>% as.numeric()
+
+rm(only_potential_itmpt)
+
+# merge back to the full grid
+(init_nrow <- nrow(potential_all))
+potential_all = 
+  potential_all %>% 
+  left_join(only_potential_propt %>% 
+              select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS) %>% 
+              st_drop_geometry(), 
+            # (join by LINK_ID_OTHERS too, bc these links are also in only_potential_propt)
+            by = c("CELL_ID", "LINK_ID_COOPS", "LINK_ID_OTHERS", "LINK_POTENTIAL_COOP_BS_ID"))
+
+if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
+
+# In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
+# Should only be 0 now 
+stopifnot(
+  potential_all %>% 
+    mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
+      LINK_IS_ACTUAL ~ LINK_DISTANCE_METERS - LINK_ACTUALONLY_DISTANCE_METERS,
+      TRUE ~ NA
+    )) %>% 
+    pull(DIFF_DIST_TO_CELL_VS_FARM) %>% round(1) %>% na.omit() %>% unique() == 0
+)
+
+### Travel time -------------
+only_potential_coords = 
+  only_potential_propt %>% 
+  select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
+         PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE,
+  ) %>% 
+  st_drop_geometry() 
+
+# write.csv(only_potential_coords, here("temp_data", "potential_links_coords.csv"))
+
+rm(only_potential_propt, only_potential_coords)
+
+
 ## Cell-level topological variables ------------------
 
 ### Nb of potential coops -------- 
@@ -775,9 +892,9 @@ potential_all =
             by = join_by(CELL_DISTRICT_GEOCODE == DISTRICT_GEOCODE)) %>% 
   # in departments where there are no IC2B coops, the left_join gives NAs, 
   # --> replace by 0. 
-  mutate(CELL_AVG_N_LICBUY_IN_DPT = if_else(is.na(CELL_AVG_N_LICBUY_IN_DPT), 
+  mutate(CELL_N_COOP_IN_DPT = if_else(is.na(CELL_N_COOP_IN_DPT), 
                                             0, 
-                                            CELL_AVG_N_LICBUY_IN_DPT))
+                                      CELL_N_COOP_IN_DPT))
 
 
 
@@ -971,120 +1088,6 @@ names(potential_all)
 if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")}
 
 
-## Link-level variables ----------------
-
-### Link  ID ------------------
-# Make a full link id for convenience
-potential_all = 
-  potential_all %>% 
-  group_by(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_ACTUAL_COOP_BS_ID, LINK_POTENTIAL_COOP_BS_ID) %>% 
-  mutate(LINK_ID = cur_group_id()) %>% 
-  ungroup()
-stopifnot(nrow(potential_all) == length(unique(potential_all$LINK_ID)))
-
-
-### Distances -------------
-# Between every buyer location and either the producer location when available, or the cell centroid otherwise.
-
-# Prepare the two kinds:
-
-# Those with exact producer location
-potential_obsed =
-  potential_all %>% 
-  filter(!is.na(PRO_LONGITUDE)) %>% 
-  mutate(PROEXT_LONGITUDE = PRO_LONGITUDE,
-         PROEXT_LATITUDE  = PRO_LATITUDE)
-
-# Those without
-grid_ctoid_coords = 
-  grid_ctoid %>% 
-  st_transform(crs = 4326) 
-
-grid_ctoid_coords$PROEXT_LONGITUDE = st_coordinates(grid_ctoid_coords)[,1]
-grid_ctoid_coords$PROEXT_LATITUDE = st_coordinates(grid_ctoid_coords)[,2]
-grid_ctoid_coords = grid_ctoid_coords %>% select(CELL_ID, PROEXT_LONGITUDE, PROEXT_LATITUDE) %>% st_drop_geometry()
-grid_ctoid_coords$PROEXT_LATITUDE %>% summary()
-
-potential_notobsed =
-  potential_all %>% 
-  filter(is.na(PRO_LONGITUDE)) %>% 
-  left_join(
-    grid_ctoid_coords, 
-    by = "CELL_ID", 
-  ) %>% 
-  select(names(potential_obsed))
-
-# bind them 
-only_potential_propt = 
-  rbind(
-    potential_obsed, 
-    potential_notobsed
-  ) %>% 
-  st_as_sf(coords = c("PROEXT_LONGITUDE", "PROEXT_LATITUDE"), crs = 4326, remove = FALSE) %>% 
-  st_transform(civ_crs) %>% 
-  # bc of that filter, it's not the full grid anymore, but only grid cells with at least one potential link with a coop
-  filter(!CELL_NO_POTENTIAL_LINK) %>% # this includes actual links with other buyers than coops 
-  
-  # In addoition, remove the SC links with other buyers or unmatched coops bc they miss coordinates. 
-  # but leave links between JRC producers and their geolocated other buyers. 
-  filter(!(grepl("SUSTAINCOCOA", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
-
-# plot(st_geometry(only_potential_propt)) don't plot, its too heavy at 3km cells
-
-if(only_potential_propt %>% filter(st_is_empty(geometry)) %>% nrow() > 0 | 
-   anyNA(only_potential_propt$BUYER_LONGITUDE)){stop("only_potential_propt does not have the expected spatial attributes at this stage")}
-
-only_potential_propt %>% filter(is.na(BUYER_LONGITUDE)) %>% View()
-# these are the 415 other/non-IC2B from SC.
-
-rm(potential_obsed, potential_notobsed)
-# st_distance needs to work on same size df. 
-only_potential_itmpt = 
-  only_potential_propt %>% 
-  st_drop_geometry() %>% 
-  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
-  st_transform(civ_crs) 
-
-only_potential_propt$LINK_DISTANCE_METERS <- 
-  st_distance(only_potential_propt, only_potential_itmpt, by_element = TRUE) %>% as.numeric()
-
-rm(only_potential_itmpt)
-
-# merge back to the full grid
-(init_nrow <- nrow(potential_all))
-potential_all = 
-  potential_all %>% 
-  left_join(only_potential_propt %>% 
-              select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS) %>% 
-              st_drop_geometry(), 
-            # (join by LINK_ID_OTHERS too, bc these links are also in only_potential_propt)
-            by = c("CELL_ID", "LINK_ID_COOPS", "LINK_ID_OTHERS", "LINK_POTENTIAL_COOP_BS_ID"))
-
-if(init_nrow != nrow(potential_all)){stop("rows added unexpectedly")}
-
-# In actual links, gauge the error of computing distance from coop to cell center vs to farm center. 
-# Should only be 0 now 
-stopifnot(
-  potential_all %>% 
-    mutate(DIFF_DIST_TO_CELL_VS_FARM = case_when(
-      LINK_IS_ACTUAL ~ LINK_DISTANCE_METERS - LINK_ACTUALONLY_DISTANCE_METERS,
-      TRUE ~ NA
-    )) %>% 
-    pull(DIFF_DIST_TO_CELL_VS_FARM) %>% round(1) %>% na.omit() %>% unique() == 0
-)
-
-### Travel time -------------
-only_potential_coords = 
-  only_potential_propt %>% 
-  select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
-         PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE,
-  ) %>% 
-  st_drop_geometry() 
-
-# write.csv(only_potential_coords, here("temp_data", "potential_links_coords.csv"))
-
-rm(only_potential_propt, only_potential_coords)
-
 
 # SUB-SAMPLING ----------
 set.seed(8888)
@@ -1157,7 +1160,7 @@ rm(subsample_share, sc_coop_links, sc_coop_links_tokeep,
 potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
-  mutate(CELL_HAS_FALSENEG = any(grepl("CARGILL_", PRO_ID))) %>% 
+  mutate(CELL_HAS_FALSENEG = any(grepl("CARGILL_", PRO_ID)) & !(any(grepl("JRC_", PRO_ID)) | any(grepl("SUSTAINCOCOA_", PRO_ID)))) %>% 
   ungroup() %>% 
   mutate(LINK_POSSIBLE_FALSENEG = CELL_HAS_FALSENEG & LINK_IS_VIRTUAL)
 
@@ -1574,17 +1577,21 @@ candd_potential_all = potential_all
 # For JRC
 
 cell_n_jrc_vlg = list()
-for(grid_pot_size_km in c(5, 6, 7, 8, 9, 10)){ #  
+for(grid_pot_size_km in c(3, 4, 5, 6, 7, 8, 9)){ #  
   
   print(paste0(grid_pot_size_km, "km: "))
         
   candd_potential_all = 
     readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_pot_size_km, "km.Rdata")))
   
+  potential_jrc = 
+    candd_potential_all %>% 
+    filter(grepl("JRC_", PRO_ID))
+  nrow(potential_jrc)
+
   # number of cells per JRC village (the same cell can count for several villages)
   jrc_vlg_n_cells = 
-    candd_potential_all %>% 
-    filter(grepl("JRC_", PRO_ID)) %>% 
+    potential_jrc %>% 
     summarise(.by = PRO_VILLAGE_NAME, 
               # the number of cells over which every village spans (with potential double counting of cells)
               VILLAGE_N_CELLS = length(na.omit(unique(CELL_ID)))) %>% 
@@ -1592,53 +1599,74 @@ for(grid_pot_size_km in c(5, 6, 7, 8, 9, 10)){ #
   # total - i.e. number of cells with some JRC info (does not reflect number of villages, bc of double counting)
   # where 1 cell can have info from several villages and several cells can have info from the same village 
   # print(
-  #   paste0("# villages with double counting : ", sum(jrc_vlg_n_cells$VILLAGE_N_CELLS)
+  #   paste0(" : ", sum(jrc_vlg_n_cells$VILLAGE_N_CELLS)
   #   ))
 
   print(
     paste0("# cells with JRC info: ", 
-           candd_potential_all %>% 
-             filter(grepl("JRC_", PRO_ID)) %>% 
+           potential_jrc %>%  
              distinct(CELL_ID) %>% nrow()
     ))
   print(
     paste0("# villages contained in 1 single cell: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS==1) %>% nrow()
     ))
   print(
-    paste0("# villages spanning over more than 1 cell: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS>1) %>% nrow()
+    paste0("# villages spanning over more than 1 cells: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS>1) %>% nrow()
     ))
-  
-  # number of JRC villages that a single cell encompasses 
-  cell_n_jrc_vlg[[grid_pot_size_km]] = 
-    candd_potential_all %>% 
-    filter(grepl("JRC_", PRO_ID)) %>% 
-    group_by(CELL_ID) %>% 
-    mutate(CELL_N_JRC_VILLAGES = length(na.omit(unique(PRO_VILLAGE_NAME)))) %>% 
-    ungroup() %>% 
-    # the number of cells that encompass one or more villages, for each nb of village encompassed
-    summarise(.by = CELL_N_JRC_VILLAGES, 
-              N_CELLS = length(unique(CELL_ID))) %>% 
-    arrange(CELL_N_JRC_VILLAGES)
-  
-  # number of villages (also having the two kinds of double counting)... 
-  # print(
-  #   cell_n_jrc_vlg[[grid_pot_size_km]] %>% 
-  #     mutate(N_DIST_VILLAGES = CELL_N_JRC_VILLAGES * N_CELLS) %>% 
-  #     pull(N_DIST_VILLAGES) %>% sum()
-  # )
-  
   print(
-    paste0("# wasted villages: ", 
-           cell_n_jrc_vlg[[grid_pot_size_km]] %>% 
-                 mutate(N_WASTED_VILLAGES = (CELL_N_JRC_VILLAGES-1) * N_CELLS) %>%
-                 pull(N_WASTED_VILLAGES) %>% sum()
+    paste0("# villages spanning over more than 2 cells: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS>2) %>% nrow()
+    ))
+  print(
+    paste0("# villages spanning over more than 3 cells: ", jrc_vlg_n_cells %>% filter(VILLAGE_N_CELLS>3) %>% nrow()
     ))
   
+  # Now consider the number of CELLS with few farmers in them, 
+  # which is the problem with village split across cells, rather than the split it self
+  # (a village split in two halves, both representative, is fine for instance, 
+  # but an isolated farmer just beyond the cell cut off and alone and not representative in the next cell, is not fine.)
+  cell_n_jrc_vlg[[grid_pot_size_km]] = 
+  potential_jrc %>% 
+    summarise(.by = CELL_ID, 
+              CELL_N_JRC_FARMERS = length(unique(PRO_ID))) %>% 
+    arrange(CELL_N_JRC_FARMERS)
+  
+  
+  
+  # # number of JRC villages that a single cell encompasses 
+  # # No, rather the number of cells that have different villages in them, 
+  # # sorted by the number of these different villages
+  # cell_n_jrc_vlg[[grid_pot_size_km]] = 
+  #   potential_jrc %>% 
+  #   group_by(CELL_ID) %>% 
+  #   mutate(CELL_N_JRC_VILLAGES = length(unique(PRO_VILLAGE_NAME))) %>% 
+  #   ungroup() %>% 
+  #   # the number of cells that encompass one or more villages, for each nb of village encompassed
+  #   summarise(.by = CELL_N_JRC_VILLAGES, 
+  #             N_CELLS = length(unique(CELL_ID))) %>% 
+  #   arrange(CELL_N_JRC_VILLAGES)
+  # 
+  # # number of villages (also having the two kinds of double counting)... 
+  # # print(
+  # #   cell_n_jrc_vlg[[grid_pot_size_km]] %>% 
+  # #     mutate(N_DIST_VILLAGES = CELL_N_JRC_VILLAGES * N_CELLS) %>% 
+  # #     pull(N_DIST_VILLAGES) %>% sum()
+  # # )
+  # 
+  # print(
+  #   paste0("# wasted villages: ", 
+  #          cell_n_jrc_vlg[[grid_pot_size_km]] %>% 
+  #                mutate(N_WASTED_VILLAGES = (CELL_N_JRC_VILLAGES-1) * N_CELLS) %>%
+  #                pull(N_WASTED_VILLAGES) %>% sum()
+  #   ))
+  # 
   print(" ")
 
 }
 cell_n_jrc_vlg
 
+cell_n_jrc_vlg[[4]] %>% 
+  filter(CELL_N_JRC_FARMERS <= 2)
+cell_n_jrc_vlg[[4]] %>% nrow()
 
 
 # Flawed approach 
