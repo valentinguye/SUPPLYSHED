@@ -50,21 +50,13 @@ MODEL_RESOLUTION_KM = 4
 
 ## Assets
 
-# The cam at coop level is also needed for the exporting coop part (step 12)
 # coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv")) 
+
+consol = readRDS(here("temp_data", "actual_links_consolidated.Rdata"))
 
 cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL_RESOLUTION_KM, "km.Rdata"))) 
 
 links = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", MODEL_RESOLUTION_KM, "km.Rdata")))
-
-# Remove cells where there is no reachable coops, because many features are missing there. We are not interested in describing, learning from, or predicting in these cells. Post-estimation we will recollect them by re-reading the above. 
-cells = 
-  cells %>% 
-  filter(!CELL_NO_POTENTIAL_LINK) 
-
-links = 
-  links %>% 
-  filter(!CELL_NO_POTENTIAL_LINK) 
 
 
 ```
@@ -127,11 +119,25 @@ links =
 
 # ?tables::Heading
 
+cells %>% filter(SPLIT == "Train/test set") %>% nrow()
+
 ```
 ### Map of the cell data
 ```{r}
+toplot = 
+  cells %>% 
+    mutate(
+      `Cell type` = case_when(
+        CELL_NO_POTENTIAL_LINK ~ "No buying station within 72 km", 
+        CELL_ONLY_VIRTUAL_LINK ~ "No actual link data",
+        CELL_ACTUAL_LINK & !CELL_VOLUME_OBSERVED ~ "Data on actual link existence only",
+        CELL_ACTUAL_LINK & CELL_VOLUME_OBSERVED ~ "Data on actual link existence and size",
+      )) %>% 
+  st_as_sf(coords = c(""))
+toplot$`Cell type` %>% table()    
+
 ggarrange(
-  ggplot(plot_geocode) +
+  ggplot(toplot) +
       geom_sf(aes(fill = VOL_UNTRACED), col = "white", linewidth = unit(0.002,"pt")) + 
       labs(#title = "INDIRECT SOURCING, 2022", 
            fill =  "") + 
@@ -179,6 +185,18 @@ ggarrange(
 
 ```
 
+### Remove No-potential-links cells here 
+```{r}
+# Remove cells where there is no reachable coops, because many features are missing there. We are not interested in describing, learning from, or predicting in these cells. Post-estimation we will recollect them by re-reading the above. 
+cells = 
+  cells %>% 
+  filter(!CELL_NO_POTENTIAL_LINK) 
+
+links = 
+  links %>% 
+  filter(!CELL_NO_POTENTIAL_LINK) 
+
+```
 
 
 ### Cell data features

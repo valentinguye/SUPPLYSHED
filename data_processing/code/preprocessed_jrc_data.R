@@ -980,24 +980,22 @@ village_bbox_2$VILLAGE_BBOX_AREA_KM2 %>% quantile(probs = seq(.95, 1, by = .01))
 
 rm(village_bbox_2)
 
-## Remove poorly represented villages ----------
-
+## Remove poorly represented villages 
 # For the supply shed model specifically, we don't want villages that have too few 
 # farmers, because they would not represent the whole village (and cell) well.
-jrc_geo = 
-  jrc_geo %>% 
-  group_by(PRO_VILLAGE_NAME) %>% 
-  mutate(VILLAGE_N_FARMERS = n()) %>% 
-  ungroup() 
-
-jrc_geo %>% 
-  summarise(.by = VILLAGE_N_FARMERS, 
-            NUMBER_VILLAGES = length(unique(PRO_VILLAGE_NAME))) %>% 
-  arrange(VILLAGE_N_FARMERS)
-
-jrc_geo = 
-  jrc_geo %>% 
-  filter(VILLAGE_N_FARMERS > 2)
+# BUT NO, actually we rather remove cells with few farmers after matching JRC data with cells. 
+# jrc_geo = 
+#   jrc_geo %>% 
+#   group_by(PRO_VILLAGE_NAME) %>% 
+#   mutate(VILLAGE_N_FARMERS = n()) %>% 
+#   ungroup() 
+# jrc_geo %>% 
+#   summarise(.by = VILLAGE_N_FARMERS, 
+#             NUMBER_VILLAGES = length(unique(PRO_VILLAGE_NAME))) %>% 
+#   arrange(VILLAGE_N_FARMERS)
+# jrc_geo = 
+#   jrc_geo %>% 
+#   filter(VILLAGE_N_FARMERS > 2)
 
 ## Link variables ----------------
 

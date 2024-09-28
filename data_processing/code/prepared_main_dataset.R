@@ -32,7 +32,7 @@ dir.create(here("temp_data", "prepared_main_dataset"))
 civ_crs <- 32630
 
 # Set this to 30000 to run a toy model, for tests etc.
-grid_size_m = 9000
+grid_size_m = 4000
 
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
@@ -187,6 +187,9 @@ consol <- filter(consol, !is.na(LINK_YEAR))
 # for now remove bc not useful
 consol <- select(consol, -LINK_ID_ONLYACTUAL)
 
+## Export -------
+# For descriptions in next scripts
+saveRDS(consol, here("temp_data", "actual_links_consolidated.Rdata"))
 
 ## Split coops/other links ---------------
 # BUYER_IS_COOP is true including for links with buyers we believe are coops but are not matched with IC2B (in SC data).
@@ -291,9 +294,10 @@ coopbs_10km_buffer =
 
 ## Set spatial parameters ------------
 # The size of the grid is an important parameter. 
-# 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
-# The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
-# At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.5 x 0.5 km) or less.
+# Old remarks: 
+  # 12km is because 75% of cocoa producers surveyed by the JRC have their cocoa plots less than 6km away from their house.
+  # The average location of the producer in a grid cell is in it's centroid. Taking 6km away in any direction from the center implies 12km. 
+  # At the same time, in Cargill data, 95% of the plots of the same farmer fit in bounding boxes of 25 hectares (0.5 x 0.5 km) or less.
 
 ## Limit to cocoa growing region 
 cocoa_departements = 
@@ -406,6 +410,29 @@ grid_ctoid =
   grid_poly %>% 
   mutate(geometry = st_centroid(geometry))
 
+# add the geodesic coordinates of centroids, for later plots, to BOTH grid_poly and grid_ctoid (necessary)
+grid_ctoid = 
+  bind_cols(
+    grid_ctoid, 
+    grid_ctoid %>% 
+      st_transform(crs = 4326) %>% 
+      st_coordinates() %>% 
+      as.data.frame() %>% 
+      rename(CELL_LONGITUDE = X, 
+             CELL_LATITUDE = Y)
+  )
+grid_poly = 
+  bind_cols(
+    grid_poly, 
+    grid_ctoid %>% 
+      st_transform(crs = 4326) %>% 
+      st_coordinates() %>% 
+      as.data.frame() %>% 
+      rename(CELL_LONGITUDE = X, 
+             CELL_LATITUDE = Y)
+  )
+
+# MATCH TO CONSOLIDATED ACTUAL LINKS
 # This multiplies the number of rows (equal to number of cells in grid_poly) 
 # by the number of actual links in every grid cell.  
 grid_actual = 
@@ -1091,6 +1118,7 @@ if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")
 
 # SUB-SAMPLING ----------
 set.seed(8888)
+
 ## SC coop links ------------------------
 
 # As checked below if run without sub-sampling, and in SC pre-processing script, 
@@ -1155,14 +1183,19 @@ rm(subsample_share, sc_coop_links, sc_coop_links_tokeep,
 
 
 ## Virtual links ------------------
-### Remove false negatives -------------------
+
+### Remove Cargill false negatives -------------------
 
 potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
-  mutate(CELL_HAS_FALSENEG = any(grepl("CARGILL_", PRO_ID)) & !(any(grepl("JRC_", PRO_ID)) | any(grepl("SUSTAINCOCOA_", PRO_ID)))) %>% 
+  mutate(
+    CELL_HAS_FALSENEG = any(grepl("CARGILL_", PRO_ID)) & !(any(grepl("JRC_|SUSTAINCOCOA_", PRO_ID)))) %>% 
   ungroup() %>% 
   mutate(LINK_POSSIBLE_FALSENEG = CELL_HAS_FALSENEG & LINK_IS_VIRTUAL)
+
+if(potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(PRO_ID) %>% grepl(pattern = "JRC|SUSTAIN") %>% any()
+){stop()}
 
 # keep working on the same object actually, because when aggregating to cells for 1st stage, 
 # we want to have all the virtual links from Cargill cells. The fact that they can 
@@ -1180,12 +1213,53 @@ potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(CELL_ID) %>% unique() %>% l
 # potential_all %>% filter(CELL_HAS_FALSENEG) %>% select(LINK_POSSIBLE_FALSENEG, everything()) %>% View()
 # potential_all %>% filter(CELL_ID == 11657) %>% select(LINK_POSSIBLE_FALSENEG, everything()) %>% View()
 
-# check that no cell is completely removed (it shouldn't)
+# check that this does not cover whole cells (since it should only cover virtual links)
 stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
             pull(CELL_ID) %>% unique() %>% length() == nrow(grid_poly)
           )
 potential_all$CELL_ID %>% unique() %>% length()
 
+### Remove JRC false negatives --------------
+# These are in cells with isolated farmers that get separated from their village by the cell match. 
+# + the few cases of villages with very few surveyed farmers 
+# (not addressed in JRC script to be addressed here.)
+# (Note that in the first stage, they get weights proportional to representativity, 
+# so we only address virtual links being false negatives in the second stage here.)
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    CELL_N_JRC_FARMERS = length(na.omit(unique(grep(pattern = "JRC_", x = PRO_ID, value = TRUE))))
+  ) %>% 
+  ungroup()
+potential_all %>% 
+  summarise(.by = CELL_N_JRC_FARMERS, 
+            N_CELLS = length(unique(CELL_ID))) %>% 
+  arrange(CELL_N_JRC_FARMERS)
+
+# Discard virtual links in cells with less than 3 farmers 
+# (but not in cells with 0 JRC farmers of, these are all the others, 
+#  nor in cells where there could be a sustaincocoa village)
+potential_all =
+  potential_all %>% 
+  mutate(
+    LINK_POSSIBLE_FALSENEG = case_when(
+      CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_", PRO_ID))) ~ TRUE, 
+      TRUE ~ LINK_POSSIBLE_FALSENEG
+  ))
+potential_all %>% filter(LINK_POSSIBLE_FALSENEG) %>% View()
+potential_all %>% filter(CELL_ID == 385) %>% View()
+# number of JRC villages in the data 
+# potential_all %>% filter(grepl("JRC_", x = PRO_ID)) %>% pull(PRO_VILLAGE_NAME) %>% unique() %>% length()
+# potential_all %>% filter(grepl("JRC_", x = PRO_ID) & LINK_POSSIBLE_FALSENEG) %>% pull(PRO_VILLAGE_NAME) %>% unique() %>% length()
+# but that's not what matters here. We'd rather know how many cells get their virtual links removed
+potential_all %>% filter(CELL_N_JRC_FARMERS %in% 1:3 & LINK_POSSIBLE_FALSENEG) %>%
+  pull(CELL_ID) %>% unique() %>% length()
+
+# check that no cell is completely removed (it shouldn't)
+stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
+            pull(CELL_ID) %>% unique() %>% length() == nrow(grid_poly)
+)
 
 ### Random sub-sampling --------------------
 
@@ -1304,6 +1378,7 @@ potential_1st =
   potential_1st %>% 
   select(!starts_with("COOP_DISTRICT_"), -COOP_STATUS)  # this cannot be aggregated - we could do it for cell however... 
   
+
 ## Dependent variable ------------
 
 # Now that all that was possibly measured at link level has been measured, 
@@ -1316,8 +1391,6 @@ potential_1st =
 potential_1st %>% filter(!is.na(LINK_VOLUME_KG)) %>% nrow()
 potential_1st$LINK_VOLUME_KG %>% summary()
 potential_1st %>% filter(!is.na(LINK_VOLUME_KG)) %>% View()
-
-
 
 potential_1st$BUYER_IS_COOP %>% summary()
 potential_1st %>% filter(is.na(BUYER_IS_COOP)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% summary()
@@ -1528,6 +1601,22 @@ cell_countvars =
   mutate(CELL_ID = CELL_ID...1) %>% 
   select(!starts_with("CELL_ID..."))
 
+## Representativity weights ---------------------
+cell_weights = 
+  potential_1st %>% 
+  summarise(.by = "CELL_ID", 
+            CELL_N_JRC_FARMERS = length(na.omit(unique(grep(pattern = "JRC_", x = PRO_ID, value = TRUE)))),
+            CELL_COCOA_HA = unique(CELL_COCOA_HA)) %>% 
+  mutate(
+    CELL_REPRESENTATIVITY_WEIGHT = case_when(
+      CELL_COCOA_HA > 0 ~ CELL_N_JRC_FARMERS/CELL_COCOA_HA, 
+      TRUE ~ NA
+    ),
+    STANDARDIZER = sum(CELL_REPRESENTATIVITY_WEIGHT, na.rm = TRUE), 
+    CELL_REPRESENTATIVITY_STD_WEIGHT = CELL_REPRESENTATIVITY_WEIGHT/STANDARDIZER) %>% 
+  select(CELL_ID, CELL_REPRESENTATIVITY_STD_WEIGHT)
+stopifnot(cell_weights$CELL_REPRESENTATIVITY_STD_WEIGHT %>% sum(na.rm = TRUE) == 1)
+
 ## Merge all cell variables -------------
 cell_all = 
   cell_depvars %>%  
@@ -1538,6 +1627,8 @@ cell_all =
   inner_join(cell_othermeanvars, 
              by = "CELL_ID") %>% 
   inner_join(cell_countvars, 
+             by = "CELL_ID") %>% 
+  inner_join(cell_weights, 
              by = "CELL_ID")
   
 stopifnot(potential_1st$CELL_ID %>% unique() %>% length() == nrow(cell_all))
@@ -1554,7 +1645,6 @@ for(var in prop_var_names){
 if(
   checks_list %>% unlist() %>% any()
 ){stop("some variables are not proportions while they are expected so")}
-
 
 
 
