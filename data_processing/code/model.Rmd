@@ -34,8 +34,13 @@ library(exactextractr)
 library(stars)
 library(pals)
 library(modelsummary) # necessary to load it after DescTools
+
+# ML libraries
 library(ranger)
 library(parsnip)
+library(xgboost)
+library(pROC)
+library(yardstick)
 
 set.seed(8888)
 
@@ -46,7 +51,13 @@ source(here("code", "theme_trase.R"))
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
+# use the projected CRS used by BNETD for their 2020 land use map. 
+civ_crs <- 32630
+
 MODEL_RESOLUTION_KM = 4
+
+xlabs = c(-8, -6, -4)
+ylabs = c(5, 7, 9)
 
 ## Assets
 
@@ -58,28 +69,18 @@ cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL
 
 links = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", MODEL_RESOLUTION_KM, "km.Rdata")))
 
+departements <- read_sf(here("input_data/s3/CIV_DEPARTEMENTS.geojson"))
+departements = 
+  st_transform(departements, crs = civ_crs)
 
-```
-
-```{r}
-# Pre-processing to ease manipulation/display
-
-# cells %>% select(ends_with("COOP-CA")) %>% names()
 cells = 
   cells %>% 
-  mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Train/test set", "Predict set")) %>% 
   rename(CELL_PROP_COOP_STATUS_COOPCA = `CELL_PROP_COOP_STATUS_COOP-CA`, 
          CELL_PROP_1_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_1_NEAREST_COOP_STATUS_COOP-CA`, 
          CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_5_NEAREST_COOP_STATUS_COOP-CA`)
 
-# (this is different from CELL_ACTUAL_LINK bc actual links don't always have volume attached)
-
-
-
 links = 
   links %>% 
-  # mutate(SPLIT = if_else(CELL_ANY_ACTUAL_COOP_LINK, "Train/test set", "Predict set")) %>%
-  mutate(SPLIT = if_else(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK, "Train/test set", "Predict set")) %>%
   rename(COOP_STATUS_COOPCA = `COOP_STATUS_COOP-CA`,
          COOP_DISTRICT_SAN_PEDRO = `COOP_DISTRICT_SAN-PEDRO`,
          COOP_DISTRICT_GRAND_LAHOU = `COOP_DISTRICT_GRAND-LAHOU`,
@@ -89,8 +90,62 @@ links =
          COOP_DISTRICT_GRAND_BASSAM = `COOP_DISTRICT_GRAND-BASSAM`, 
          COOP_DISTRICT_MBATTO = `COOP_DISTRICT_M'BATTO`)
 
+# Make target a factor
+links = 
+  links %>% 
+  mutate(LINK_IS_ACTUAL_COOP_class = factor(if_else(LINK_IS_ACTUAL_COOP, "Actual links", "Virtual links"), 
+                                               levels = c("Virtual links", "Actual links"))) 
+
 ```
 
+## Remove some cell/link categories 
+```{r}
+# Remove cells outside in-land territory
+# cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% pull(SPLIT) %>% unique()
+# cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% nrow()
+cells = 
+  cells %>% 
+  filter(!is.na(CELL_DISTRICT_NAME))
+
+links = 
+  links %>% 
+  filter(!is.na(CELL_DISTRICT_NAME))
+
+# In addition, from links, we also remove: 
+links =
+  links %>%
+  # Remove links with non-IC2B coops or with other buyers, 
+  # because they would count as FALSE on LINK_IS_ACTUAL_COOP, the target var, while not being exactly what we are after
+  filter(!LINK_IS_ACTUAL_OTHER) %>% 
+  # Remove empty links that only represent cells from where no coop is reachable. 
+  # We are not interested in describing, learning from, or predicting in these cells. We will recollect them post-estimation
+  filter(!CELL_NO_POTENTIAL_LINK)
+
+stopifnot(links %>% 
+            filter(!LINK_IS_VIRTUAL) %>% nrow() == sum(links$LINK_IS_ACTUAL_COOP))
+```
+
+
+# EXTRACT TRAIN/TEST SETS
+Any processing on explanatory features' values should be made before this step. 
+```{r}
+cells = 
+  cells %>% 
+  mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Train/test set", "No data")) 
+
+stg1_traintest =
+  cells %>%
+  filter(SPLIT == "Train/test set") 
+
+links = 
+  links %>% 
+  mutate(SPLIT = if_else(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK, "Train/test set", "No data")) 
+
+stg2_traintest =
+  links %>%
+  filter(SPLIT == "Train/test set") 
+
+```
 
 
 
@@ -104,125 +159,83 @@ links =
 #   select(!starts_with("CELL_PROP") & !starts_with("CELL_COUNT")) %>% 
 #   datasummary_skim()
 
+cells = 
+  cells %>% 
+  mutate(CELL_2ND_STAGE_ONLY = CELL_ANY_ACTUAL_COOP_LINK & !CELL_VOLUME_OBSERVED, 
+         CELL_NO_ACTUAL_LINK_DATA = CELL_ONLY_VIRTUAL_LINK | (!CELL_ONLY_VIRTUAL_LINK & 
+                                                              CELL_ACTUAL_ONLYOTHER_LINK & 
+                                                              !CELL_VOLUME_OBSERVED))
+# nocat = 
+#   cells %>%
+#   filter(!CELL_NO_POTENTIAL_LINK & !CELL_NO_ACTUAL_LINK_DATA & !CELL_2ND_STAGE_ONLY & !CELL_VOLUME_OBSERVED) %>% 
+#   View()
+# cell_ids_check = nocat$CELL_ID
+# links %>% filter(CELL_ID %in% cell_ids_check) %>% 
+#   pull(CELL_ACTUAL_ONLYOTHER_LINK) %>% summary()
+
 # export
 (datasummary(N + Percent()  ~ 
-              (`No potential link` = (CELL_NO_POTENTIAL_LINK==T)) + 
-              (`Only virtual links` = (CELL_ONLY_VIRTUAL_LINK==T)) + 
-              (`Actual links with cooperatives only` = (CELL_ACTUAL_ONLYCOOP_LINK==T)) + 
-              (`Actual links with other buyers only` = (CELL_ACTUAL_ONLYOTHER_LINK==T)) + 
-              (`Actual links with both` = (CELL_ACTUAL_BOTH_LINK==T)) + 
+              (`No buying station within 72 km` = (CELL_NO_POTENTIAL_LINK==T)) + 
+              (`No actual link data` = (CELL_NO_ACTUAL_LINK_DATA==T)) + 
+              (`Actual link data for 2nd stage only` = (CELL_2ND_STAGE_ONLY==T)) + 
+              (`Actual link data for 1st stage` = (CELL_VOLUME_OBSERVED==T)) + 
               1, 
               data = cells,
               fmt = 1,
-              align = "ccccccc",
+              align = "cccccc",
               output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
+# Cells with actual link data for both stages have JRC or SC data on actual link existence, size and type of buyer (cooperative or other), that is representative for the whole cell. 
 
 # ?tables::Heading
 
 cells %>% filter(SPLIT == "Train/test set") %>% nrow()
 
 ```
+
 ### Map of the cell data
 ```{r}
 toplot = 
   cells %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs) %>% 
     mutate(
-      `Cell type` = case_when(
+      `Cell information content` = case_when(
         CELL_NO_POTENTIAL_LINK ~ "No buying station within 72 km", 
-        CELL_ONLY_VIRTUAL_LINK ~ "No actual link data",
-        CELL_ACTUAL_LINK & !CELL_VOLUME_OBSERVED ~ "Data on actual link existence only",
-        CELL_ACTUAL_LINK & CELL_VOLUME_OBSERVED ~ "Data on actual link existence and size",
-      )) %>% 
-  st_as_sf(coords = c(""))
-toplot$`Cell type` %>% table()    
+        CELL_NO_ACTUAL_LINK_DATA ~ "No actual link data",
+        CELL_VOLUME_OBSERVED ~ "Actual link data for 1st stage",
+        CELL_2ND_STAGE_ONLY ~ "Actual link data for second stage only",
+      )) 
+toplot$`Cell information content` %>% table()    
 
-ggarrange(
-  ggplot(toplot) +
-      geom_sf(aes(fill = VOL_UNTRACED), col = "white", linewidth = unit(0.002,"pt")) + 
-      labs(#title = "INDIRECT SOURCING, 2022", 
-           fill =  "") + 
-      scale_size_identity() +
-     
-      scale_fill_gradient(na.value = trase_palettes[["no_data"]],
-                          low = trase_palettes[["negative"]][1],
-                          high = trase_palettes[["negative"]][9],
-                          labels=unit_format(unit = "kMT", scale = 1e-3)) +
 
-      theme_minimal() +
-      scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
-      scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
-      theme(
-        legend.key.width = unit(1.5, "cm"),
-        legend.text = element_text(size = 12, face = "bold", family = "DM Sans", colour = trase_palettes[["legend"]]), # , face = "bold"
-        ),
-  
-  ggplot(plot_geocode) +
-    geom_sf(aes(fill = PCT_UNTRACED_GEOCODE), col = "white", linewidth = unit(0.002,"pt")) + 
-    labs(#title = "DIRECT SOURCING FROM COOPERATIVES \nIN PROPORTION TO PRODUCTION, 2022", 
-         fill =  "") + 
-    scale_size_identity() +
-    
-    # scale_fill_gradientn(colours = c(rev(trase_palettes[["commodities"]]), 
-    #                                    trase_palettes[["negative"]]),
-    #                      na.value = trase_palettes[["no_data"]],
-    #                      labels=unit_format(unit = "%")) + 
-    scale_fill_gradient(na.value = trase_palettes[["no_data"]],
-                        low = trase_palettes[["commodities"]][1],
-                        high = trase_palettes[["commodities"]][9], # TraseGreen_TraseGray_TraseRed
-                        labels=unit_format(unit = "%")) +
-    
-    theme_minimal() +
+ggplot(toplot) +
+    geom_sf(aes(col = `Cell information content`), shape = 15) + 
+    geom_sf(data = departements, fill = "transparent", col = "black") +
+    # scale_colour_brewer(na.value = NULL,
+    #                     type = "qual",
+    #                     direction = -1,
+    #                     palette = "Set3") +
+  scale_colour_manual(
+    values = c("#E763DF" , "#639DE6", "lightgrey", "darkgrey")
+  ) +
+  # labs(fill = "Extent of the Ivorian cocoa growing region") + 
+    theme_minimal() + 
     scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
-    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
-    theme(
-      legend.key.width = unit(1.5, "cm"),
-        legend.text = element_text(size = 12, face = "bold", family = "DM Sans", colour = trase_palettes[["legend"]]), # , face = "bold"
-       ),
-  
-  ncol = 2, nrow = 1, common.legend = FALSE, legend = "bottom",
-  widths = c(1, 1)
-) 
-
-```
-
-### Remove No-potential-links cells here 
-```{r}
-# Remove cells where there is no reachable coops, because many features are missing there. We are not interested in describing, learning from, or predicting in these cells. Post-estimation we will recollect them by re-reading the above. 
-cells = 
-  cells %>% 
-  filter(!CELL_NO_POTENTIAL_LINK) 
-
-links = 
-  links %>% 
-  filter(!CELL_NO_POTENTIAL_LINK) 
-
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
+    
 ```
 
 
 ### Cell data features
-
-#### Target in the train/test set 
+In the train/test set 
 ```{r}
-names(cells)
+# names(cells)
 
-(cells %>% 
-  filter(CELL_VOLUME_OBSERVED) %>% 
-  transmute(
-    # `Cell ID` = CELL_ID,
-    `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
-    `Cocoa output from cells (kg)` = CELL_VOLUME_KG) %>% 
-  datasummary_skim(output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_volumes.png"))))
-
-
-
-```
-
-#### Cell data balance tests
-```{r}
-
-cells_features_tobalance =
+cells_traintest_features =
   cells %>% 
-  select(SPLIT, 
+  select(Sample = SPLIT, 
+         `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
+         `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
          `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
          `Avg. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
          `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
@@ -233,41 +246,73 @@ cells_features_tobalance =
          `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
          `Proportion of 5 nearest cooperatives with CCP` = CELL_PROP_5_NEAREST_COOP_SSI_CARGILL,
          `Proportion of 5 nearest cooperatives being COOP-CA` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
-         `Proportion of 5 nearest cooperatives being SCOOPS` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOP-CA`,
+         `Proportion of 5 nearest cooperatives being SCOOPS` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
          `Total # members of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
          `Total # BS of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
          `Avg. # buying companies in 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_N_KNOWN_BUYERS,
          `Avg. TRI around 5 nearest cooperatives (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
          `Avg. cocoa extent around 5 nearest cooperatives (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_COCOA_HA,
          `Avg. settlements extent around 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
-         ) 
+         ) %>% 
+    filter(Sample == "Train/test set")
 
-(datasummary_balance(~SPLIT, 
-                      data = cells_features_tobalance, 
-                      stars = TRUE,
-                      # title = "Summaries and balance tests on cell data sets to train/test and to predict the cell share of cooperative outlet", 
-                      notes = "'BS' stands for cooperative buying stations.", 
-                     output = here("outputs", "cells_balance.png")))        
-  
 
+(datasummary_skim(data = cells_traintest_features, 
+                 output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html"))))
+
+```
+
+Cell data balance tests
+```{r}
+# (datasummary_balance(~SPLIT, 
+#                       data = cells_features_tobalance, 
+#                       stars = TRUE,
+#                       # title = "Summaries and balance tests on cell data sets to train/test and to predict the cell share of cooperative outlet", 
+#                       notes = "'BS' stands for cooperative buying stations.", 
+#                      output = here("outputs", "cells_balance.png")))        
 ```
 
 
 ## Links descriptive statistics
 
-### Structure of the link data 
+### Features in the Potential-links data  
+With differences between actual and/virtual in train/test? 
+
+(Alternatively, we could look at: 
+- Only in actual 
+- Between train/test and predict sets)
+
 ```{r}
+names(stg2_traintest)
+stg2_features_tobalance_1 =
+  stg2_traintest %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class, 
+         LINK_DISTANCE_METERS,
+         LINK_IS_WITH_1_NEAREST_COOPS,
+         LINK_IS_WITH_5_NEAREST_COOPS,
+         CELL_N_BS_WITHIN_DIST,
+         CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
+         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_TRI_MM)
 
-```
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_1, 
+                    output = here("outputs", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
 
-### Features in the processed link data  
-```{r}
-links_features_tosum %>% 
-  mutate(LINK_YEAR = as.character(LINK_YEAR)) %>% 
-  select(starts_with("LINK_"), 
-         all_of("COOP_DISTRICT_NAME", "COOP_STATUS"))
+stg2_features_tobalance_2 =
+  stg2_traintest %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class,
+         COOP_FARMERS, 
+         COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
+         starts_with("COOP_STATUS_"), 
+         COOP_CERTIFIED, COOP_RFA, COOP_UTZ, COOP_FT, 
+         COOP_HAS_SSI, starts_with("COOP_SSI_"), 
+         starts_with("COOP_BS_10KM_"))
 
-  
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_2)
+
 ```
 
 
@@ -279,15 +324,6 @@ Resources on data split here: https://encord.com/blog/train-val-test-split/
 ```{r}
 training_size <- 0.8
 
-# Split the data
-stg1_traintest =
-  cells %>%
-  filter(SPLIT == "Train/test set") 
-
-stg1_topredict =
-  cells %>%
-  filter(SPLIT == "Predict set") 
-
 stg1_training =
   stg1_traintest %>%
   slice_sample(prop = training_size) 
@@ -296,14 +332,16 @@ stg1_test =
   stg1_traintest %>%
   filter(!CELL_ID %in% stg1_training$CELL_ID) 
 
+stg1_predict = 
+  cells %>% 
+  filter(!CELL_NO_POTENTIAL_LINK)
 ```
 
 ## Feature selection
 Use Boruta here https://cran.r-project.org/web/packages/Boruta/Boruta.pdf
 ```{r}
-names(cells)
-anyNA(cells)
-
+# names(cells)
+# anyNA(cells)
 stg1_allfeatures = 
   cells %>% 
   select(
@@ -318,21 +356,17 @@ stg1_allfeatures =
 
 stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
 
-
-
-
 ```
 
 
 ## Model fit 
 ```{r}
-
 stg1_mfit = ranger(data = stg1_training, 
-                   formula = stg1_mformula,
-                   importance = 'permutation')
+                   formula = stg1_mformula_allfeatures,
+                   importance = 'permutation', 
+                   case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT")
 
 print(stg1_mfit)
-
 ```
 
 ## Evaluation 
@@ -340,17 +374,19 @@ print(stg1_mfit)
 test_predictions <- predict(stg1_mfit, data=stg1_test)
 
 
-
 ```
+
+
+
 ## Predict 
 ```{r}
-stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_topredict)$predictions
+stg1_predict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_predict)$predictions
 
-stg1_topredict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+stg1_predict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
 
 cells = 
   cells %>% 
-  left_join(stg1_topredict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
+  left_join(stg1_predict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
             by = "CELL_ID") %>% 
   # this left NAs in cells not in the predict set, i.e. in the train/test set
   mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
@@ -363,26 +399,19 @@ cells$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
 # at this stage, the NAs come from CELL_PROP_VOLUME_COOPS, in cells with no potential link at all 
 stopifnot(cells %>% filter(is.na(CELL_PRED_PROP_VOLUME_COOPS)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% all())
 
-
-
-
-
-
 ```
 
 
 # SECOND STAGE 
- KEEP ONLY LINKS WITH COOPS AND REMOVE ACTUAL LINKS WITH OTHERS
- USE LINK_IS_ACTUAL_COOP ? 
- 
+
 ## Apply sub-sampling
 ```{r}
 links_ss = 
   links %>% 
   filter(!LINK_POSSIBLE_FALSENEG) %>% 
   filter(LINK_TO_KEEP_TO_US_VIRTUAL) # this is only TRUE currently. 
-
 ```
+
 
 
 ## Data split
@@ -395,10 +424,6 @@ stg2_traintest =
   links_ss %>%
   filter(SPLIT == "Train/test set") 
 
-stg2_topredict =
-  links_ss %>%
-  filter(SPLIT == "Predict set") 
-
 stg2_training =
   stg2_traintest %>%
   slice_sample(prop = training_size) 
@@ -406,6 +431,9 @@ stg2_training =
 stg2_test =
   stg2_traintest %>%
   filter(!LINK_ID %in% stg2_training$LINK_ID) 
+
+
+stg2_predict = links
 
 ```
 
@@ -436,43 +464,160 @@ stg2_allfeatures =
   names() 
   
 grep("'", stg2_allfeatures, value = T)
-stg2_mformula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP ~ ", paste0(stg2_allfeatures, collapse = " + ")))
 
-
+stg2_mformula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_allfeatures, collapse = " + ")))
 
 
 ```
 
-
-
-
 ## Model fit 
 ```{r}
 
-stg2_mfit = ranger(data = stg2_training, 
-                   formula = stg2_mformula_allfeatures,
-                   importance = 'permutation')
+stg2_mfit =
+  boost_tree(
+    mode = "classification",
+    mtry = 6,
+    trees = 5,
+    min_n = 5
+  ) %>%
+  fit(data = stg2_training,
+      formula = stg2_mformula_allfeatures)
 
-print(stg2_mfit)
+# stg2mfit = 
+#   xgboost(
+#   label = stg2_training %>% select(LINK_IS_ACTUAL_COOP_class) %>% as.matrix(), 
+#   data = stg2_training %>% select(-LINK_IS_ACTUAL_COOP_class), 
+#   nrounds = 6
+# )
+
 
 ```
 
 ## Evaluation 
 ```{r}
-test_predictions <- predict(stg2_mfit, data=stg2_test)
+(test_pred_prob <- predict(stg2_mfit, 
+                             new_data=stg2_test, 
+                             type = "prob"))
 
+stg2_test$LINK_PRED_ACTUAL_COOP_prob = test_pred_prob$`.pred_Actual links`
+
+
+(test_pred_class <- predict(stg2_mfit, 
+                             new_data=stg2_test, 
+                             type = "class")) # this implements a 50% threshold, 
+# i.e., if the predicted link is more likely to exist than to not exist, the prediction is classified as "Actual link" 
+stg2_test$LINK_PRED_ACTUAL_COOP_class = test_pred_class$.pred_class
+
+stg2_test = 
+  stg2_test %>% 
+  mutate(TP = LINK_PRED_ACTUAL_COOP_class == "Actual links"  & LINK_IS_ACTUAL_COOP_class == "Actual links",
+         TN = LINK_PRED_ACTUAL_COOP_class == "Virtual links" & LINK_IS_ACTUAL_COOP_class == "Virtual links",
+         FP = LINK_PRED_ACTUAL_COOP_class == "Actual links"  & LINK_IS_ACTUAL_COOP_class == "Virtual links",
+         FN = LINK_PRED_ACTUAL_COOP_class == "Virtual links" & LINK_IS_ACTUAL_COOP_class == "Actual links")
 
 
 ```
-## Predict 
-```{r}
-stg2_topredict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg2_mfit, data=stg2_topredict)$predictions
 
-stg2_topredict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+### Accuracy 
+we can calculate the overall accuracy score as a sum of instances where predicted and actual classes match divided by the total number of rows:
+```{r}
+
+(accuracy = sum(stg2_test$LINK_PRED_ACTUAL_COOP_class == stg2_test$LINK_IS_ACTUAL_COOP_class) / nrow(stg2_test))
+(accuracy = (sum(stg2_test$TP) + sum(stg2_test$TN) ) / (sum(stg2_test$TP) + sum(stg2_test$TN)  + sum(stg2_test$FP) + sum(stg2_test$FN)))
+
+```
+
+### True Positive Rate (Recall) 
+```{r}
+(recall = sum(stg2_test$TP) / (sum(stg2_test$TP) + sum(stg2_test$FN)))
+```
+
+### False Negative Rate (probability of false alarm)
+```{r}
+(fpr = sum(stg2_test$FP) / (sum(stg2_test$TN) + sum(stg2_test$FP)))
+```
+
+### Precision
+```{r}
+(precision = sum(stg2_test$TP) / (sum(stg2_test$TP) + sum(stg2_test$FP)))
+
+```
+
+
+### Confusion Matrix  
+```{r}
+# This requires package caret which fails to install. 
+# cm = confusionMatrix(stg2_test$LINK_IS_ACTUAL_COOP_class, stg2_test$LINK_PRED_ACTUAL_COOP_class)
+# 
+# 
+# # Plot it 
+# cfm <- as_tibble(cm$table)
+# plot_confusion_matrix(cfm, target_col = "Reference", prediction_col = "Prediction", counts_col = "n")
+
+```
+
+### PR-CURVE
+```{r}
+prc_xgboost_test = 
+  pr_curve(
+    data = stg2_test, 
+    truth = LINK_IS_ACTUAL_COOP_class,
+    LINK_PRED_ACTUAL_COOP_prob, 
+    event_level = "second"
+)
+
+(PRAUC = 
+  pr_auc(
+    data = stg2_test, 
+    truth = LINK_IS_ACTUAL_COOP_class,
+    LINK_PRED_ACTUAL_COOP_prob, 
+    event_level = "second",
+    estimator = "binary"
+))
+
+ggplot(prc_xgboost_test, aes(x = recall, y = precision)) +
+  geom_path() +
+  coord_equal() +
+  theme_bw() + 
+  legend(legend = c(paste0("Main model \nAUC = ",round(PRAUC, 2))))
+  
+```
+
+### AUROC
+```{r}
+roc_xgboost_test = 
+  roc(
+  data = stg2_test, 
+  response = LINK_IS_ACTUAL_COOP_class,
+  predictor = LINK_PRED_ACTUAL_COOP_prob,
+  quiet = TRUE
+)
+
+(AUC = roc_xgboost_test$auc)
+
+plot(pROC::smooth(roc_xgboost_test), col = "blue", lwd = 1) 
+legend(
+  "bottomright",
+  col = "blue",
+  lwd = 1,
+  legend = c(paste0("Main model \nAUC = ",round(AUC, 2)))
+)
+```
+
+
+## Predict
+- TAKES TOO MUCH TIME, check how to improve efficiency 
+```{r}
+stg2_predict$LINK_PRED_EXIST_PROB = predict(stg2_mfit, 
+                                            new_data=stg2_predict, 
+                                            type = "prob")$`.pred_Actual links`
+  
+
+stg2_predict$LINK_PRED_EXIST_PROB %>% summary()
 
 cells = 
   cells %>% 
-  left_join(stg2_topredict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
+  left_join(stg2_predict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
             by = "CELL_ID") %>% 
   # this left NAs in cells not in the predict set, i.e. in the train/test set
   mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(

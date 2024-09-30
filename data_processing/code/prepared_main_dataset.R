@@ -86,7 +86,7 @@ sc_links_other =
 sc_links_other$BUYER_IS_COOP %>% summary()
 
 # # # # #
-departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
+departements <- read_sf(here("input_data/s3/CIV_DEPARTEMENTS.geojson"))
 init_crs = st_crs(departements)
 departements = 
   st_transform(departements, crs = civ_crs)
@@ -1243,6 +1243,7 @@ potential_all %>%
 potential_all =
   potential_all %>% 
   mutate(
+    # update the existing variable LINK_POSSIBLE_FALSENEG
     LINK_POSSIBLE_FALSENEG = case_when(
       CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_", PRO_ID))) ~ TRUE, 
       TRUE ~ LINK_POSSIBLE_FALSENEG
@@ -1460,6 +1461,11 @@ potential_1st %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>%
 cell_cellvars = 
   potential_1st %>% 
   summarise(.by = "CELL_ID",
+            # For plotting purposes 
+            CELL_ANY_ACTUAL_COOP_LINK = unique(CELL_ANY_ACTUAL_COOP_LINK), # do not recompute it, because some actual links have been under-sampled.  
+            # CELL_TRAINTEST_2ND_STAGE = 
+            CELL_LONGITUDE = unique(CELL_LONGITUDE),
+            CELL_LATITUDE = unique(CELL_LATITUDE),
             
             # Topological 
             # unique to put equal weights on distances to the five distinct coop BS (not those with more actual links having more weights)
