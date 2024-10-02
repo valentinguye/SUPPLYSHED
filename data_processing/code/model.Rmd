@@ -42,7 +42,26 @@ library(xgboost)
 library(pROC)
 library(yardstick)
 
+library(familiar)
+# and packages required but some uses of familiar: 
+library(microbenchmark)
+library(glmnet)
+library(fastcluster)
+library(praznik)
+library(power.transform)
+library(isotree)
+library(laGP)
+library(harmonicmeanp)
+library(mboost)
+
 set.seed(8888)
+
+# install.packages("https://cran.r-project.org/src/contrib/Archive/isotree/isotree_0.5.5.tar.gz",
+#                  repos = NULL, 
+#                  type = "source")
+
+dir.create(here("temp_data", "familiar", "stage_1"))
+dir.create(here("temp_data", "familiar", "stage_2"))
 
 ## Functions
 # Trase palettes etc. for plots
@@ -319,27 +338,19 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 
 # FIRST STAGE 
 
-## Data split
+
+## Data and formula
+
+
 Resources on data split here: https://encord.com/blog/train-val-test-split/
 ```{r}
-training_size <- 0.8
-
-stg1_training =
-  stg1_traintest %>%
-  slice_sample(prop = training_size) 
-
-stg1_test =
-  stg1_traintest %>%
-  filter(!CELL_ID %in% stg1_training$CELL_ID) 
+# Here, we do not do holdout method, so we do not split data into train and test sets. 
+anyNA(stg1_traintest)
 
 stg1_predict = 
   cells %>% 
   filter(!CELL_NO_POTENTIAL_LINK)
-```
 
-## Feature selection
-Use Boruta here https://cran.r-project.org/web/packages/Boruta/Boruta.pdf
-```{r}
 # names(cells)
 # anyNA(cells)
 stg1_allfeatures = 
@@ -359,20 +370,86 @@ stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste
 ```
 
 
+## Everything FAMILIAR
+For warm starts: 
+precompute_data_assignment --> An experimentData object.
+precompute_feature_info    --> An experimentData object.
+precompute_vimp            --> An experimentData object.
+(each does additional steps)
+
+predict function like anywhere else. 
+```{r}
+# ?train_familiar
+# ?theme_familiar
+# ?summon_familiar
+# ?as_familiar_data
+# ?predict  
+
+anyNA(stg1_traintest)
+
+
+summon_familiar(
+  
+  formula = stg1_mformula_allfeatures,
+  data = stg1_traintest,
+  experiment_dir = here("temp_data", "familiar", "stage_1"),
+  sample_id_column = "CELL_ID",
+  outcome_name = "Cooperative outlet share",
+  outcome_column = "CELL_PROP_VOLUME_COOPS",
+  outcome_type = "continuous",
+  experimental_design = "cv(bt(fs,100) + mb, 5)",
+  # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
+  parallel = TRUE, # The default is TRUE, but unnecessary in 1st stage at least. Actually it IS! 
+  parallel_nr_cores = detectCores() - 2, # 2 is the default, and UCLouvain machine has 8, in case we need to increase. 
+  
+  # PRE-PROCESSING ARGS
+  # (not all "none" are the defaults)
+  filter_method = "none", # no feature to be filtered in pre-processing
+  transformation_method = "none", 
+  normalisation_method = "none",
+  cluster_method = "hclust", # default:hclust. This is categorised in data processing, but it will affect feature selection. 
+  # imputation_method does not matter bc we have no NA. 
+  
+  
+  # FEATURE SELECTION & OPTIMIZATION 
+  fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
+  # fs_method_parameter = list("random_forest_ranger_permutation" = list()), # this would need to have this format, but let it unspecified, so that feature selection optimizes on ALL hyper-parameters. 
+  # vimp_aggregation_method = "borda", # borda is the default. Check guidance to depart. 
+  
+  learner = "random_forest_ranger",
+  # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
+  
+  # EVALUATION INFERENCE
+  detail_level = "hybrid", # the default. See ?summon_familiar and  https://cran.r-project.org/web/packages/familiar/vignettes/evaluation_and_explanation_precompiled.html
+  estimation_type = "point" # "bootstrap_confidence_interval", # the default. Requires several point estimates. 
+  
+)
+
+
+```
+
+
+
 ## Model fit 
 ```{r}
-stg1_mfit = ranger(data = stg1_training, 
-                   formula = stg1_mformula_allfeatures,
+stg1_mfit = ranger(data = stg1_traintest, 
                    importance = 'permutation', 
-                   case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT")
-
+                   case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
+                   formula = stg1_mformula_allfeatures, 
+                   seed = 8888
+                   )
 print(stg1_mfit)
+
 ```
 
 ## Evaluation 
 ```{r}
 test_predictions <- predict(stg1_mfit, data=stg1_test)
 
+stg1_test$CELL_PROP_VOLUME_COOPS_PRED = test_predictions$predictions
+
+stg1_mfit$r.squared
+stg1_mfit$prediction.error %>% sqrt()
 
 ```
 
@@ -578,8 +655,8 @@ prc_xgboost_test =
 ggplot(prc_xgboost_test, aes(x = recall, y = precision)) +
   geom_path() +
   coord_equal() +
-  theme_bw() + 
-  legend(legend = c(paste0("Main model \nAUC = ",round(PRAUC, 2))))
+  theme_bw()  
+  # legend(legend = c(paste0("Main model \nAUC = ",round(PRAUC, 2))))
   
 ```
 

@@ -866,12 +866,12 @@ stopifnot(
 ### Travel time -------------
 only_potential_coords = 
   only_potential_propt %>% 
-  select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
+  select(CELL_ID, LINK_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
          PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE,
   ) %>% 
   st_drop_geometry() 
 
-# write.csv(only_potential_coords, here("temp_data", "potential_links_coords.csv"))
+write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
 
 rm(only_potential_propt, only_potential_coords)
 
@@ -1219,6 +1219,12 @@ stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>%
           )
 potential_all$CELL_ID %>% unique() %>% length()
 
+# This is virtual links removed from XXX cells: 
+cells_false_negs_1 = 
+  potential_all %>% 
+  filter(LINK_POSSIBLE_FALSENEG) %>% 
+  pull(CELL_ID) %>% unique() %>% length()
+
 ### Remove JRC false negatives --------------
 # These are in cells with isolated farmers that get separated from their village by the cell match. 
 # + the few cases of villages with very few surveyed farmers 
@@ -1237,17 +1243,25 @@ potential_all %>%
             N_CELLS = length(unique(CELL_ID))) %>% 
   arrange(CELL_N_JRC_FARMERS)
 
-# Discard virtual links in cells with less than 3 farmers 
-# (but not in cells with 0 JRC farmers of, these are all the others, 
+# Discard virtual links in cells with less than 4 farmers 
+# (but not in cells with 0 JRC farmers, these are all the others, 
 #  nor in cells where there could be a sustaincocoa village)
 potential_all =
   potential_all %>% 
+  group_by(CELL_ID) %>% 
   mutate(
-    # update the existing variable LINK_POSSIBLE_FALSENEG
+    LINK_JRC_POSSIBLE_FALSENEG = 
+      CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_", PRO_ID))), 
+  ) %>% 
+  ungroup() %>% 
+  # update the existing variable LINK_POSSIBLE_FALSENEG
+  mutate(
     LINK_POSSIBLE_FALSENEG = case_when(
-      CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_", PRO_ID))) ~ TRUE, 
+      LINK_JRC_POSSIBLE_FALSENEG ~ TRUE, 
       TRUE ~ LINK_POSSIBLE_FALSENEG
-  ))
+    )
+  )
+
 potential_all %>% filter(LINK_POSSIBLE_FALSENEG) %>% View()
 potential_all %>% filter(CELL_ID == 385) %>% View()
 # number of JRC villages in the data 
@@ -1262,13 +1276,23 @@ stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>%
             pull(CELL_ID) %>% unique() %>% length() == nrow(grid_poly)
 )
 
+potential_all %>% 
+  filter(
+    LINK_JRC_POSSIBLE_FALSENEG
+  ) %>% nrow()
+potential_all %>% 
+  filter(LINK_JRC_POSSIBLE_FALSENEG) %>% 
+  pull(CELL_ID) %>% unique() %>% length()
+
+potential_all = potential_all %>% select(-LINK_JRC_POSSIBLE_FALSENEG)
+
 ### Random sub-sampling --------------------
 
 # Make separate object for convenience 
 traintest_2dstg = 
   potential_all %>% 
   # Imbalance should be computed in the train/test set only. 
-  filter(CELL_ACTUAL_LINK) %>% 
+  filter(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK) %>% 
   # Moreover, imbalance should be computed with all the possible false negatives removed. 
   filter(!LINK_POSSIBLE_FALSENEG)
 # order in the above filters is inconsequential
@@ -1284,12 +1308,15 @@ E_links == consol_IC2Bcoops %>% nrow()
 
 (initial_imbalance = (N_cells*M_coops - E_links)/E_links)
 
-# we can also compute the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links). 
+# And the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links). 
 # i.e. the ratio of virtual to actual links
 (N_actual = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
 (N_virtual = traintest_2dstg$LINK_IS_VIRTUAL %>% sum())
 (current_imbalance = N_virtual / N_actual)
-    
+
+# This is a reduction by a factor of 
+(round(initial_imbalance/current_imbalance))
+
 # Compute it as a share 
 (current_virtual_share = N_virtual / (N_actual + N_virtual))
 # note it can be computed as 
