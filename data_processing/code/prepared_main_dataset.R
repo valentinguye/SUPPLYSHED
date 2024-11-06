@@ -92,6 +92,11 @@ departements =
   st_transform(departements, crs = civ_crs)
 end_crs = st_crs(departements)
 
+civ_boundary = ne_countries(scale = 10, country = "Ivory Coast", returnclass = "sf")
+ggplot() +
+  geom_sf(data = civ_boundary, fill = "transparent") +
+  geom_sf(data = departements, fill = "transparent") 
+
 
 # Production per department estimated by Trase
 production_dpt =
@@ -266,8 +271,11 @@ coopbsy$LINK_YEAR %>% summary()
 
 coopbs = 
   coopbsy %>% 
-  filter(LINK_YEAR == latest_survey_year)
-#   distinct(COOP_BS_ID, .keep_all = TRUE)
+  filter(LINK_YEAR == latest_survey_year) %>% 
+  # also remove that one isolated coop very north
+  filter(BUYER_LATITUDE < 9 | is.na(BUYER_LATITUDE))
+  #   distinct(COOP_BS_ID, .keep_all = TRUE)
+
 
 coopbs_sf = 
   coopbs %>% 
@@ -469,8 +477,8 @@ actual =
   st_drop_geometry() %>% 
   mutate(LINK_POTENTIAL_COOP_BS_ID = LINK_ACTUAL_COOP_BS_ID) # every actual coop is also a potential one in the model's terminology.  
 
-nrow(grid_poly) # out of the 37975 3km grid cells, 
-actual$CELL_ID %>% unique() %>% length() # 510 3km cells have at least one actual link.  
+nrow(grid_poly) # out of the 21353 4km grid cells, 
+actual$CELL_ID %>% unique() %>% length() # 407 4km cells have at least one actual link.  
 
 # actual %>% filter(!is.na(LINK_VOLUME_KG)) %>% View()
 
@@ -667,6 +675,30 @@ stopifnot(sum(potential_all$LINK_IS_ACTUAL_OTHER) == nrow(consol_other))
 # plus 143 rows from SC which are with a coop not matched with IC2B. 
 
 
+## Remove links from cells outside CIV ----------------------- 
+# Identify cells outside 
+grid_ctoid$IS_TERRITORIAL =     
+  grid_ctoid %>% 
+  st_transform(crs = st_crs(civ_boundary)) %>% 
+  st_intersects(
+    y = civ_boundary,
+  ) %>% 
+  lengths()
+
+# Remove links in those cells
+potential_all = 
+  potential_all %>% 
+  left_join(
+    y = grid_ctoid %>% select(CELL_ID, IS_TERRITORIAL), 
+    by = "CELL_ID"
+  ) %>% 
+  filter(IS_TERRITORIAL == 1) %>% 
+  select(-IS_TERRITORIAL)
+
+potential_all$CELL_ID %>% unique() %>% length()
+nrow(potential_all)
+
+
 # STRUCTURE IDENTIFIERS ----------------
 # In potential_all, there can be: 
 # - cells with no potential link (no actual nor virtual) - i.e. cells very remote
@@ -838,8 +870,6 @@ only_potential_itmpt =
 only_potential_propt$LINK_DISTANCE_METERS <- 
   st_distance(only_potential_propt, only_potential_itmpt, by_element = TRUE) %>% as.numeric()
 
-rm(only_potential_itmpt)
-
 # merge back to the full grid
 (init_nrow <- nrow(potential_all))
 potential_all = 
@@ -863,6 +893,21 @@ stopifnot(
     pull(DIFF_DIST_TO_CELL_VS_FARM) %>% round(1) %>% na.omit() %>% unique() == 0
 )
 
+# tmptoplot = only_potential_propt %>% filter(!duplicated(CELL_ID))
+# tmptoplot_itm = only_potential_itmpt %>% filter(!duplicated(BUYER_LONGITUDE, BUYER_LATITUDE))
+# 
+# ggplot() +
+#   theme_bw() +
+#   geom_sf(data = tmptoplot, , size = 0.05, 
+#              col = "red") +
+#   geom_sf(data = tmptoplot_itm, , size = 1, 
+#           col = "blue") +
+#     # geom_sf(data = departements, fill = "transparent") +
+#     geom_sf(data = civ_boundary, fill = "transparent") 
+
+rm(only_potential_itmpt)
+
+
 ### Travel time -------------
 only_potential_coords = 
   only_potential_propt %>% 
@@ -870,6 +915,9 @@ only_potential_coords =
          PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE,
   ) %>% 
   st_drop_geometry() 
+
+# only_potential_coords %>% 
+#   filter(duplicated(PROEXT_LATITUDE, PROEXT_LONGITUDE, BUYER_LONGITUDE, BUYER_LATITUDE))
 
 write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
 
@@ -1215,15 +1263,15 @@ potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(CELL_ID) %>% unique() %>% l
 
 # check that this does not cover whole cells (since it should only cover virtual links)
 stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
-            pull(CELL_ID) %>% unique() %>% length() == nrow(grid_poly)
+            pull(CELL_ID) %>% unique() %>% length() == sum(grid_ctoid$IS_TERRITORIAL)
           )
 potential_all$CELL_ID %>% unique() %>% length()
 
-# This is virtual links removed from XXX cells: 
-cells_false_negs_1 = 
+# This is virtual links removed from 264 cells: 
+(cells_false_negs_1 = 
   potential_all %>% 
   filter(LINK_POSSIBLE_FALSENEG) %>% 
-  pull(CELL_ID) %>% unique() %>% length()
+  pull(CELL_ID) %>% unique() %>% length())
 
 ### Remove JRC false negatives --------------
 # These are in cells with isolated farmers that get separated from their village by the cell match. 
@@ -1273,7 +1321,7 @@ potential_all %>% filter(CELL_N_JRC_FARMERS %in% 1:3 & LINK_POSSIBLE_FALSENEG) %
 
 # check that no cell is completely removed (it shouldn't)
 stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
-            pull(CELL_ID) %>% unique() %>% length() == nrow(grid_poly)
+            pull(CELL_ID) %>% unique() %>% length() == sum(grid_ctoid$IS_TERRITORIAL)
 )
 
 potential_all %>% 

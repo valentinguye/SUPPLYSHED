@@ -119,7 +119,7 @@ links =
 
 ## Remove some cell/link categories 
 ```{r}
-# Remove cells outside in-land territory
+# Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% pull(SPLIT) %>% unique()
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% nrow()
 cells = 
@@ -213,6 +213,24 @@ cells %>% filter(SPLIT == "Train/test set") %>% nrow()
 
 ### Map of the cell data
 ```{r}
+# tmptoplot = only_potential_propt %>% filter(!duplicated(CELL_ID))
+# tmptoplot_itm = only_potential_itmpt %>% filter(!duplicated(BUYER_LONGITUDE, BUYER_LATITUDE))
+# 
+# ggplot() +
+#   theme_bw() +
+#   geom_sf(data = tmptoplot, , size = 0.05, 
+#              col = "red") +
+#   geom_sf(data = tmptoplot_itm, , size = 1, 
+#           col = "blue") +
+#     # geom_sf(data = departements, fill = "transparent") +
+#     geom_sf(data = civ_boundary, fill = "transparent") 
+
+# This includes other buyers
+consol_itm_sf = 
+  consol %>% 
+  filter(!is.na(BUYER_LONGITUDE)) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326)
+
 toplot = 
   cells %>% 
   st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
@@ -228,7 +246,7 @@ toplot$`Cell information content` %>% table()
 
 
 ggplot(toplot) +
-    geom_sf(aes(col = `Cell information content`), shape = 15) + 
+    geom_sf(aes(col = `Cell information content`), size = 0.5) + #, shape = 15
     geom_sf(data = departements, fill = "transparent", col = "black") +
     # scale_colour_brewer(na.value = NULL,
     #                     type = "qual",
@@ -237,6 +255,8 @@ ggplot(toplot) +
   scale_colour_manual(
     values = c("#E763DF" , "#639DE6", "lightgrey", "darkgrey")
   ) +
+  geom_sf(data = consol_itm_sf, size = 1,
+          col = "blue") +
   # labs(fill = "Extent of the Ivorian cocoa growing region") + 
     theme_minimal() + 
     scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
@@ -338,9 +358,7 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 
 # FIRST STAGE 
 
-
 ## Data and formula
-
 
 Resources on data split here: https://encord.com/blog/train-val-test-split/
 ```{r}
