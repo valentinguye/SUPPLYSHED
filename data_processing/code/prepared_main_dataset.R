@@ -120,9 +120,9 @@ tri = rast(here("input_data/terrain/tri/tri.txt"))
 tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
 
 # BNETD LAND USE MAP FOR 2020
-# aggregated in GEE to 1km, for binarized cocoa and settlement classes. 
-bnetd = rast(here("input_data/GEE/BNETD_binary_cocoa_settlements_3km.tif"))
-
+# In hectares of 11 LU classes, aggregated in GEE to 1km
+bnetd = rast(here("input_data/GEE/BNETD_binary_1km.tif"))
+# bnetd %>% values() %>% summary()
 
 # coopbs_tmplt = coopbsy[235:240,]
 # example = head(carg_links)
@@ -363,38 +363,83 @@ plot(st_geometry(departements), add = TRUE)
 bnetd
 grid_sr
 
-bnetd_project_filename = paste0("bnetd_modelgrid_", grid_size_m*1e-3,"km.tif")
+# First aggregate from 1km to grid_size_m (4km in current default)
+bnetd_aggr = 
+  terra::aggregate(x = bnetd, 
+                 fact = grid_size_m / res(bnetd), 
+                 fun = "sum")
 
-if(!file.exists(here("temp_data", "BNETD", bnetd_project_filename))){
-  terra::resample(x = bnetd, 
+bnetd_resample_filename = paste0("bnetd_modelgrid_", grid_size_m*1e-3,"km.tif")
+
+terra::resample(x = bnetd_aggr, 
                   y = grid_sr,
                   method = "sum", # sum bc values in ha
-                  threads = TRUE,
-                  filename = here("temp_data", "BNETD", bnetd_project_filename), 
+                  threads = FALSE, # not necessary
+                  filename = here("temp_data", "BNETD", bnetd_resample_filename), 
                   overwrite = TRUE)
-}
 
-grid_lu = rast(here("temp_data", "BNETD", bnetd_project_filename))
+grid_lu = rast(here("temp_data", "BNETD", bnetd_resample_filename))
 
 plot(grid_lu$cocoa)
 plot(st_geometry(departements), add = TRUE)
 
+plot(grid_lu$denseForest)
+plot(st_geometry(departements), add = TRUE)
+
+plot(grid_lu$impossible)
+plot(st_geometry(departements), add = TRUE)
+
 
 ### Suitability --------------
+# DON'T USE IT, BECAUSE IT SEEMS INACCURATE
+# GAEZ seems to predict no suitability in places where there actually is cocoa (NE). See plot below. 
+
+# gaez_cocoa_path = here("temp_data", "GAEZ_v4", "AES_index_value", "Rain-fed", "Low-input", "Cocoa")
+# gaez_cocoa = rast(paste0(gaez_cocoa_path, "/cocoa.tif"))
+# 
+# grid_extent_gaezcrs = project(grid_extent, from = paste0("epsg:",civ_crs), to = crs(gaez_cocoa))
+# 
+# gaez_cocoa_civ = 
+#   gaez_cocoa %>% 
+#   crop(grid_extent_gaezcrs)
+# 
+# # Project 
+# gaez_cocoa_project_path = paste0(gaez_cocoa_path, "/gaez_cocoa_modelgrid_", grid_size_m*1e-3,"km.tif")
+# terra::project(gaez_cocoa_civ, 
+#                 grid_sr,
+#                 align = FALSE, 
+#                 filename = gaez_cocoa_project_path, 
+#                 overwrite = TRUE)
+# 
+# grid_gaez_cocoa = rast(gaez_cocoa_project_path)
+# 
+# plot(grid_gaez_cocoa)
+# plot(st_geometry(departements), add = TRUE)
 
 
 
-# Convert to stars
+### Convert all LUs to stars --------
 
 # grid_st = st_as_stars(grid_sr)
 grid_st = 
-  c(grid_lu, grid_tri) %>% 
+  c(grid_lu, grid_tri) %>% #, grid_gaez_cocoa
   st_as_stars(ignore_file = TRUE, 
               as_attributes = TRUE) %>% 
-  rename(CELL_COCOA_HA = cocoa, 
+  rename(CELL_DENSEFOREST_HA = denseForest,
+         CELL_OTHERFORESTS_HA = otherForests,
+         CELL_COCOA_HA = cocoa,
+         CELL_COFFEE_HA = coffee,
+         CELL_RUBBER_HA = rubber,
+         CELL_PALM_HA = palm,
+         CELL_COCONUT_HA = coconut,
+         CELL_CASHEW_HA = cashew,
+         CELL_OTHERAG_HA = otherAg,
          CELL_SETTLEMENT_HA = settlements,
+         CELL_IMPOSSIBLE_HA = impossible,
          CELL_TRI_MM = tri) # tri is in millimeters in Nunn & Puga data. 
+       # CELL_GAEZCOCOA_AESI = Cocoa
 
+  
 
 ## Add actual coop links -------------
 
@@ -410,7 +455,20 @@ consol_IC2Bcoops_sf =
   st_xy2sfc(as_points = FALSE, na.rm = FALSE) %>% # as_points = F outputs grid cells as polygons
   st_as_sf() %>% 
   mutate(CELL_ID = row_number()) %>% 
-   select(CELL_ID, CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_TRI_MM) #,-lyr.1
+   select(CELL_ID, 
+          CELL_DENSEFOREST_HA,
+          CELL_OTHERFORESTS_HA,
+          CELL_COCOA_HA,
+          CELL_COFFEE_HA,
+          CELL_RUBBER_HA,
+          CELL_PALM_HA,
+          CELL_COCONUT_HA,
+          CELL_CASHEW_HA,
+          CELL_OTHERAG_HA,
+          CELL_SETTLEMENT_HA,
+          CELL_IMPOSSIBLE_HA,
+          CELL_TRI_MM)
+        # CELL_GAEZCOCOA_AESI
   )
 
 # and the same object, but with cell centroid geometry
@@ -1147,11 +1205,20 @@ potential_all =
 ### Land use in BS buffers -------------
 # For land use, it was easier to do it in GEE.  
 coopbs_10km_buffer_lu = 
-  read.csv(here("input_data/GEE/bnetd_coopbs_10km_buffer.csv")) %>% 
+  read.csv(here("input_data/GEE/bnetd_allclasses_coopbs_10km_buffer.csv")) %>% 
   as_tibble() %>%   
   select(COOP_BS_ID, 
-         COOP_BS_10KM_COCOA_HA = cocoa, 
-         COOP_BS_10KM_SETTLEMENT_HA = settlements)
+         COOP_BS_10KM_DENSEFOREST_HA = denseForest,
+         COOP_BS_10KM_OTHERFORESTS_HA = otherForests,
+         COOP_BS_10KM_COCOA_HA = cocoa,
+         COOP_BS_10KM_COFFEE_HA = coffee,
+         COOP_BS_10KM_RUBBER_HA = rubber,
+         COOP_BS_10KM_PALM_HA = palm,
+         COOP_BS_10KM_COCONUT_HA = coconut,
+         COOP_BS_10KM_CASHEW_HA = cashew,
+         COOP_BS_10KM_OTHERAG_HA = otherAg,
+         COOP_BS_10KM_SETTLEMENT_HA = settlements,
+         COOP_BS_10KM_IMPOSSIBLE_HA = impossible)
 
 potential_all = 
   potential_all %>% 
@@ -1554,9 +1621,19 @@ cell_cellvars =
             CELL_AVG_N_LICBUY_IN_DPT            = unique(CELL_AVG_N_LICBUY_IN_DPT),
             
             # Producer end
-            CELL_COCOA_HA         = unique(CELL_COCOA_HA), 
-            CELL_SETTLEMENT_HA    = unique(CELL_SETTLEMENT_HA), 
-            CELL_TRI_MM           = unique(CELL_TRI_MM),
+            CELL_DENSEFOREST_HA = unique(CELL_DENSEFOREST_HA),
+            CELL_OTHERFORESTS_HA = unique(CELL_OTHERFORESTS_HA),
+            CELL_COCOA_HA = unique(CELL_COCOA_HA),
+            CELL_COFFEE_HA = unique(CELL_COFFEE_HA),
+            CELL_RUBBER_HA = unique(CELL_RUBBER_HA),
+            CELL_PALM_HA = unique(CELL_PALM_HA),
+            CELL_COCONUT_HA = unique(CELL_COCONUT_HA),
+            CELL_CASHEW_HA = unique(CELL_CASHEW_HA),
+            CELL_OTHERAG_HA = unique(CELL_OTHERAG_HA),
+            CELL_SETTLEMENT_HA = unique(CELL_SETTLEMENT_HA),
+            CELL_IMPOSSIBLE_HA = unique(CELL_IMPOSSIBLE_HA),
+            CELL_TRI_MM = unique(CELL_TRI_MM), 
+            # CELL_GAEZCOCOA_AESI = unique(CELL_GAEZCOCOA_AESI),
             CELL_DISTRICT_GEOCODE = unique(CELL_DISTRICT_GEOCODE),
             CELL_DISTRICT_NAME    = unique(CELL_DISTRICT_NAME),
             
@@ -1640,8 +1717,18 @@ coop_othervars_toavg = c(
   "COOP_N_KNOWN_BUYERS",  
   # Coop surroundings
   "COOP_BS_10KM_TRI",
+  # In the coop side all LU variables are relevant predictors. 
+  "COOP_BS_10KM_DENSEFOREST_HA",
+  "COOP_BS_10KM_OTHERFORESTS_HA",
   "COOP_BS_10KM_COCOA_HA",
-  "COOP_BS_10KM_SETTLEMENT_HA"
+  "COOP_BS_10KM_COFFEE_HA",
+  "COOP_BS_10KM_RUBBER_HA",
+  "COOP_BS_10KM_PALM_HA",
+  "COOP_BS_10KM_COCONUT_HA",
+  "COOP_BS_10KM_CASHEW_HA",
+  "COOP_BS_10KM_OTHERAG_HA",
+  "COOP_BS_10KM_SETTLEMENT_HA",
+  "COOP_BS_10KM_IMPOSSIBLE_HA"
 )
 
 list_othermean_summaries = list()
@@ -1696,7 +1783,7 @@ cell_weights =
     STANDARDIZER = sum(CELL_REPRESENTATIVITY_WEIGHT, na.rm = TRUE), 
     CELL_REPRESENTATIVITY_STD_WEIGHT = CELL_REPRESENTATIVITY_WEIGHT/STANDARDIZER) %>% 
   select(CELL_ID, CELL_REPRESENTATIVITY_STD_WEIGHT)
-stopifnot(cell_weights$CELL_REPRESENTATIVITY_STD_WEIGHT %>% sum(na.rm = TRUE) == 1)
+stopifnot(cell_weights$CELL_REPRESENTATIVITY_STD_WEIGHT %>% sum(na.rm = TRUE) %>% round(10) == 1)
 
 ## Merge all cell variables -------------
 cell_all = 

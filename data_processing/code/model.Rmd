@@ -74,6 +74,7 @@ source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 civ_crs <- 32630
 
 MODEL_RESOLUTION_KM = 4
+cell_area_ha =(100*MODEL_RESOLUTION_KM^2)
 
 xlabs = c(-8, -6, -4)
 ylabs = c(5, 7, 9)
@@ -124,11 +125,20 @@ links =
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% nrow()
 cells = 
   cells %>% 
-  filter(!is.na(CELL_DISTRICT_NAME))
+  # Remove the few cells that still fall in no district 
+  filter(!is.na(CELL_DISTRICT_NAME)) 
+
+  # Removing the cells where there is little cocoa (less than 1%) and lots of land where cocoa cannot expand (more than 90%
+  # does not make a big difference (80 cells). So let's not remove them. It's a display issue. In terms of results, we will anyway aggregate cocoa or forest area 
+  filter(!(CELL_COCOA_HA / cell_area_ha < 0.01 & CELL_IMPOSSIBLE_HA / cell_area_ha > 0.9))
 
 links = 
   links %>% 
-  filter(!is.na(CELL_DISTRICT_NAME))
+  # Remove the few cells that still fall in no district 
+  filter(!is.na(CELL_DISTRICT_NAME)) %>% 
+  # Remove the cells where there is little cocoa (less than 1%) and lots of land where cocoa cannot expand (more than 90%).
+  filter(!(CELL_COCOA_HA / cell_area_ha < 0.01 & CELL_IMPOSSIBLE_HA / cell_area_ha > 0.9))
+
 
 # In addition, from links, we also remove: 
 links =
@@ -145,7 +155,9 @@ stopifnot(links %>%
 ```
 
 
-# EXTRACT TRAIN/TEST SETS
+# MANIPULATE ROWS
+
+## Extract train/test set
 Any processing on explanatory features' values should be made before this step. 
 ```{r}
 cells = 
@@ -164,8 +176,24 @@ stg2_traintest =
   links %>%
   filter(SPLIT == "Train/test set") 
 
+cells_stg2_traintest = 
+  stg2_traintest %>% 
+  distinct(CELL_ID, .keep_all = TRUE)
+  
+
 ```
 
+## Filter predict set
+```{r}
+stg1_predict = 
+  cells %>% 
+  filter(!CELL_NO_POTENTIAL_LINK)
+
+
+
+
+
+```
 
 
 # DESCRIPTIVES 
@@ -278,8 +306,17 @@ cells_traintest_features =
          `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
          `Avg. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
          `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
-         `Cocoa extent (ha)` = CELL_COCOA_HA,
-         `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
+          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
+          # `Cocoa extent (ha)` = CELL_COCOA_HA,
+          `Coffee extent (ha)` = CELL_COFFEE_HA,
+          `Rubber extent (ha)` = CELL_RUBBER_HA,
+          `Palm extent (ha)` = CELL_PALM_HA,
+          `Coconut extent (ha)` = CELL_COCONUT_HA,
+          `Cashew extent (ha)` = CELL_CASHEW_HA,
+          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
+          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA,
          `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
          `Proportion of 5 nearest cooperatives certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
          `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
@@ -312,6 +349,15 @@ Cell data balance tests
 ```
 
 
+### LU in 2nd stage cells 
+```{r}
+(cells_stg2_traintest$CELL_COCOA_HA/cell_area_ha) %>% summary()
+  
+
+
+```
+
+
 ## Links descriptive statistics
 
 ### Features in the Potential-links data  
@@ -332,7 +378,7 @@ stg2_features_tobalance_1 =
          LINK_IS_WITH_5_NEAREST_COOPS,
          CELL_N_BS_WITHIN_DIST,
          CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
-         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_TRI_MM)
+         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_IMPOSSIBLE_HA, CELL_TRI_MM)
 
 datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
                     data = stg2_features_tobalance_1, 
@@ -365,30 +411,56 @@ Resources on data split here: https://encord.com/blog/train-val-test-split/
 # Here, we do not do holdout method, so we do not split data into train and test sets. 
 anyNA(stg1_traintest)
 
-stg1_predict = 
-  cells %>% 
-  filter(!CELL_NO_POTENTIAL_LINK)
 
 # names(cells)
 # anyNA(cells)
 stg1_allfeatures = 
   cells %>% 
   select(
-    ends_with("_HA"), CELL_TRI_MM, 
-    CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
-    CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, CELL_MIN_DISTANCE_METERS,
-    starts_with("CELL_PROP_5_NEAREST"), 
-    starts_with("CELL_AVG_5_NEAREST"), 
-    starts_with("CELL_COUNT_5_NEAREST")) %>% 
-  names() 
+    #CELL_COCOA_HA,
+    # CELL_DENSEFOREST_HA
+    # CELL_OTHERFORESTS_HA
+    # CELL_COFFEE_HA,
+    # CELL_RUBBER_HA,
+    # CELL_PALM_HA,
+    # CELL_COCONUT_HA,
+    # CELL_CASHEW_HA,
+    # CELL_OTHERAG_HA,
+    # CELL_SETTLEMENT_HA,
+    # CELL_IMPOSSIBLE_HA,
+    # CELL_SETTLEMENT_HA,
+    CELL_TRI_MM,
+    CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_MIN_DISTANCE_METERS,
+    # Include coop-level features summarised at the 1 nearest, the 5 nearest and the whole-coop levels. 
+    # This increases the simple fit performance from an OOB R2 of .17 (with only summaries at 5 nearest coop-level) to .24
+    starts_with("CELL_PROP_"), -CELL_PROP_VOLUME_COOPS, -CELL_PROP_VOLUME_OTHERS,
+    starts_with("CELL_AVG_"), CELL_AVG_N_LICBUY_IN_DPT, CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS,
+    # -ends_with("_HA"),
+    starts_with("CELL_COUNT_")) %>%
+  names()  
   
-
 stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+
+```
+## Simple fit 
+This is simple because it does not do feature selection nor optimize hyper-parameters.
+```{r}
+stg1_mfit = ranger(data = stg1_traintest, 
+                   importance = 'permutation',
+                   case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
+                   formula = stg1_mformula_allfeatures, 
+                   seed = 8888
+                   )
+print(stg1_mfit)
 
 ```
 
 
-## Everything FAMILIAR
+## Feature importance and optimization
+This is the model development. 
+
+This is all handled by package familiar. 
+
 For warm starts: 
 precompute_data_assignment --> An experimentData object.
 precompute_feature_info    --> An experimentData object.
@@ -416,6 +488,8 @@ summon_familiar(
   outcome_column = "CELL_PROP_VOLUME_COOPS",
   outcome_type = "continuous",
   experimental_design = "cv(bt(fs,100) + mb, 5)",
+  # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
+
   # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
   parallel = TRUE, # The default is TRUE, but unnecessary in 1st stage at least. Actually it IS! 
   parallel_nr_cores = detectCores() - 2, # 2 is the default, and UCLouvain machine has 8, in case we need to increase. 
@@ -446,30 +520,6 @@ summon_familiar(
 
 ```
 
-
-
-## Model fit 
-```{r}
-stg1_mfit = ranger(data = stg1_traintest, 
-                   importance = 'permutation', 
-                   case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
-                   formula = stg1_mformula_allfeatures, 
-                   seed = 8888
-                   )
-print(stg1_mfit)
-
-```
-
-## Evaluation 
-```{r}
-test_predictions <- predict(stg1_mfit, data=stg1_test)
-
-stg1_test$CELL_PROP_VOLUME_COOPS_PRED = test_predictions$predictions
-
-stg1_mfit$r.squared
-stg1_mfit$prediction.error %>% sqrt()
-
-```
 
 
 
