@@ -211,6 +211,14 @@ consol_other$BUYER_IS_COOP %>% summary()
 
 consol %>% filter(!is.na(COOP_BS_ID) & !BUYER_IS_COOP) %>% nrow()
 
+# Make an buyer ID for non IC2B buyers (others than coop or SC coop not matched to IC2B)
+consol_other = 
+  consol_other %>% 
+  group_by(BUYER_IS_COOP, BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
+  mutate(BUYER_NONIC2B_ID = paste0("NONIC2B-", cur_group_id())) %>% 
+  ungroup()
+
+length(unique(consol_other$BUYER_NONIC2B_ID))
 
 # Actual link stats ----------------
 
@@ -841,13 +849,26 @@ potential_all %>%
 potential_all$LINK_ID_COOPS %>% unique() %>% length() 
 anyNA(potential_all$LINK_ID_COOPS)
 
+## Buyer ID ---------------
+# No obs. should have a non-IC2B buyer ID and a COOP BS ID.  
+stopifnot(potential_all %>% filter(!is.na(LINK_POTENTIAL_COOP_BS_ID) & !is.na(BUYER_NONIC2B_ID)) %>% nrow() == 0)
+# Those with NAs in both are in the part of the country with no potential link 
+# potential_all %>% filter(is.na(LINK_POTENTIAL_COOP_BS_ID)) %>% pull(BUYER_NONIC2B_ID) %>% is.na() %>% any())
 
+potential_all = 
+  potential_all %>% 
+  mutate(BUYER_ID = case_when(
+    is.na(LINK_POTENTIAL_COOP_BS_ID) ~ BUYER_NONIC2B_ID, 
+    TRUE ~ LINK_POTENTIAL_COOP_BS_ID
+  ))
+potential_all$BUYER_ID %>% unique() %>% length()
 
 # ADD VARIABLES ----------------
 
 potential_all_save = potential_all
 
 init_nrow_pa = nrow(potential_all) # # just to check that this section does not add any row
+
 
 
 
@@ -974,10 +995,11 @@ only_potential_coords =
   ) %>% 
   st_drop_geometry() 
 
+
 # only_potential_coords %>% 
 #   filter(duplicated(PROEXT_LATITUDE, PROEXT_LONGITUDE, BUYER_LONGITUDE, BUYER_LATITUDE))
 
-write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
+# write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
 
 rm(only_potential_propt, only_potential_coords)
 
@@ -1103,6 +1125,8 @@ stopifnot(
 
 
 ## Coop/BS-level variables ---------------------------
+# CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_ACTUAL_COOP_BS_ID, 
+
 
 ### IC2B variables -------------
 
