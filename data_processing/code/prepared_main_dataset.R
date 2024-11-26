@@ -884,7 +884,7 @@ potential_all =
 stopifnot(nrow(potential_all) == length(unique(potential_all$LINK_ID)))
 
 
-### Distances -------------
+### Euclidean distances -------------
 # Between every buyer location and either the producer location when available, or the cell centroid otherwise.
 
 # Prepare the two kinds:
@@ -987,7 +987,7 @@ stopifnot(
 rm(only_potential_itmpt)
 
 
-### Travel time -------------
+### Road travel duration and distance -------------
 only_potential_coords = 
   only_potential_propt %>% 
   select(CELL_ID, LINK_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, LINK_DISTANCE_METERS,
@@ -1003,6 +1003,19 @@ only_potential_coords =
 
 rm(only_potential_propt, only_potential_coords)
 
+travel_times = read.csv(here("input_data", "IIASA", "complete.csv")) %>% 
+  # Turn distance from kilometer into meter
+  mutate(distance = distance*1000)
+
+potential_all = 
+  potential_all %>% 
+  left_join(travel_times %>% select(LINK_ID, LINK_TRAVEL_MINUTES = duration, LINK_TRAVEL_METERS = distance), 
+            by = "LINK_ID")
+
+# The unmatched links are those with no buyer coordinates in SC data, and those with no potential link at all. 
+potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% View()
+
+rm(travel_times)
 
 ## Cell-level topological variables ------------------
 
@@ -1090,26 +1103,27 @@ potential_all =
                                             CELL_AVG_N_LICBUY_IN_DPT))
 
 ### Nearest coop(s) -------------- 
+# NOW WE CONSIDER NEAREST BY ROAD TRAVEL DISTANCE, NOT EUCLIDEAN. 
 potential_all = 
   potential_all %>% 
   group_by(CELL_ID) %>% 
-  arrange(LINK_DISTANCE_METERS) %>% # this matters
+  arrange(LINK_TRAVEL_METERS) %>% # this matters
   mutate(
     # do avg distance of the 5 closest BS, rather than avg of the five smallest distances which may 
     # well be to the same coop in the many cases where several actual links would exist with it. 
-    # LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_DISTANCE_METERS))[5]) %>% 
+    # LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP = head(sort(LINK_TRAVEL_METERS))[5]) %>% 
     # na.omit because there may be NAs if in the smallest distances there is a JRC other buyer. 
     LINK_5_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 5)), 
     LINK_1_NEAREST_POTENTIAL_COOP_BS_ID = list(head(na.omit(unique(LINK_POTENTIAL_COOP_BS_ID)), 1))
-    # CELL_MIN_DISTANCE_METERS = min(LINK_DISTANCE_METERS, na.rm = TRUE)
+    # CELL_MIN_DISTANCE_METERS = min(LINK_TRAVEL_METERS, na.rm = TRUE)
   ) %>% 
   ungroup() %>% 
   rowwise() %>% 
   mutate(
-    #LINK_IS_WITH_5_NEAREST_COOPS = LINK_DISTANCE_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP
+    #LINK_IS_WITH_5_NEAREST_COOPS = LINK_TRAVEL_METERS <= LINK_DISTANCE_5TH_NEAREST_POTENTIAL_COOP
     LINK_IS_WITH_5_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_5_NEAREST_POTENTIAL_COOP_BS_ID, 
     LINK_IS_WITH_1_NEAREST_COOPS = LINK_POTENTIAL_COOP_BS_ID %in% LINK_1_NEAREST_POTENTIAL_COOP_BS_ID
-    #LINK_IS_WITH_1_NEAREST_COOPS = LINK_DISTANCE_METERS == CELL_MIN_DISTANCE_METERS
+    #LINK_IS_WITH_1_NEAREST_COOPS = LINK_TRAVEL_METERS == CELL_MIN_DISTANCE_METERS
   ) %>% 
   ungroup() %>% 
   select(-LINK_5_NEAREST_POTENTIAL_COOP_BS_ID, 
@@ -1614,9 +1628,9 @@ potential_1st %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>%
   select(!starts_with("COOP_")) %>% 
   View()
 
-# potential_1st$LINK_DISTANCE_METERS %>% summary()
-# potential_1st %>% filter(is.na(LINK_DISTANCE_METERS)) %>% pull(CELL_ACTUAL_ONLYCOOP_LINK) %>% summary()
-# potential_1st %>% filter(is.na(LINK_DISTANCE_METERS) & CELL_NO_POTENTIAL_LINK) %>% View() 
+# potential_1st$LINK_TRAVEL_METERS %>% summary()
+# potential_1st %>% filter(is.na(LINK_TRAVEL_METERS)) %>% pull(CELL_ACTUAL_ONLYCOOP_LINK) %>% summary()
+# potential_1st %>% filter(is.na(LINK_TRAVEL_METERS) & CELL_NO_POTENTIAL_LINK) %>% View() 
 
 
 ## Cell level Xs -----------
@@ -1635,10 +1649,10 @@ cell_cellvars =
             
             # Topological 
             # unique to put equal weights on distances to the five distinct coop BS (not those with more actual links having more weights)
-            CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS  = mean(unique(LINK_IS_WITH_5_NEAREST_COOPS*LINK_DISTANCE_METERS), na.rm = TRUE),
-            # mean(head(sort(LINK_DISTANCE_METERS), 5), na.rm = TRUE),
+            CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS  = mean(unique(LINK_IS_WITH_5_NEAREST_COOPS*LINK_TRAVEL_METERS), na.rm = TRUE),
+            # mean(head(sort(LINK_TRAVEL_METERS), 5), na.rm = TRUE),
 
-            CELL_MIN_DISTANCE_METERS                  = mean(unique(LINK_IS_WITH_1_NEAREST_COOPS*LINK_DISTANCE_METERS), na.rm = TRUE),
+            CELL_MIN_DISTANCE_METERS                  = mean(unique(LINK_IS_WITH_1_NEAREST_COOPS*LINK_TRAVEL_METERS), na.rm = TRUE),
             
             CELL_N_BS_WITHIN_DIST               = unique(CELL_N_BS_WITHIN_DIST),
             CELL_N_COOP_IN_DPT                  = unique(CELL_N_COOP_IN_DPT),
@@ -1674,6 +1688,7 @@ cell_cellvars =
 cell_cellvars$CELL_MIN_DISTANCE_METERS %>% summary()
 cell_cellvars$CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS %>% summary()
 potential_1st$LINK_DISTANCE_METERS %>% summary()
+potential_1st$LINK_TRAVEL_METERS %>% summary()
 
 ## Coop level Xs -----------
 # Do every average or sum over 1/ all potential coops; 2/ only the actual ones; 3/ the five closest ones. 
