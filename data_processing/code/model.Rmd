@@ -503,7 +503,15 @@ stg1_allfeatures =
     starts_with("CELL_COUNT_")) %>%
   names()  
   
+stg1_exofeatures = 
+  stg1_allfeatures %>% 
+  grep(~., pattern = "DISTANCE|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
+       value = TRUE) %>% 
+  unique()
+
+
 stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+stg1_mformula_exofeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_exofeatures, collapse = " + ")))
 
 ```
 The first stage has `r length(stg1_allfeatures)` potential features.  
@@ -515,6 +523,14 @@ stg1_mfit = ranger(data = stg1_traintest,
                    importance = 'permutation',
                    case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
                    formula = stg1_mformula_allfeatures, 
+                   seed = 8888
+                   )
+print(stg1_mfit)
+
+stg1_mfit = ranger(data = stg1_traintest, 
+                   importance = 'permutation',
+                   case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
+                   formula = stg1_mformula_exofeatures, 
                    seed = 8888
                    )
 print(stg1_mfit)
@@ -543,17 +559,19 @@ predict function like anywhere else.
 
 anyNA(stg1_traintest)
 
+# summon_familiar writes all it does in a repo. It returns nothing here.  
+stage1_model_repo = here("temp_data", "familiar", "stage_1")
 
 summon_familiar(
   
   formula = stg1_mformula_allfeatures,
   data = stg1_traintest,
-  experiment_dir = here("temp_data", "familiar", "stage_1"),
+  # experiment_dir = stage1_model_repo,
   sample_id_column = "CELL_ID",
   outcome_name = "Cooperative outlet share",
   outcome_column = "CELL_PROP_VOLUME_COOPS",
   outcome_type = "continuous",
-  experimental_design = "bt(fs + mb, 51)", #"fs + mb", # "cv(bt(fs,100) + mb, 3)",
+  experimental_design = "fs + mb", # "bt(fs + mb, 21)", # # "cv(bt(fs,100) + mb, 3)",
   
   # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
 
@@ -569,7 +587,6 @@ summon_familiar(
   cluster_method = "hclust", # the default. This is categorised in data processing, but it will affect feature selection. 
   # imputation_method does not matter bc we have no NA. 
   
-  
   # FEATURE SELECTION & OPTIMIZATION 
   fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
   # fs_method_parameter = list("random_forest_ranger_permutation" = list()), # this would need to have this format, but let it unspecified, so that feature selection optimizes on ALL hyper-parameters. 
@@ -579,47 +596,112 @@ summon_familiar(
   # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
   
   # EVALUATION INFERENCE
-  detail_level = "hybrid", # the default. See ?summon_familiar and  https://cran.r-project.org/web/packages/familiar/vignettes/evaluation_and_explanation_precompiled.html
-  estimation_type = list("auc_data"="bci", "model_performance"="point"), #"point", # "bootstrap_confidence_interval", # the default. Requires several point estimates. 
+  estimation_type = "point", #list("auc_data"="bci", "model_performance"="point"), # "bootstrap_confidence_interval", # the default. Requires several point estimates. 
   # The kind of metric for which we want a CI can be set by providing a list instead of character, e.g.: list("auc_data"="bci", "model_performance"="point")
-  confidence_level = 0.95 # the default. 
+  confidence_level = 0.95, # the default. 
+  detail_level = "hybrid" # the default. See ?summon_familiar and  https://cran.r-project.org/web/packages/familiar/vignettes/evaluation_and_explanation_precompiled.html
 )
 
+# Finders of familiar outputs ---------------------
+# Feature info - this gives generic info about the features in the model 
+# feature_info = readRDS(here(stage1_model_repo, "20241127134237_feature_info.RDS"))
+
+# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
+# iterations = readRDS(here(stage1_model_repo, "20241125194101_iterations.RDS"))
+
+# Model development results - to report model performance
+stage1_results = here(stage1_model_repo, "results", "pooled_data")
+
+# Models - to run predictions
+stage1_model_path = here(stage1_model_repo, 
+                         "trained_models", 
+                         "random_forest_ranger", 
+                         "random_forest_ranger_permutation")
+
+# Select the model/ensemble we want to work with 
+
+stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
+
+model_date = gsub("-", "", today()) # replace by yyyymmdd as needed
+# model_date = 20241125
+model1_name = 
+  stage1_ensemble_names %>% 
+  grep(~.,  
+       pattern = model_date, 
+       value = TRUE) # take the first one in case there are several
+                                          
+model1 = readRDS(here(stage1_model_path, model1_name))
+
 
 ```
 
+## Performance
+```{r}
+# Performance metrics are stored here
+perf_metrics = read.csv(here(stage1_results, "performance", "performance_metric.csv"))
+
+
+
+# Normalement ces plots sont déjà exportés automatiquement par summon_familiar. 
+plots <- familiar::plot_model_performance(
+  object = model1,
+  draw = TRUE,
+  facet_by = "metric",
+  data = stg1_traintest,
+  estimation_type = "bci",
+  metric = c("mse", "rmse", "rse", "rrse", "explained_variance", "r2_score"))
+```
+
+
+## Feature importance & explanation
+Importance ranks features wrt. each other but cannot tell direction or magnitude. 
+Explanation is produced by feature, and can be interpreted in target scale. 
+
+### Feature importance
+```{r}
+importance_repo = here(stage1_results, "variable_importance")
+
+# These are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
+# stage1_vimp = here(stage1_model_repo, "variable_importance")
+# vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
+# vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
+
+
+
+# The plot_model_signature_occurrence method plots the occurrence of features among the first 5 ranks across an ensemble of models (if available). The rank threshold can be specified using the rank_threshold argument or the eval_aggregation_rank_threshold parameter (summon_familiar).
+
+```
+
+### Explanation
+```{r}
+explanation_repo = here(stage1_results, "explanation")
+
+
+
+```
+
+
+## Prediction
+### Novelty
+
+```{r}
+# Novelty in development data 
+devdat_prediction = read.csv(here(stage1_results, "prediction", "prediction.csv"))
+
+
+```
+
+
+### AoA
 
 ```{r}
 
 
-
-
 ```
 
+### Prediction set
 
-## Predict 
-```{r}
-stg1_predict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_predict)$predictions
-
-stg1_predict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
-
-cells = 
-  cells %>% 
-  left_join(stg1_predict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
-            by = "CELL_ID") %>% 
-  # this left NAs in cells not in the predict set, i.e. in the train/test set
-  mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
-    is.na(CELL_PRED_PROP_VOLUME_COOPS) ~ CELL_PROP_VOLUME_COOPS, 
-    TRUE ~ CELL_PRED_PROP_VOLUME_COOPS
-  ))
-
-cells$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
-
-# at this stage, the NAs come from CELL_PROP_VOLUME_COOPS, in cells with no potential link at all 
-stopifnot(cells %>% filter(is.na(CELL_PRED_PROP_VOLUME_COOPS)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% all())
-
-```
-
+### Predict
 
 # SECOND STAGE 
 
@@ -636,23 +718,11 @@ links_ss =
 ## Data split
 Resources on data split here: https://encord.com/blog/train-val-test-split/
 ```{r}
-training_size <- 0.8
 
 # Split the data
 stg2_traintest =
   links_ss %>%
   filter(SPLIT == "Development set") 
-
-stg2_training =
-  stg2_traintest %>%
-  slice_sample(prop = training_size) 
-
-stg2_test =
-  stg2_traintest %>%
-  filter(!LINK_ID %in% stg2_training$LINK_ID) 
-
-
-stg2_predict = links
 
 ```
 
@@ -689,7 +759,7 @@ stg2_mformula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", pa
 
 ```
 
-## Model fit 
+## Model development 
 ```{r}
 
 stg2_mfit =
@@ -712,7 +782,7 @@ stg2_mfit =
 
 ```
 
-## Evaluation 
+## Performance 
 ```{r}
 (test_pred_prob <- predict(stg2_mfit, 
                              new_data=stg2_test, 
@@ -775,7 +845,7 @@ we can calculate the overall accuracy score as a sum of instances where predicte
 
 ```
 
-### PR-CURVE
+### PR-AUC
 ```{r}
 prc_xgboost_test = 
   pr_curve(
@@ -824,9 +894,37 @@ legend(
 ```
 
 
-## Predict
+
+
+
+## Prediction (deprecated)
+## Simple predict (deprecated)
+```{r}
+stg1_predict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_predict)$predictions
+
+stg1_predict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+
+cells = 
+  cells %>% 
+  left_join(stg1_predict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
+            by = "CELL_ID") %>% 
+  # this left NAs in cells not in the predict set, i.e. in the train/test set
+  mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
+    is.na(CELL_PRED_PROP_VOLUME_COOPS) ~ CELL_PROP_VOLUME_COOPS, 
+    TRUE ~ CELL_PRED_PROP_VOLUME_COOPS
+  ))
+
+cells$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
+
+# at this stage, the NAs come from CELL_PROP_VOLUME_COOPS, in cells with no potential link at all 
+stopifnot(cells %>% filter(is.na(CELL_PRED_PROP_VOLUME_COOPS)) %>% pull(CELL_NO_POTENTIAL_LINK) %>% all())
+
+```
+
 - TAKES TOO MUCH TIME, check how to improve efficiency 
 ```{r}
+stg2_predict = links
+
 stg2_predict$LINK_PRED_EXIST_PROB = predict(stg2_mfit, 
                                             new_data=stg2_predict, 
                                             type = "prob")$`.pred_Actual links`
