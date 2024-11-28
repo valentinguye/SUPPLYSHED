@@ -60,8 +60,18 @@ set.seed(8888)
 #                  repos = NULL, 
 #                  type = "source")
 
+# These are were summon_familiar will write its outputs
 dir.create(here("temp_data", "familiar", "stage_1"))
 dir.create(here("temp_data", "familiar", "stage_2"))
+# This is to save some of the outputs from being overwritten subsequently. 
+dir.create(here("outputs", "familiar", "stage_1", "performance"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_1", "explanation_vimp"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_2", "performance"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_2", "explanation_vimp"), recursive = TRUE)
+
+# And to save the predictions 
+dir.create(here("temp_data", "predictions", "stage_1"))
+dir.create(here("temp_data", "predictions", "stage_2"))
 
 ## Functions
 # Trase palettes etc. for plots
@@ -94,6 +104,11 @@ departements <- read_sf(here("input_data/s3/CIV_DEPARTEMENTS.geojson"))
 departements = 
   st_transform(departements, crs = civ_crs)
 
+```
+
+# Useful pre-ops
+## Cols ops
+```{r}
 cells = 
   cells %>% 
   rename(CELL_PROP_COOP_STATUS_COOPCA = `CELL_PROP_COOP_STATUS_COOP-CA`, 
@@ -128,48 +143,9 @@ links =
   mutate(LINK_ACTUAL_COOP_ID = gsub("_BS.*", "", LINK_ACTUAL_COOP_BS_ID), 
          LINK_POTENTIAL_COOP_ID = gsub("_BS.*", "", LINK_POTENTIAL_COOP_BS_ID))
 
-
-
 ```
 
-## Observed links data 
-Start from links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there). 
-```{r}
-obs_links_des = 
-  links %>% 
-  filter(LINK_IS_ACTUAL) %>% 
-  mutate(LINK_SOURCE = case_when(
-    grepl("CARGILL", PRO_ID) ~ "Cargill data",
-    grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
-    grepl("JRC", PRO_ID) ~ "JRC data",
-  ))
-
-length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
-
-totbl = 
-  obs_links_des %>% 
-  summarise(.by = LINK_SOURCE,  
-    # Number of 
-    # Links
-    `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
-    `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
-    # Farms
-    `Farms` = length(unique(na.omit(PRO_ID))), 
-    `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
-    # Buyers
-    Buyers = length(unique(na.omit(BUYER_ID))),
-    `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
-    `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
-    `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
-    
-    )
-
-
-```
-
-
-
-## Remove some cell/link categories 
+## Remove cell & link instances 
 ```{r}
 # Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% pull(SPLIT) %>% unique()
@@ -203,54 +179,49 @@ stopifnot(links %>%
             filter(!LINK_IS_VIRTUAL) %>% nrow() == sum(links$LINK_IS_ACTUAL_COOP))
 ```
 
+## Under-sample virtual links
+```{r}
+links_us = 
+  links %>% 
+  filter(!LINK_POSSIBLE_FALSENEG) %>% 
+  filter(LINK_TO_KEEP_TO_US_VIRTUAL) # this is only TRUE currently. 
+```
 
-# MANIPULATE ROWS
-
-## Extract train/test set
+## Extract development sets
 Any processing on explanatory features' values should be made before this step so it is done once for all the data
 ```{r}
 cells = 
   cells %>% 
   mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Development set", "No data")) 
 
-stg1_traintest =
-  cells %>%
-  filter(SPLIT == "Development set") 
+stg1_development =
+  cells %>% filter(SPLIT == "Development set") 
 
-links = 
-  links %>% 
+links_us = 
+  links_us %>% 
   mutate(SPLIT = if_else(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK, "Development set", "No data")) 
 
-stg2_traintest =
-  links %>%
+stg2_development =
+  links_us %>%
   filter(SPLIT == "Development set") 
 
-cells_stg2_traintest = 
-  stg2_traintest %>% 
-  distinct(CELL_ID, .keep_all = TRUE)
+cells_stg2_development =
+  stg2_development %>%
+  distinct(CELL_ID, .keep_all = TRUE) %>% 
+  select(starts_with("CELL_"))
   
 
-```
-
-## Filter predict set
-```{r}
-stg1_predict = 
-  cells %>% 
-  filter(!CELL_NO_POTENTIAL_LINK)
-
-
-
-
 
 ```
+
 
 
 # DESCRIPTIVES 
 
 
-## Cells des. stats.
+## Cells data 
 
-### Structure of the cell data
+### Structure
 ```{r}
 # How many cells with actual links
 # cells %>% 
@@ -275,16 +246,16 @@ stg1_predict =
               data = cells,
               fmt = 1,
               align = "cccccc",
-              output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
+              output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
 # Cells with actual link data for both stages have JRC or SC data on actual link existence, size and type of buyer (cooperative or other), that is representative for the whole cell. 
 
 # ?tables::Heading
 
-cells %>% filter(SPLIT == "Development set") %>% nrow()
+stg1_development %>% nrow()
 
 ```
 
-### Map of the cell data
+### Map
 ```{r}
 
 # tmptoplot = only_potential_propt %>% filter(!duplicated(CELL_ID))
@@ -352,35 +323,30 @@ ggplot(toplot) +
     scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
     scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
     
-ggsave()
+ggsave(  
+  filename = "input_data_map",
+  path = here("outputs", "input_data_descriptives"), 
+  width = units(1200, "px"), 
+  height = units(800, "px"))
 
 ```
 
 
-### Cell data features
-In the train/test set 
+### Features
+In the development set 
 ```{r}
 # names(cells)
 
-cells_traintest_features =
-  cells %>% 
+cells_development_features =
+  stg1_development %>% 
   select(Sample = SPLIT, 
          `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
          `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
          `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
+         `Avg. road distance of the 1 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_1_NEAREST_COOPS, 
          `Avg. road distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
          `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
-          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
-          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
-          # `Cocoa extent (ha)` = CELL_COCOA_HA,
-          `Coffee extent (ha)` = CELL_COFFEE_HA,
-          `Rubber extent (ha)` = CELL_RUBBER_HA,
-          `Palm extent (ha)` = CELL_PALM_HA,
-          `Coconut extent (ha)` = CELL_COCONUT_HA,
-          `Cashew extent (ha)` = CELL_CASHEW_HA,
-          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
-          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
-          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA,
+          
          `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
          `Proportion of 5 nearest cooperatives certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
          `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
@@ -393,12 +359,11 @@ cells_traintest_features =
          `Avg. TRI around 5 nearest cooperatives (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
          `Avg. cocoa extent around 5 nearest cooperatives (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_COCOA_HA,
          `Avg. settlements extent around 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
-         ) %>% 
-    filter(Sample == "Development set")
+         ) 
 
 
-(datasummary_skim(data = cells_traintest_features, 
-                 output = here("outputs", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html"))))
+(datasummary_skim(data = cells_development_features, 
+                 output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html"))))
 
 ```
 
@@ -407,34 +372,81 @@ Cell data balance tests
 # (datasummary_balance(~SPLIT, 
 #                       data = cells_features_tobalance, 
 #                       stars = TRUE,
-#                       # title = "Summaries and balance tests on cell data sets to train/test and to predict the cell share of cooperative outlet", 
+#                       # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet", 
 #                       notes = "'BS' stands for cooperative buying stations.", 
-#                      output = here("outputs", "cells_balance.png")))        
+#                      output = here("outputs", "input_data_descriptives", "cells_balance.png")))        
 ```
 
-
-### LU in 2nd stage cells 
+### LU 
 ```{r}
-(cells_stg2_traintest$CELL_COCOA_HA/cell_area_ha) %>% summary()
+(cells_stg2_development$CELL_COCOA_HA/cell_area_ha) %>% summary()
   
-
+stg1_development %>% 
+  select(Sample = SPLIT, 
+          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
+          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
+          `Cocoa extent (ha)` = CELL_COCOA_HA,
+          `Coffee extent (ha)` = CELL_COFFEE_HA,
+          `Rubber extent (ha)` = CELL_RUBBER_HA,
+          `Palm extent (ha)` = CELL_PALM_HA,
+          `Coconut extent (ha)` = CELL_COCONUT_HA,
+          `Cashew extent (ha)` = CELL_CASHEW_HA,
+          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
+          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA
+  ) %>% 
+  datasummary_skim(output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
 
 ```
 
 
-## Links descriptive statistics
+## Links data
 
-### Features in the Potential-links data  
-With differences between actual and/virtual in train/test? 
+### Observed links 
+This starts from links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there). 
+```{r}
+obs_links_des = 
+  links %>% 
+  filter(LINK_IS_ACTUAL) %>% 
+  mutate(LINK_SOURCE = case_when(
+    grepl("CARGILL", PRO_ID) ~ "Cargill data",
+    grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
+    grepl("JRC", PRO_ID) ~ "JRC data",
+  ))
 
-(Alternatively, we could look at: 
+length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
+
+totbl = 
+  obs_links_des %>% 
+  summarise(.by = LINK_SOURCE,  
+    # Number of 
+    # Links
+    `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
+    `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
+    # Farms
+    `Farms` = length(unique(na.omit(PRO_ID))), 
+    `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
+    # Buyers
+    Buyers = length(unique(na.omit(BUYER_ID))),
+    `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
+    `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
+    `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
+    
+    )
+
+
+```
+
+### Features 
+With differences between actual and/virtual in development. 
+Alternatively, we could look at: 
 - Only in actual 
-- Between train/test and predict sets)
+- Only in all (potential)
 
 ```{r}
-names(stg2_traintest)
+names(stg2_development)
 stg2_features_tobalance_1 =
-  stg2_traintest %>%
+  stg2_development %>%
   mutate(across(where(is.logical), as.integer)) %>% 
   select(LINK_IS_ACTUAL_COOP_class, 
          LINK_DISTANCE_METERS,
@@ -446,10 +458,10 @@ stg2_features_tobalance_1 =
 
 datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
                     data = stg2_features_tobalance_1, 
-                    output = here("outputs", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
+                    output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
 
 stg2_features_tobalance_2 =
-  stg2_traintest %>%
+  stg2_development %>%
   mutate(across(where(is.logical), as.integer)) %>% 
   select(LINK_IS_ACTUAL_COOP_class,
          COOP_FARMERS, 
@@ -464,20 +476,21 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 
 ```
 
+### Map of actual links
+```{r}
+
+```
+
 
 
 # FIRST STAGE 
 
-## Data and formula
-
-Resources on data split here: https://encord.com/blog/train-val-test-split/
+## Formula
 ```{r}
-# Here, we do not do holdout method, so we do not split data into train and test sets. 
-anyNA(stg1_traintest)
-
-
+anyNA(stg1_development)
 # names(cells)
 # anyNA(cells)
+
 stg1_allfeatures = 
   cells %>% 
   select(
@@ -499,35 +512,37 @@ stg1_allfeatures =
     # This increases the simple fit performance from an OOB R2 of .17 (with only summaries at 5 nearest coop-level) to .24
     starts_with("CELL_PROP_"), -CELL_PROP_VOLUME_COOPS, -CELL_PROP_VOLUME_OTHERS,
     starts_with("CELL_AVG_"), CELL_AVG_N_LICBUY_IN_DPT, CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS,
-    # -ends_with("_HA"),
+    # -ends_with("_HA"), 
     starts_with("CELL_COUNT_")) %>%
   names()  
   
+# Restricted list of more exogenous features regarding the further applications of the model. 
+# This excludes SSI and certification related variables, and LU (except settlement) in coop buffers.  
 stg1_exofeatures = 
   stg1_allfeatures %>% 
   grep(~., pattern = "DISTANCE|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
        value = TRUE) %>% 
   unique()
 
-
-stg1_mformula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+stg1_formula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
 stg1_mformula_exofeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_exofeatures, collapse = " + ")))
 
 ```
-The first stage has `r length(stg1_allfeatures)` potential features.  
+
+The first stage has `r length(stg1_allfeatures)` potential features, `r length(stg1_exofeatures)` of which are exogenous to further applications. 
 
 ## Simple fit 
 This is simple because it does not do feature selection nor optimize hyper-parameters.
 ```{r}
-stg1_mfit = ranger(data = stg1_traintest, 
+stg1_mfit = ranger(data = stg1_development, 
                    importance = 'permutation',
                    case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
-                   formula = stg1_mformula_allfeatures, 
+                   formula = stg1_formula_allfeatures, 
                    seed = 8888
                    )
 print(stg1_mfit)
 
-stg1_mfit = ranger(data = stg1_traintest, 
+stg1_mfit = ranger(data = stg1_development, 
                    importance = 'permutation',
                    case.weights = "CELL_REPRESENTATIVITY_STD_WEIGHT",
                    formula = stg1_mformula_exofeatures, 
@@ -557,21 +572,25 @@ predict function like anywhere else.
 # ?as_familiar_data
 # ?predict  
 
-anyNA(stg1_traintest)
+anyNA(stg1_development)
 
+# Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
 stage1_model_repo = here("temp_data", "familiar", "stage_1")
 
+# Experimental design 
+exp_design = "bt(fs+mb,200)"
+
 summon_familiar(
   
-  formula = stg1_mformula_allfeatures,
-  data = stg1_traintest,
-  # experiment_dir = stage1_model_repo,
+  formula = stg1_formula_allfeatures,
+  data = stg1_development,
+  experiment_dir = stage1_model_repo,
   sample_id_column = "CELL_ID",
   outcome_name = "Cooperative outlet share",
   outcome_column = "CELL_PROP_VOLUME_COOPS",
   outcome_type = "continuous",
-  experimental_design = "fs + mb", # "bt(fs + mb, 21)", # # "cv(bt(fs,100) + mb, 3)",
+  experimental_design = exp_design, #"fs + mb", #  # "cv(bt(fs,100) + mb, 3)",
   
   # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
 
@@ -596,13 +615,21 @@ summon_familiar(
   # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
   
   # EVALUATION INFERENCE
-  estimation_type = "point", #list("auc_data"="bci", "model_performance"="point"), # "bootstrap_confidence_interval", # the default. Requires several point estimates. 
-  # The kind of metric for which we want a CI can be set by providing a list instead of character, e.g.: list("auc_data"="bci", "model_performance"="point")
+  # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.  
+  estimation_type = list("prediction_data" = "bci", "model_performance"="bci", 
+                         "permutation_vimp" = "point", 
+                         "ice_data"= "point", 
+                         "auc_data" = "point", 
+                         "decision_curve_analyis" = "point"), 
   confidence_level = 0.95, # the default. 
   detail_level = "hybrid" # the default. See ?summon_familiar and  https://cran.r-project.org/web/packages/familiar/vignettes/evaluation_and_explanation_precompiled.html
 )
 
-# Finders of familiar outputs ---------------------
+
+
+
+# --------------------- Finders of familiar outputs ---------------------
+
 # Feature info - this gives generic info about the features in the model 
 # feature_info = readRDS(here(stage1_model_repo, "20241127134237_feature_info.RDS"))
 
@@ -619,11 +646,9 @@ stage1_model_path = here(stage1_model_repo,
                          "random_forest_ranger_permutation")
 
 # Select the model/ensemble we want to work with 
-
 stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
 
 model_date = gsub("-", "", today()) # replace by yyyymmdd as needed
-# model_date = 20241125
 model1_name = 
   stage1_ensemble_names %>% 
   grep(~.,  
@@ -632,24 +657,32 @@ model1_name =
                                           
 model1 = readRDS(here(stage1_model_path, model1_name))
 
-
 ```
 
 ## Performance
 ```{r}
 # Performance metrics are stored here
-perf_metrics = read.csv(here(stage1_results, "performance", "performance_metric.csv"))
+perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
 
+perf_metrics
 
 
 # Normalement ces plots sont déjà exportés automatiquement par summon_familiar. 
-plots <- familiar::plot_model_performance(
+plot_perf_model1 = 
+  familiar::plot_model_performance(
   object = model1,
   draw = TRUE,
   facet_by = "metric",
-  data = stg1_traintest,
+  data = stg1_development,
   estimation_type = "bci",
   metric = c("mse", "rmse", "rse", "rrse", "explained_variance", "r2_score"))
+
+# Save plot
+plot_perf_model1
+ggsave(
+  filename = paste0(object_name(stg1_formula_allfeatures), "_", gsub(",","_",exp_design), ".png"),
+  path = here("outputs", "familiar", "stage_1", "performance"))
+
 ```
 
 
@@ -661,11 +694,10 @@ Explanation is produced by feature, and can be interpreted in target scale.
 ```{r}
 importance_repo = here(stage1_results, "variable_importance")
 
-# These are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
+# These summon_familiar outputs are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
 # stage1_vimp = here(stage1_model_repo, "variable_importance")
 # vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
 # vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
-
 
 
 # The plot_model_signature_occurrence method plots the occurrence of features among the first 5 ranks across an ensemble of models (if available). The rank threshold can be specified using the rank_threshold argument or the eval_aggregation_rank_threshold parameter (summon_familiar).
@@ -673,6 +705,7 @@ importance_repo = here(stage1_results, "variable_importance")
 ```
 
 ### Explanation
+Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots
 ```{r}
 explanation_repo = here(stage1_results, "explanation")
 
@@ -681,60 +714,15 @@ explanation_repo = here(stage1_results, "explanation")
 ```
 
 
-## Prediction
-### Novelty
-
-```{r}
-# Novelty in development data 
-devdat_prediction = read.csv(here(stage1_results, "prediction", "prediction.csv"))
-
-
-```
-
-
-### AoA
-
-```{r}
-
-
-```
-
-### Prediction set
-
-### Predict
-
 # SECOND STAGE 
 
-## Apply sub-sampling
+## Formula
 ```{r}
-links_ss = 
-  links %>% 
-  filter(!LINK_POSSIBLE_FALSENEG) %>% 
-  filter(LINK_TO_KEEP_TO_US_VIRTUAL) # this is only TRUE currently. 
-```
-
-
-
-## Data split
-Resources on data split here: https://encord.com/blog/train-val-test-split/
-```{r}
-
-# Split the data
-stg2_traintest =
-  links_ss %>%
-  filter(SPLIT == "Development set") 
-
-```
-
-
-## Feature selection
-Use Boruta here https://cran.r-project.org/web/packages/Boruta/Boruta.pdf
-```{r}
-# names(links_ss)
-anyNA(links_ss)
+# names(stg2_development)
+anyNA(stg2_development)
 
 stg2_allfeatures = 
-  links_ss %>% 
+  stg2_development %>% 
   select(
     ends_with("_HA"), CELL_TRI_MM, 
     CELL_N_BS_WITHIN_DIST, # CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
@@ -754,7 +742,7 @@ stg2_allfeatures =
   
 grep("'", stg2_allfeatures, value = T)
 
-stg2_mformula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_allfeatures, collapse = " + ")))
+stg2_formula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_allfeatures, collapse = " + ")))
 
 
 ```
@@ -770,7 +758,7 @@ stg2_mfit =
     min_n = 5
   ) %>%
   fit(data = stg2_training,
-      formula = stg2_mformula_allfeatures)
+      formula = stg2_formula_allfeatures)
 
 # stg2mfit = 
 #   xgboost(
@@ -895,11 +883,78 @@ legend(
 
 
 
+# PREDICTION
+Here, we build the prediction setS for each stage. 
+First, based on LU in cells. 
+Second, based on AoA of 1st stage model. 
+Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
+
+## LU discarding
+```{r}
+
+```
+
+
+## AoA
+```{r}
+
+
+```
+
+
+
+## Novelty
+```{r}
+# Novelty in development data 
+devdat_prediction_1 = read.csv(here(stage1_results, "prediction", "prediction.csv"))
+devdat_prediction_2 = read.csv(here(stage2_results, "prediction", "prediction.csv"))
+
+
+
+```
+
+## Prediction sets
+```{r}
+
+```
+
+
+
+## Predict
+```{r}
+model1_prediction = predict(model1, newdata = stg1_prediction_set)
+saveRDS(model1_prediction, 
+        here("temp_data", ""))
+
+stg2_prediction$CELL_PRED_PROP_VOLUME_COOPS = predict(model2, newdata = stg2_prediction)$predictions
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ## Prediction (deprecated)
 ## Simple predict (deprecated)
 ```{r}
+stg1_predict = 
+  cells %>% 
+  filter(!CELL_NO_POTENTIAL_LINK)
+
+
 stg1_predict$CELL_PRED_PROP_VOLUME_COOPS = predict(stg1_mfit, data=stg1_predict)$predictions
 
 stg1_predict$CELL_PRED_PROP_VOLUME_COOPS %>% summary()
@@ -908,7 +963,7 @@ cells =
   cells %>% 
   left_join(stg1_predict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
             by = "CELL_ID") %>% 
-  # this left NAs in cells not in the predict set, i.e. in the train/test set
+  # this left NAs in cells not in the predict set, i.e. in the development set
   mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
     is.na(CELL_PRED_PROP_VOLUME_COOPS) ~ CELL_PROP_VOLUME_COOPS, 
     TRUE ~ CELL_PRED_PROP_VOLUME_COOPS
@@ -936,7 +991,7 @@ cells =
   cells %>% 
   left_join(stg2_predict %>% select(CELL_ID, CELL_PRED_PROP_VOLUME_COOPS), 
             by = "CELL_ID") %>% 
-  # this left NAs in cells not in the predict set, i.e. in the train/test set
+  # this left NAs in cells not in the predict set, i.e. in the development set
   mutate(CELL_PRED_PROP_VOLUME_COOPS = case_when(
     is.na(CELL_PRED_PROP_VOLUME_COOPS) ~ CELL_PROP_VOLUME_COOPS, 
     TRUE ~ CELL_PRED_PROP_VOLUME_COOPS
