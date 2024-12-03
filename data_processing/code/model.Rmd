@@ -41,8 +41,11 @@ library(parsnip)
 library(xgboost)
 library(pROC)
 library(yardstick)
+library(CAST)
+library(caret)
 
 library(familiar)
+
 # and packages required but some uses of familiar: 
 library(microbenchmark)
 library(glmnet)
@@ -179,6 +182,25 @@ links =
 
 stopifnot(links %>% 
             filter(!LINK_IS_VIRTUAL) %>% nrow() == sum(links$LINK_IS_ACTUAL_COOP))
+
+
+# Remove cells with virtually no cocoa and no space for cocoa to grow 
+
+summary(cells$CELL_COCOA_HA)
+summary(cells$CELL_IMPOSSIBLE_HA)
+
+# Very few cells have more than 80% of their area impossible for cocoa expansion. 
+# Consequently, most cells are possibly of interest to our study, either because they have cocoa, or because 
+# they have some space for cocoa to expand. 
+cells = 
+  cells %>%  
+  filter(!(CELL_COCOA_HA < 0.01*1600 & CELL_IMPOSSIBLE_HA > 0.8*1600))
+
+links = 
+  links %>% 
+  filter(!(CELL_COCOA_HA < 0.01*1600 & CELL_IMPOSSIBLE_HA > 0.8*1600))
+
+
 ```
 
 ## Under-sample virtual links
@@ -698,9 +720,9 @@ plot_perf_model1 =
   object = model1,
   draw = TRUE,
   facet_by = "metric",
-  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, stg1_allfeatures),
+  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
   estimation_type = "bci",
-  metric = c("mse", "rmse", "rse", "rrse", "explained_variance", "r2_score"))
+  metric = c("mse", "rse", "r2_score")) #"rmse",  "explained_variance", 
 
 # Save plot
 plot_perf_model1
@@ -880,6 +902,8 @@ stg2_mfit =
 
 anyNA(stg2_development)
 
+names(which(colSums(is.na(stg2_development)) > 0)) %>% intersect(stg2_allfeatures)
+
 # Experimental design 
 exp_design = "bt(fs+mb,5)"
 
@@ -892,7 +916,7 @@ dir.create(stage2_expdes_repo)
 summon_familiar(
   
   formula = stg2_formula_allfeatures,
-  data = stg2_development %>% select(LINK_ID, LINK_IS_ACTUAL_COOP_class, all_of(stg2_allfeatures)),
+  data = stg2_development %>% select(LINK_ID, LINK_IS_ACTUAL_COOP_class, all_of(stg2_allfeatures)) %>% drop_na(),
   experiment_dir = stage2_expdes_repo,
   sample_id_column = "LINK_ID",
   outcome_name = "Link existence",
@@ -1061,19 +1085,45 @@ legend(
 
 # PREDICTION
 Here, we build the prediction setS for each stage. 
-First, based on LU in cells. 
-Second, based on AoA of 1st stage model. 
+Based on AoA of 1st stage model. 
 Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
 
-## LU discarding
-```{r}
-
-```
 
 
 ## AoA
 ```{r}
+# Requires the model to be trained with caret, with cross-validation and not bootstraps
 
+model1_caret = 
+  train(
+    x = stg1_development %>% select(all_of(model1@required_features)),
+    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
+    method="rf", 
+    importance=TRUE, 
+    tuneLength=1,
+    trControl=trainControl(method="cv",number=5,savePredictions=T)
+  )
+
+predict()
+
+aoa1 = 
+  aoa(newdata = cells %>% select(all_of(model1@required_features)),
+      model = model1_caret)
+
+cells$CELL_IS_IN_AOA = if_else(aoa1$AOA == 1, TRUE, FALSE)
+
+cells$CELL_IS_IN_AOA %>% summary()
+
+# Map 
+
+toplot = 
+  cells %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs) 
+
+ggplot(toplot) +
+    geom_sf(aes(col = CELL_IS_IN_AOA), size = 1) + #, shape = 15
+    geom_sf(data = departements, fill = "transparent", col = "black")
 
 ```
 
