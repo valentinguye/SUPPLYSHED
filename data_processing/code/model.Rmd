@@ -75,8 +75,8 @@ dir.create(here("outputs", "familiar", "stage_2", "explanation_vimp"), recursive
 dir.create(here("outputs", "familiar", "stage_2", "models"), recursive = TRUE)
 
 # And to save the predictions 
-dir.create(here("temp_data", "predictions", "stage_1"))
-dir.create(here("temp_data", "predictions", "stage_2"))
+dir.create(here("temp_data", "predictions", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "predictions", "stage_2"), recursive = TRUE)
 
 ## Functions
 # Trase palettes etc. for plots
@@ -150,7 +150,8 @@ links =
 
 ```
 
-## Remove cell & link instances 
+## Remove cell & link instances
+### That make no sense
 ```{r}
 # Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% pull(SPLIT) %>% unique()
@@ -183,9 +184,10 @@ links =
 stopifnot(links %>% 
             filter(!LINK_IS_VIRTUAL) %>% nrow() == sum(links$LINK_IS_ACTUAL_COOP))
 
-
+```
+### Based on LU
+```{r}
 # Remove cells with virtually no cocoa and no space for cocoa to grow 
-
 summary(cells$CELL_COCOA_HA)
 summary(cells$CELL_IMPOSSIBLE_HA)
 
@@ -199,9 +201,8 @@ cells =
 links = 
   links %>% 
   filter(!(CELL_COCOA_HA < 0.01*1600 & CELL_IMPOSSIBLE_HA > 0.8*1600))
-
-
 ```
+
 
 ## Under-sample virtual links
 ```{r}
@@ -322,7 +323,7 @@ toplot =
       )) 
 toplot$`Cell information content` %>% table()    
 
-
+map1 = 
 ggplot(toplot) +
     geom_sf(aes(col = `Cell information content`), size = 1) + #, shape = 15
     geom_sf(data = departements, fill = "transparent", col = "black") +
@@ -346,12 +347,16 @@ ggplot(toplot) +
   theme(legend.key.size = unit(1, "cm")) +
     scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
     scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
-    
+  
+map1
+
 ggsave(  
-  filename = "input_data_map",
+  plot = map1, 
+  filename = "input_data_map.png",
   path = here("outputs", "input_data_descriptives"), 
-  width = units(1200, "px"), 
-  height = units(800, "px"))
+  width = 25, 
+  height = 20,
+  units = "cm")
 
 ```
 
@@ -367,8 +372,10 @@ cells_development_features =
          `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
          `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
          `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
-         `Avg. road distance of the 1 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_1_NEAREST_COOPS, 
-         `Avg. road distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+         `Avg. Eucl. distance of the 1 nearest BS (m)` = CELL_MIN_DISTANCE_METERS, 
+         `Avg. road distance of the 1 nearest BS (m)` = CELL_MIN_TRAVEL_METERS, 
+         `Avg. Eucl. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+         `Avg. road distance of the 5 nearest BS (m)` = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
          `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
           
          `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
@@ -386,8 +393,9 @@ cells_development_features =
          ) 
 
 
-(datasummary_skim(data = cells_development_features, 
-                 output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html"))))
+datasummary_skim(data = cells_development_features,
+
+                output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html")))
 
 ```
 
@@ -458,10 +466,12 @@ totbl =
     
     )
 
+totbl
 
 ```
 
-### Features 
+
+## Balance tests in Links features
 With differences between actual and/virtual in development. 
 Alternatively, we could look at: 
 - Only in actual 
@@ -500,6 +510,8 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 
 ```
 
+
+
 ### Map of actual links
 ```{r}
 
@@ -531,7 +543,7 @@ stg1_allfeatures =
     # some corrections/additions
     -CELL_PROP_VOLUME_COOPS, -CELL_PROP_VOLUME_OTHERS,
     
-    CELL_TRI_MM, CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_MIN_DISTANCE_METERS
+    CELL_TRI_MM, CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_MIN_DISTANCE_METERS, CELL_MIN_TRAVEL_METERS
   ) %>%
   names()
 
@@ -541,7 +553,7 @@ stg1_allfeatures =
 # This excludes SSI and certification related variables, as well as the number of known buyers. 
 stg1_exofeatures = 
   stg1_allfeatures %>% 
-  grep(~., pattern = "DISTANCE|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
+  grep(~., pattern = "DISTANCE|TRAVEL|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
        value = TRUE) %>% 
   unique()
 
@@ -598,7 +610,7 @@ predict function like anywhere else.
 anyNA(stg1_development)
 
 # Experimental design 
-exp_design = "bt(fs+mb,100)"
+exp_design = "bt(fs+mb,40)"
 
 # Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
@@ -643,7 +655,7 @@ summon_familiar(
   # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.  
   skip_evaluation_elements = c("feature_expressions", "feature_similarity", 
                                "fs_vimp",  "hyperparameters", "ice_data", 
-                                "model_vimp", "permutation_vimp", "univariate_analysis"), #
+                                "permutation_vimp", "univariate_analysis"), #"model_vimp", 
   
   # part of this list elements are useless now, since they are skipped by the above. 
   estimation_type = list("prediction_data" = "bci", "model_performance"="bci", 
@@ -669,7 +681,7 @@ This block produces convenient finder objects to access familiar outputs.
 ```{r}
 ## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
 # ---------------------------------------------
-model_date = "20241129173952"
+model_date = "20241204190335"
 # ---------------------------------------------
 
 # Finders of familiar outputs
@@ -823,7 +835,6 @@ stg2_development %>% select(
      (ends_with("_HA"))
 ) %>% names() %>% grep(~., pattern = "CELL_AVG_", value = T)
 
-
 stg2_allfeatures = 
   stg2_development %>% 
   select(
@@ -887,6 +898,8 @@ stg2_mfit =
   fit(data = stg2_development,
       formula = stg2_formula_allfeatures)
 
+stg2_mfit
+
 # stg2mfit = 
 #   xgboost(
 #   label = stg2_training %>% select(LINK_IS_ACTUAL_COOP_class) %>% as.matrix(), 
@@ -899,13 +912,12 @@ stg2_mfit =
 
 ## Model development
 ```{r}
-
-anyNA(stg2_development)
-
+# Columns with NAs
 names(which(colSums(is.na(stg2_development)) > 0)) %>% intersect(stg2_allfeatures)
 
+
 # Experimental design 
-exp_design = "bt(fs+mb,5)"
+exp_design = "fs+mb"  # "bt(fs+mb,5)"
 
 # Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
@@ -916,7 +928,7 @@ dir.create(stage2_expdes_repo)
 summon_familiar(
   
   formula = stg2_formula_allfeatures,
-  data = stg2_development %>% select(LINK_ID, LINK_IS_ACTUAL_COOP_class, all_of(stg2_allfeatures)) %>% drop_na(),
+  data = stg2_development %>% select(LINK_ID, LINK_IS_ACTUAL_COOP_class, all_of(stg2_allfeatures)),
   experiment_dir = stage2_expdes_repo,
   sample_id_column = "LINK_ID",
   outcome_name = "Link existence",
@@ -927,6 +939,27 @@ summon_familiar(
   # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
 
   learner = "xgboost_tree",
+  
+  # Set hyper-parameters so that feature selection and model building stages do not tune this. 
+  # Otherwise, training the model is too long! 
+  # However, do NOT specify the signature size (i.e. the number of features to include "sign_size"), to let this be optimized based on feature importance. 
+                                            
+  # input default values in ranger
+  fs_method_parameter = list("random_forest_ranger_permutation"=
+                               list("n_tree" = 500,
+                                     "sample_size" = 0.632,
+                                     "m_try" = 0.5, # ranger's default is round(sqrt(length(stg2_allfeatures)),0),
+                                      # but apparently familiar uses a share 
+                                     "node_size" = 10,
+                                     "tree_depth" = 10 # ranger's default is 0 which means infinite. Here Inf is not accepted, so put the higher bound of familiar's default range. 
+                                     )),
+  # Input default values in xgboost::xgb.train 
+  hyperparameter = list("xgboost_tree"=
+                          list("n_boost" = 2, # this means 10^2 trees
+                                "learning_rate" = -1.5,
+                                "alpha" = 0, 
+                                "lambda" = 1
+                                )),
   
   # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
   parallel = TRUE,
@@ -942,7 +975,7 @@ summon_familiar(
   
   # FEATURE SELECTION & OPTIMIZATION 
   fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
-  # fs_method_parameter = list("random_forest_ranger_permutation" = list()), # this would need to have this format, but let it unspecified, so that feature selection optimizes on ALL hyper-parameters. 
+
   # vimp_aggregation_method = "borda", # borda is the default. Check guidance to depart. 
   
   # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
@@ -972,6 +1005,15 @@ summon_familiar(
 
 ## Performance 
 ```{r}
+
+
+
+
+
+
+
+
+# Hold-out validation (deprecated) ---------
 (test_pred_prob <- predict(stg2_mfit, 
                              new_data=stg2_test, 
                              type = "prob"))
@@ -991,7 +1033,6 @@ stg2_test =
          TN = LINK_PRED_ACTUAL_COOP_class == "Virtual links" & LINK_IS_ACTUAL_COOP_class == "Virtual links",
          FP = LINK_PRED_ACTUAL_COOP_class == "Actual links"  & LINK_IS_ACTUAL_COOP_class == "Virtual links",
          FN = LINK_PRED_ACTUAL_COOP_class == "Virtual links" & LINK_IS_ACTUAL_COOP_class == "Actual links")
-
 
 ```
 
@@ -1088,8 +1129,6 @@ Here, we build the prediction setS for each stage.
 Based on AoA of 1st stage model. 
 Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
 
-
-
 ## AoA
 ```{r}
 # Requires the model to be trained with caret, with cross-validation and not bootstraps
@@ -1104,7 +1143,6 @@ model1_caret =
     trControl=trainControl(method="cv",number=5,savePredictions=T)
   )
 
-predict()
 
 aoa1 = 
   aoa(newdata = cells %>% select(all_of(model1@required_features)),
@@ -1128,36 +1166,111 @@ ggplot(toplot) +
 ```
 
 
-
 ## Novelty
 ```{r}
 # Novelty in development data 
-devdat_prediction_1 = read.csv(here(stage1_results, "prediction", "prediction.csv"))
-devdat_prediction_2 = read.csv(here(stage2_results, "prediction", "prediction.csv"))
+devdat_prediction_1 = read.csv2(here(stage1_results, "prediction", "prediction.csv"))
+devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
+
+devdat_prediction_1$novelty %>% as.numeric() %>% summary()
 
 # It is possible to add features that were not in the model initial formula, to gauge novelty (?)
 # but would it make sense (to include LU vars) here? 
 
+# Novelty in to-predict data
+
+cells$CELL_NOVELTY = predict(object = model1, newdata = cells, type = "novelty")
+
+cells$CELL_NOVELTY %>% summary()
+
+# Novelty in the Cells data is in the range of novelty in the 1st stage dev data. 
+# So we don't take it further into account. 
 ```
+
+
 
 ## Prediction sets
 ```{r}
+# Keep cells that are sufficiently close in terms of AoA, and, 
+#to reduce computation, that have no close (72km) coop, as for those we attribute null probas.  
+cells_topredict = 
+  cells %>% 
+  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
+
+links = 
+  links %>%
+  left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
+            by = "CELL_ID")
+
+# SHOULD IT BE THE UNDER-SAMPLED DATA RATHER HERE??? No I don't think so. We do want to make predictions for all virtual links! 
+links_topredict =
+  links %>% 
+  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
+
 
 ```
 
-
-
-## Predict
+## Development/prediction balance tests
+ 
 ```{r}
-model1_prediction = predict(model1, newdata = stg1_prediction_set)
-saveRDS(model1_prediction, 
-        here("temp_data", "predictions", "stage_1", ""))
-
-stg2_prediction$CELL_PRED_PROP_VOLUME_COOPS = predict(model2, newdata = stg2_prediction)$predictions
 
 ```
 
 
+## Predict 1st stage
+```{r}
+cells_topredict$CELL_PREDICTED_PROP_VOLUME_COOPS = predict(model1, newdata = cells_topredict)$predicted_outcome
+
+# saveRDS(model1_prediction, 
+#         here("temp_data", "predictions", "stage_1", paste0(model_date, "_inaoa_prediction")))
+
+
+cells_topredict$CELL_PREDICTED_PROP_VOLUME_COOPS %>% summary()
+
+cells = 
+  cells %>% 
+  left_join(cells_topredict %>% select(CELL_ID, CELL_PREDICTED_PROP_VOLUME_COOPS), 
+            by = "CELL_ID")
+
+cells =
+  cells %>% 
+  mutate(CELL_PREDICTED_PROP_VOLUME_COOPS = if_else(CELL_NO_POTENTIAL_LINK, 
+                                                    0, 
+                                                    CELL_PREDICTED_PROP_VOLUME_COOPS))
+
+cells$CELL_PREDICTED_PROP_VOLUME_COOPS %>% summary()
+
+stopifnot(sum(is.na(cells$CELL_PREDICTED_PROP_VOLUME_COOPS)) == sum(aoa1$AOA==0))
+
+
+
+
+```
+
+
+## Predict 1st stage
+```{r}
+links_topredict$LINK_PREDICTED_IS_ACTUAL_COOP_class  = predict(model2, newdata = links_topredict)$predicted_outcome
+# Since this is quite long, we save the output
+saveRDS(links_topredict,
+        here("temp_data", "predictions", "stage_2", paste0(model_date, "_inaoa_prediction")))
+
+links_topredict$LINK_PREDICTED_IS_ACTUAL_COOP_class %>% summary()
+
+links = 
+  links %>% 
+  left_join(links_topredict %>% select(LINK_ID, LINK_PREDICTED_IS_ACTUAL_COOP_class), 
+            by = "LINK_ID")
+
+links =
+  links %>% 
+  mutate(LINK_PREDICTED_IS_ACTUAL_COOP_class = if_else(CELL_NO_POTENTIAL_LINK, 
+                                                    "Virtual links", 
+                                                    LINK_PREDICTED_IS_ACTUAL_COOP_class))
+
+links$LINK_PREDICTED_IS_ACTUAL_COOP_class %>% summary()
+
+```
 
 
 

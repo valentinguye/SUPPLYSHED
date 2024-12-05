@@ -1144,7 +1144,23 @@ stopifnot(
 
 ### IC2B variables -------------
 
+#### Impute missing coop size -----------
+
+anyNA(coopbs$TOTAL_FARMERS)
+anyNA(coopbs$COOP_FARMERS_RFA)
+anyNA(coopbs$COOP_FARMERS_FT)
+
+(avg_coop_farmers = mean(coopbs$TOTAL_FARMERS, na.rm = TRUE) %>% round(0))
+
+coopbs = 
+  coopbs %>% 
+  mutate(TOTAL_FARMERS = if_else(is.na(TOTAL_FARMERS) | TOTAL_FARMERS==0, 
+                                 avg_coop_farmers, TOTAL_FARMERS))
+
+summary(coopbs$TOTAL_FARMERS)
+
 # We match these variabes at buying station level, but they vary at coop level anyway. 
+
 
 # Make one-hot-encoded variables 
 coopbs_ohe = 
@@ -1225,10 +1241,20 @@ tri_coopbs_10km_buffer =
   rename(COOP_BS_10KM_TRI = weighted_mean) %>% 
   st_drop_geometry()
 
+tri_coopbs_10km_buffer$COOP_BS_10KM_TRI %>% summary()
+
 potential_all = 
   potential_all %>% 
   left_join(tri_coopbs_10km_buffer, 
             by = join_by(LINK_POTENTIAL_COOP_BS_ID == COOP_BS_ID))
+
+## Impute missing TRI 
+potential_all = 
+  potential_all %>% 
+  mutate(COOP_BS_10KM_TRI = if_else(is.na(COOP_BS_10KM_TRI), 
+                                 mean(tri_coopbs_10km_buffer$COOP_BS_10KM_TRI), 
+                                 COOP_BS_10KM_TRI))
+stopifnot(!anyNA(potential_all$COOP_BS_10KM_TRI))
 
 # This would have been the workflow with GEE
 # tri = rast(here("input_data/terrain/tri/tri.txt"))
@@ -1266,6 +1292,8 @@ potential_all =
 names(potential_all)
 
 if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")}
+
+
 
 
 
@@ -1635,6 +1663,22 @@ potential_1st %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>%
 
 ## Cell level Xs -----------
 
+# We need to do differently, because many links with the same coops can be TRUE on LINK_IS_WITH_1_NEAREST_COOPS 
+# (and even more on 5 nearest). Thus, cells with many actual links (cargill farms typically) will average, and, 
+# more problematically, sum, not across 1 or 5 coops, but across many repeats of these coops. 
+# LINK_IS_WITH_X_NEAREST_COOPS variables are correct, they do reflect what they mean to, 
+# it is how we use them here that needs to be corrected. 
+
+# Thus, we make a coop selector variable to average/sum over 1 or 5 values corresponding 
+# to the 1 or 5 nearest coops, not many values of the 1 or 5 nearest coops.  
+potential_1st = 
+  potential_1st %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    COOP_SELECTOR = !duplicated(COOP_ID) 
+  ) %>% 
+  ungroup() 
+
 # there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.
 # it is important to remove these NAs so they don't make cell distance summaries NAs. 
 # hence na.rm in the mean
@@ -1648,11 +1692,12 @@ cell_cellvars =
             CELL_LATITUDE = unique(CELL_LATITUDE),
             
             # Topological 
-            # unique to put equal weights on distances to the five distinct coop BS (not those with more actual links having more weights)
-            CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS  = mean(unique(LINK_IS_WITH_5_NEAREST_COOPS*LINK_TRAVEL_METERS), na.rm = TRUE),
-            # mean(head(sort(LINK_TRAVEL_METERS), 5), na.rm = TRUE),
-
-            CELL_MIN_DISTANCE_METERS                  = mean(unique(LINK_IS_WITH_1_NEAREST_COOPS*LINK_TRAVEL_METERS), na.rm = TRUE),
+            # unique() to put equal weights on distances to the five distinct coop BS (not those with more actual links having more weights)
+            CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS  = mean(unique(COOP_SELECTOR*LINK_IS_WITH_5_NEAREST_COOPS*LINK_DISTANCE_METERS), na.rm = TRUE),
+            CELL_MIN_DISTANCE_METERS                  = mean(unique(COOP_SELECTOR*LINK_IS_WITH_1_NEAREST_COOPS*LINK_DISTANCE_METERS), na.rm = TRUE),
+            
+            CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS  = mean(unique(COOP_SELECTOR*LINK_IS_WITH_5_NEAREST_COOPS*LINK_TRAVEL_METERS), na.rm = TRUE),
+            CELL_MIN_TRAVEL_METERS                  = mean(unique(COOP_SELECTOR*LINK_IS_WITH_1_NEAREST_COOPS*LINK_TRAVEL_METERS), na.rm = TRUE),
             
             CELL_N_BS_WITHIN_DIST               = unique(CELL_N_BS_WITHIN_DIST),
             CELL_N_COOP_IN_DPT                  = unique(CELL_N_COOP_IN_DPT),
@@ -1687,7 +1732,9 @@ cell_cellvars =
 )
 cell_cellvars$CELL_MIN_DISTANCE_METERS %>% summary()
 cell_cellvars$CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS %>% summary()
-potential_1st$LINK_DISTANCE_METERS %>% summary()
+cell_cellvars$CELL_MIN_TRAVEL_METERS %>% summary()
+cell_cellvars$CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS %>% summary()
+potential_1st$LINK_DISTANCE_METERS %>% summary() # (This has a very high max, coming from a link with another kind of buyer, thus not constrained by the 72km condition.)
 potential_1st$LINK_TRAVEL_METERS %>% summary()
 
 ## Coop level Xs -----------
@@ -1698,9 +1745,9 @@ potential_1st$LINK_TRAVEL_METERS %>% summary()
 fn_coop_prop_summary = function(COOP_VAR){
   potential_1st %>% 
     summarise(.by = "CELL_ID", 
-              !!as.symbol(paste0("CELL_PROP_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
-              !!as.symbol(paste0("CELL_PROP_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
-              !!as.symbol(paste0("CELL_PROP_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
+              !!as.symbol(paste0("CELL_PROP_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR)*COOP_SELECTOR, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_PROP_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*COOP_SELECTOR*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_PROP_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*COOP_SELECTOR*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
     )
 }
 
@@ -1746,9 +1793,9 @@ cell_binaryvars =
 fn_coop_mean_summary = function(COOP_VAR){
   potential_1st %>% 
     summarise(.by = "CELL_ID", 
-              !!as.symbol(paste0("CELL_AVG_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR), na.rm = TRUE),
-              !!as.symbol(paste0("CELL_AVG_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
-              !!as.symbol(paste0("CELL_AVG_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
+              !!as.symbol(paste0("CELL_AVG_", COOP_VAR))           := mean(!!as.symbol(COOP_VAR)*COOP_SELECTOR, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_AVG_1_NEAREST_", COOP_VAR))    := mean(!!as.symbol(COOP_VAR)*COOP_SELECTOR*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
+              !!as.symbol(paste0("CELL_AVG_5_NEAREST_", COOP_VAR)) := mean(!!as.symbol(COOP_VAR)*COOP_SELECTOR*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
     )
 }
 coop_othervars_toavg = c(
@@ -1784,9 +1831,9 @@ cell_othermeanvars =
 fn_coop_sum_summary = function(COOP_VAR){
   potential_1st %>% 
     summarise(.by = "CELL_ID", 
-            !!as.symbol(paste0("CELL_COUNT_", COOP_VAR))           := sum(!!as.symbol(COOP_VAR), na.rm = TRUE),
-            !!as.symbol(paste0("CELL_COUNT_1_NEAREST_", COOP_VAR))    := sum(!!as.symbol(COOP_VAR)*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
-            !!as.symbol(paste0("CELL_COUNT_5_NEAREST_", COOP_VAR)) := sum(!!as.symbol(COOP_VAR)*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
+            !!as.symbol(paste0("CELL_COUNT_", COOP_VAR))           := sum(!!as.symbol(COOP_VAR)*COOP_SELECTOR, na.rm = TRUE),
+            !!as.symbol(paste0("CELL_COUNT_1_NEAREST_", COOP_VAR))    := sum(!!as.symbol(COOP_VAR)*COOP_SELECTOR*LINK_IS_WITH_1_NEAREST_COOPS, na.rm = TRUE),
+            !!as.symbol(paste0("CELL_COUNT_5_NEAREST_", COOP_VAR)) := sum(!!as.symbol(COOP_VAR)*COOP_SELECTOR*LINK_IS_WITH_5_NEAREST_COOPS, na.rm = TRUE)
   )
 }
 
@@ -1807,6 +1854,12 @@ cell_countvars =
   bind_cols() %>%
   mutate(CELL_ID = CELL_ID...1) %>% 
   select(!starts_with("CELL_ID..."))
+
+# These should match  
+cell_countvars$CELL_COUNT_1_NEAREST_COOP_FARMERS %>% summary()
+coopbs$TOTAL_FARMERS %>% summary()
+
+stopifnot(max(coopbs$TOTAL_FARMERS) == max(cell_countvars$CELL_COUNT_1_NEAREST_COOP_FARMERS))
 
 ## Representativity weights ---------------------
 cell_weights = 

@@ -1089,7 +1089,7 @@ jrc_geo_coops$LINK_DISTANCE_METERS %>% summary()
 
 
 ### Prepare IC2B to join --------
-coopbs = 
+coopbs19 = 
   coopbs %>% 
   filter(YEAR == 2019) %>% 
   # temporary necessary
@@ -1097,13 +1097,13 @@ coopbs =
   # pull(JRC_BUYER_IDS) %>% unique()
 
 if(anyNA(jrc_geo_coops$JRC_BUYER_ID)){stop("the merge will match all non-JRC coops in IC2B")}
-if(nrow(coopbs) != length(unique(coopbs$COOP_BS_ID))){stop("there's a pb in coopbs")}
+if(nrow(coopbs19) != length(unique(coopbs19$COOP_BS_ID))){stop("there's a pb in coopbs19")}
 
 ### Match with IC2B -------
 
 jrc_geo_coops =
   jrc_geo_coops %>% 
-  left_join(coopbs %>% select(JRC_BUYER_IDS, COOP_BS_ID), 
+  left_join(coopbs19 %>% select(JRC_BUYER_IDS, COOP_BS_ID), 
             by = join_by("JRC_BUYER_ID" == "JRC_BUYER_IDS"))
 
 # they all match
@@ -1123,6 +1123,23 @@ jrc_geo =
     by = "PRODUCER_ID"
   )
 stopifnot(nrow(jrc_geo) == nrchecks)
+
+
+# Number of JRC coops, in total, in IC2B, and in IC2B that were not known before
+jrc$JRC_BUYER_ID %>% unique() %>% length() # 171 buyers
+jrc_geo$JRC_BUYER_ID %>% unique() %>% length() # 112 geolocated 
+
+jrc_coops_merge$JRC_BUYER_ID %>% unique() %>% length() # 47 coops
+jrc_geo %>% filter(BUYER_IS_COOP) %>% pull(JRC_BUYER_ID) %>% unique() %>% length() # 28 are geolocated coops
+
+coopbs19 %>%
+  filter(IS_ANY_JRC) %>% 
+  distinct(COOP_ID) %>% nrow() # 47 in IC2B 
+  
+coopbs19 %>%
+  filter(IS_ALL_JRC) %>% 
+  distinct(COOP_ID) %>% nrow() # 36 not known before
+
 
 
 # Checks -------------
@@ -1212,6 +1229,13 @@ write_csv(toexport,
           na = "NA", 
           append = FALSE, 
           col_names = TRUE)
+
+
+
+
+
+
+
 
 
 # SUPPLY SHED MODEL - PART 2 ------
