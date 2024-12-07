@@ -27,6 +27,7 @@ library(units)
 library(scales)
 library(kableExtra)
 library(here)
+library(tictoc)
 library(readstata13)
 library(sjmisc)
 library(terra) # put it after {raster} such that it superceeds homonym functions. 
@@ -63,9 +64,13 @@ set.seed(8888)
 #                  repos = NULL, 
 #                  type = "source")
 
+dir.create(here("temp_data", "caret", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "caret", "stage_2"), recursive = TRUE)
+
 # These are were summon_familiar will write its outputs
-dir.create(here("temp_data", "familiar", "stage_1"))
-dir.create(here("temp_data", "familiar", "stage_2"))
+dir.create(here("temp_data", "familiar", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "familiar", "stage_2"), recursive = TRUE)
+
 # This is to save some of the outputs from being overwritten subsequently. 
 dir.create(here("outputs", "familiar", "stage_1", "performance"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_1", "explanation_vimp"), recursive = TRUE)
@@ -112,7 +117,7 @@ departements =
 ```
 
 # Useful pre-ops
-## Cols ops
+## Columns ops
 ```{r}
 cells = 
   cells %>% 
@@ -139,8 +144,8 @@ links =
 # Make target a factor
 links = 
   links %>% 
-  mutate(LINK_IS_ACTUAL_COOP_class = factor(if_else(LINK_IS_ACTUAL_COOP, "Actual links", "Virtual links"), 
-                                               levels = c("Virtual links", "Actual links"))) 
+  mutate(LINK_IS_ACTUAL_COOP_class = factor(if_else(LINK_IS_ACTUAL_COOP, "Actual_links", "Virtual_links"), 
+                                               levels = c("Virtual_links", "Actual_links"))) 
 
 # Make COOP (and not Buying station) ID: 
 links = 
@@ -150,7 +155,59 @@ links =
 
 ```
 
+### Productive and prospective cells
+```{r}
+# Distribution of cocoa extent in cells where we know there are cocoa farms 
+cells_actual = 
+  cells %>% 
+  filter(CELL_ACTUAL_LINK) 
+
+cells_actual$CELL_COCOA_HA %>% summary() # It goes as low as 2 ha, but has on average 443 ha. 
+cells_actual$CELL_COCOA_HA %>%quantile(probs = seq(0.01,0.1,0.01))
+
+# 5% of the cells with actual links is a good threshold, because the cocoa area quantile corresponds to 5% of a cell area
+# (i.e., 80ha, since one cell is 1600ha)
+
+cells = 
+  cells %>% 
+  mutate(CELL_PRODUCTION_STATUS = if_else(CELL_COCOA_HA < 80, 
+                                          "PROSPECTIVE", 
+                                          "PRODUCTIVE"),
+         # also compute the share of area under cocoa use, to use as weights later on
+         CELL_COCOA_SHARE = CELL_COCOA_HA / 1600, 
+         # and of impossible land
+         CELL_IMPOSSIBLE_SHARE = CELL_IMPOSSIBLE_HA / 1600 
+         )
+
+links = 
+  links %>% 
+  left_join(
+    cells %>% select(CELL_PRODUCTION_STATUS, CELL_COCOA_SHARE, CELL_IMPOSSIBLE_SHARE, CELL_ID), 
+    by = "CELL_ID")
+
+```
+
+
+
 ## Remove cell & link instances
+### Based on LU
+```{r}
+# Remove cells with virtually no cocoa and no space for cocoa to grow 
+summary(cells$CELL_COCOA_HA)
+summary(cells$CELL_IMPOSSIBLE_HA)
+
+# Very few cells have more than 80% of their area impossible for cocoa expansion. 
+# Consequently, most cells are possibly of interest to our study, either because they have cocoa, or because 
+# they have some space for cocoa to expand. 
+cells = 
+  cells %>%  
+  filter(!(CELL_COCOA_SHARE < 0.01 & CELL_IMPOSSIBLE_SHARE > 0.8))
+
+links = 
+  links %>% 
+  filter(!(CELL_COCOA_SHARE < 0.01 & CELL_IMPOSSIBLE_SHARE > 0.8))
+```
+
 ### That make no sense
 ```{r}
 # Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
@@ -185,23 +242,7 @@ stopifnot(links %>%
             filter(!LINK_IS_VIRTUAL) %>% nrow() == sum(links$LINK_IS_ACTUAL_COOP))
 
 ```
-### Based on LU
-```{r}
-# Remove cells with virtually no cocoa and no space for cocoa to grow 
-summary(cells$CELL_COCOA_HA)
-summary(cells$CELL_IMPOSSIBLE_HA)
 
-# Very few cells have more than 80% of their area impossible for cocoa expansion. 
-# Consequently, most cells are possibly of interest to our study, either because they have cocoa, or because 
-# they have some space for cocoa to expand. 
-cells = 
-  cells %>%  
-  filter(!(CELL_COCOA_HA < 0.01*1600 & CELL_IMPOSSIBLE_HA > 0.8*1600))
-
-links = 
-  links %>% 
-  filter(!(CELL_COCOA_HA < 0.01*1600 & CELL_IMPOSSIBLE_HA > 0.8*1600))
-```
 
 
 ## Under-sample virtual links
@@ -588,6 +629,39 @@ print(stg1_mfit)
 ```
 
 ## Model development
+
+### caret
+```{r}
+# 400 boostraps prend quand même ~1h+ ! 
+model1_caret = 
+  train(
+    x = stg1_development %>% select(all_of(stg1_allfeatures)),
+    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
+    method="rf", 
+    importance=TRUE, 
+    tuneLength=5,
+    trControl=trainControl(method="boot632",number=400,savePredictions=T)
+  )
+
+saveRDS(model1_caret, 
+        file = here("temp_data", "caret", "stage_1", "allfeatures_rf_400boot632_5tuneL"))
+
+model1_caret_xgb = 
+  train(
+    x = stg1_development %>% select(all_of(stg1_allfeatures)),
+    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
+    method="xgbTree", 
+    importance=TRUE, 
+    tuneLength=5,
+    trControl=trainControl(method="boot632",number=4,savePredictions=T)
+  )
+
+saveRDS(model1_caret_xgb, 
+        file = here("temp_data", "caret", "stage_1", "allfeatures_xgbtree_4boot632_5tuneL"))
+```
+
+
+### familiar
 Doing feature ranking and hyper-parameter optimization
 This is the model development. 
 
@@ -676,7 +750,7 @@ summon_familiar(
 The results folder outputed by summon_familiar is saved manually to different place, to protect it from being overwritten in a subsequent run of the above block. 
 
 
-## Finders
+#### Finders
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 ## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
@@ -719,6 +793,39 @@ model1
 ```
 
 ## Performance
+### caret
+```{r}
+# That's the average across all the 500 trees
+model1_caret$finalModel$mse %>% mean()
+# But the ensemble's mse is averaged with weights equal to each tree's performance (or something)
+model1_caret$finalModel
+
+# And this is for all the 400 repetitions of the ensemble 
+# It is quite worse and I am not sure why.
+resamples <- model1_caret$resample
+mean(resamples$RMSE^2)
+
+sd(resamples$RMSE)
+
+mean(resamples$Rsquared)
+sd(resamples$Rsquared)
+
+# For XGB
+resample1_xgb = model1_caret_xgb$resample 
+
+mean(resample1_xgb$RMSE^2)
+sd(resample1_xgb$RMSE^2)
+mean(resample1_xgb$Rsquared)
+sd(resample1_xgb$Rsquared)
+
+
+
+# This is to access performance metrics aggregated over resamples for different models 
+resamps <- resamples(list(first_caret = model1_caret_xgb, first_caret2 = model1_caret))
+summary(resamps)
+
+```
+
 ```{r}
 # Performance metrics are stored here
 perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
@@ -757,6 +864,16 @@ Importance ranks features wrt. each other but cannot tell direction or magnitude
 Explanation is produced by feature, and can be interpreted in target scale. 
 
 ### Feature importance
+#### caret
+```{r}
+varImp(model1_caret)
+
+model1_caret$finalModel$importance %>% as.data.frame() %>% arrange(desc(`%IncMSE`))
+
+
+```
+
+#### familiar
 ```{r}
 importance_repo = here(stage1_results, "variable_importance")
 
@@ -862,14 +979,16 @@ stg2_allfeatures =
     COOP_N_KNOWN_BUYERS, 
     COOP_RFA, COOP_UTZ, COOP_FT,
     starts_with("COOP_CERTIFIED"), 
-    COOP_HAS_SSI, 
-    starts_with("COOP_SSI_"), 
+    # Never include those, because our observed links data is biased towards link existence when there is a SSI (the CCP, Cargill's SSI). 
+    # Don't include dummies for other SSIs than Cargill's, because having many training data from Cargill means our observed links data is biased towards link existence when there is no other SSI than Cargill's. 
+    # COOP_HAS_SSI, 
+    # starts_with("COOP_SSI_"), 
    
   ) %>%
   names()  
   
 # Restricted list of more exogenous features regarding the further applications of the model. 
-# This excludes SSI and certification related variables, as well as the number of known buyers. 
+# This additionally exclude certification related variables, as well as the number of known buyers. 
 stg2_exofeatures = 
   stg2_allfeatures %>% 
   grep(~., pattern = "DISTANCE|TRAVEL|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
@@ -887,8 +1006,9 @@ stg2_mformula_exofeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", pa
 
 ## Simple fit
 ```{r}
+set.seed(8888)
 
-stg2_mfit =
+stg2_simple =
   boost_tree(
     mode = "classification",
     mtry = 6,
@@ -898,26 +1018,72 @@ stg2_mfit =
   fit(data = stg2_development,
       formula = stg2_formula_allfeatures)
 
-stg2_mfit
+stg2_simple
 
-# stg2mfit = 
-#   xgboost(
-#   label = stg2_training %>% select(LINK_IS_ACTUAL_COOP_class) %>% as.matrix(), 
-#   data = stg2_training %>% select(-LINK_IS_ACTUAL_COOP_class), 
-#   nrounds = 6
-# )
+```
+
+
+
+## Model development
+
+### caret
+```{r}
+# Custom summary function (otherwise not possible to obtain all metrics in a single run of caret::train)
+customSummary <- function(data, lev = NULL, model = NULL) {
+  # Calculate twoClassSummary metrics
+  twoClass <- twoClassSummary(data, lev, model)
+  
+  # Calculate prSummary metrics
+  pr <- prSummary(data, lev, model)
+  
+  # Combine the results
+  out <- c(twoClass, pr)
+  
+  # Add accuracy
+  accuracy <- sum(data$obs == data$pred) / length(data$obs)
+  out <- c(out, Accuracy = accuracy)
+  
+  return(out)
+}
+
+set.seed(8888)
+seeds <- vector(mode = "list", length = 6)
+for(i in 1:6) seeds[[i]] <- sample.int(1000, 36)
+seeds[[6]] = sample.int(1000, 1)
+
+model2_caret_xgb = 
+  train(
+    x = stg2_development %>% select(all_of(stg2_allfeatures)),
+    y = stg2_development$LINK_IS_ACTUAL_COOP_class, 
+    method="xgbTree", 
+    metric = "ROC",
+    tuneLength=3,
+    # More about this function here: https://topepo.github.io/caret/model-training-and-tuning.html#control
+    trControl=trainControl(method="cv",number=5,
+                           savePredictions=T, # TRUE is equivalent to "all" and is necessary to use thresholder() later on. 
+                           #returnResamp = TRUE,
+                           verboseIter = TRUE,
+                           summaryFunction = customSummary, 
+                           classProbs = TRUE,  # necessary to obtain ROC
+                           seeds = seeds
+                           ) 
+  )
+
+model2_caret_xgb
 
 
 ```
 
-## Model development
+
+### familiar
 ```{r}
+stop()
 # Columns with NAs
 names(which(colSums(is.na(stg2_development)) > 0)) %>% intersect(stg2_allfeatures)
 
 
 # Experimental design 
-exp_design = "fs+mb"  # "bt(fs+mb,5)"
+exp_design = "cv(fs+mb, 5)"  # "bt(fs+mb,5)"
 
 # Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
@@ -954,12 +1120,17 @@ summon_familiar(
                                      "tree_depth" = 10 # ranger's default is 0 which means infinite. Here Inf is not accepted, so put the higher bound of familiar's default range. 
                                      )),
   # Input default values in xgboost::xgb.train 
-  hyperparameter = list("xgboost_tree"=
-                          list("n_boost" = 2, # this means 10^2 trees
-                                "learning_rate" = -1.5,
-                                "alpha" = 0, 
-                                "lambda" = 1
-                                )),
+  # hyperparameter = list("xgboost_tree"=
+  #                         list("n_boost" = 2.7, # this means 500 trees
+  #                              "learning_rate" = -1.5, # for log10 to make ~0.3, the default (eta)
+  #                              "alpha" = -6, # for log10 to make 0, the default
+  #                              "lambda" = 0, # for log10 to make 1, the default
+  #                              "tree_depth" = 6,
+  #                              "sample_size" = 0.632,
+  #                              "min_child_weight" = 0.3, # for log10 -1 to make 1, the default
+  #                              "gamma" = -1 # no default in xgboost, just the middle of familiar's default range
+  #                              
+  #                               )),
   
   # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
   parallel = TRUE,
@@ -984,10 +1155,11 @@ summon_familiar(
   # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.  
   skip_evaluation_elements = c("feature_expressions", "feature_similarity", 
                                "fs_vimp",  "hyperparameters", "ice_data", 
-                                "model_vimp", "permutation_vimp", "univariate_analysis"), #
+                                "univariate_analysis"), #"model_vimp", "permutation_vimp", 
   
   # part of this list elements are useless now, since they are skipped by the above. 
-  estimation_type = list("prediction_data" = "bci", "model_performance"="bci", 
+  estimation_type = list("prediction_data" = "bci", 
+                         "model_performance"="bci", 
                          "permutation_vimp" = "point", 
                          "ice_data"= "point", 
                          "auc_data" = "point", 
@@ -1003,22 +1175,449 @@ summon_familiar(
 
 ```
 
+#### Finders
+This block produces convenient finder objects to access familiar outputs. 
+```{r}
+## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
+# ---------------------------------------------
+model2_date = "20241206091347"
+# ---------------------------------------------
+
+# Finders of familiar outputs
+
+# Feature info - this gives generic info about the features in the model 
+# feature_info = readRDS(here(stage2_expdes_repo, "20241127134237_feature_info.RDS"))
+
+# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
+# iterations = readRDS(here(stage2_expdes_repo, "20241125194101_iterations.RDS"))
+
+# familiar_data - a maxi list containing all info of a run. 
+# famdat = readRDS(here(stage2_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
+
+# Model development results - to report model performance
+stage2_results = here(stage2_expdes_repo, "results", "pooled_data")
+
+# Models - to run predictions
+stage2_model_path = here(stage2_expdes_repo, 
+                         "trained_models", 
+                         "xgboost_tree", 
+                         "random_forest_ranger_permutation")
+
+# Select the model/ensemble we want to work with 
+
+stage2_ensemble_names = list.files(stage2_model_path, pattern = "ensemble")
+model2_name = 
+  stage2_ensemble_names %>% 
+  grep(~.,  
+       pattern = model2_date, 
+       value = TRUE) # take the first one in case there are several
+                                          
+model2 = readRDS(here(stage2_model_path, model2_name))
+model2
+
+```
+
+
 ## Performance 
 ```{r}
+# Access resampling results
+resamples <- model2_caret_xgb$resample
+
+# Calculate mean and standard deviation of performance metrics
+mean_roc <- mean(resamples$ROC)
+sd_roc <- sd(resamples$ROC)
+mean_sens <- mean(resamples$Sens)
+sd_sens <- sd(resamples$Sens)
+mean_spec <- mean(resamples$Spec)
+sd_spec <- sd(resamples$Spec)
+
+# This is to access performance metrics aggregated over resamples for different models 
+resamps <- resamples(list(first_caret = model2_caret_xgb, first_caret2 = model2_caret_rf))
+summary(resamps)
+
+# And to run statistical tests of the diff in performance between models: 
+# https://topepo.github.io/caret/model-training-and-tuning.html#extracting-predictions-and-class-probabilities
+
+
+```
+
+## Feature importance & explanation
+Importance ranks features wrt. each other but cannot tell direction or magnitude. 
+Explanation is produced by feature, and can be interpreted in target scale. 
+
+### Feature importance
+```{r}
+varImp(model2_caret_xgb)
+
+model2_caret_xgb$finalModel$importance
+
+```
+
+### Explanation
+```{r}
+
+```
+
+
+
+
+# PREDICTION
+Here, we build the prediction setS for each stage. 
+Based on AoA of 1st stage model. 
+Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
+
+## AoA
+```{r}
+# Requires the model to be trained with caret, with cross-validation and not bootstraps
+
+model1_caret_cv = 
+  train(
+    x = stg1_development %>% select(all_of(model1@required_features)),
+    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
+    method="rf", 
+    importance=TRUE, 
+    tuneLength=1,
+    trControl=trainControl(method="cv",number=5,savePredictions=T)
+  )
+
+model1_caret_cv$results
+model1_caret$results
+
+aoa1 = 
+  aoa(newdata = cells %>% select(all_of(model1@required_features)),
+      model = model1_caret_cv)
+
+cells$CELL_IS_IN_AOA = if_else(aoa1$AOA == 1, TRUE, FALSE)
+
+cells$CELL_IS_IN_AOA %>% summary()
+
+# Map 
+
+toplot = 
+  cells %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs) 
+
+ggplot(toplot) +
+    geom_sf(aes(col = CELL_IS_IN_AOA), size = 1) + #, shape = 15
+    geom_sf(data = departements, fill = "transparent", col = "black")
+
+# note that it discards some Cargill links (~330)
+
+```
+
+
+## Novelty
+### caret
+The caret package does not have built-in functionality specifically for computing the "novelty" of samples in the same way the familiar package does. 
+One alternative approach proposed by Copilot is to use distance-based methods or leverage the Mahalanobis distance to measure how far new samples are from the training data distribution.
+```{r}
+# Calculate Mahalanobis distance for test data
+cov_matrix <- cov(stg2_development %>% select(all_of(stg2_allfeatures)))
+center <- colMeans(stg2_development %>% select(all_of(stg2_allfeatures)))
+links$LINK_mahalanobis_dist <- mahalanobis(links %>% select(all_of(stg2_allfeatures)), center, cov_matrix)
+
+```
+
+### familiar
+```{r}
+# Novelty in development data 
+devdat_prediction_1 = read.csv2(here(stage1_results, "prediction", "prediction.csv"))
+devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
+
+devdat_prediction_1$novelty %>% as.numeric() %>% summary()
+
+# It is possible to add features that were not in the model initial formula, to gauge novelty (?)
+# but would it make sense (to include LU vars) here? 
+
+# Novelty in to-predict data
+
+cells$CELL_NOVELTY = predict(object = model1, newdata = cells, type = "novelty")
+
+cells$CELL_NOVELTY %>% summary()
+
+# Novelty in the Cells data is in the range of novelty in the 1st stage dev data. 
+# So we don't take it further into account. 
+```
+
+
+
+## Prediction sets
+```{r}
+# Keep cells that are sufficiently close in terms of AoA, and, 
+#to reduce computation, that have no close (72km) coop, as for those we attribute null probas.  
+cells_topredict = 
+  cells %>% 
+  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
+
+links = 
+  links %>%
+  left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
+            by = "CELL_ID")
+
+# Should it be the under-sampled data rather here? NO, I don't think so. We DO want to make predictions for all virtual links! 
+links_topredict =
+  links %>% 
+  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
+
+
+```
+
+## Development/prediction balance tests
+ 
+```{r}
+
+```
+
+
+## Predict 1st stage
+```{r}
+tic()
+cells_topredict$CELL_SHARE_COOP = predict(model1, newdata = cells_topredict)$predicted_outcome
+toc()
+# From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
+
+cells_topredict$CELL_SHARE_COOP %>% summary()
+
+cells = 
+  cells %>% 
+  left_join(cells_topredict %>% select(CELL_ID, CELL_SHARE_COOP), 
+            by = "CELL_ID")
+
+```
+
+### Threshold
+1st stage threshold: whether the share of coop outlet is significantly different from zero (one-sided t-test) 
+```{r}
+# In each cell, conduct a one-sided t-test that the predicted share of coop outlet is positive. 
+
+# Shall produce variable CELL_SHARE_COOP_SIGNI which is the same as CELL_SHARE_COOP, but 0 where not significantly different from zero. 
+
+cells =
+  cells %>% 
+  mutate(CELL_SHARE_COOP_SIGNI = if_else(CELL_SHARE_COOP < 0.1,  
+                                         0, 
+                                         CELL_SHARE_COOP))
+
+```
+
+### Determinist prediction
+This is just where we are sure that cocoa can be sold to a cooperative because there is no coop. 
+```{r}
+cells =
+  cells %>% 
+  mutate(CELL_SHARE_COOP_SIGNI = if_else(CELL_NO_POTENTIAL_LINK, 
+                                          0, 
+                                          CELL_SHARE_COOP_SIGNI))
+
+cells$CELL_SHARE_COOP %>% summary()
+
+stopifnot(sum(is.na(cells$CELL_SHARE_COOP)) == sum(aoa1$AOA==0))
+```
+
+
+## Predict 2nd stage
+```{r}
+# Predict the existence that a link exists
+tic()
+links_topredict$LINK_PROBA = predict(model2_caret_xgb, newdata = links_topredict[, stg2_allfeatures], type = "prob")$Actual_links
+toc()
+
+# From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
+
+links_topredict$LINK_PROBA %>% summary()
+
+links = 
+  links %>% 
+  left_join(links_topredict %>% select(LINK_ID, LINK_PROBA), 
+            by = "LINK_ID")
+
+```
+
+
+### Threshold
+2nd stage threshold: whether the (still conditional and not normalised) proba that there is a link is higher than the threshold that minimises false positives. 
+```{r}
+# Identify the optimal class probability threshold, and apply it to every link
+
+# To be conservative regarding the extent of supply sheds, we have a preference for false negatives with regards to false positives. Thus, we choose a threshold that maximises the performance metric about false positives: we minimise the   
+optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.05))
+# seq(0.0001, 0.001, by = 0.0001)
+
+(thresh = 
+  optimal_thresholds %>% 
+  arrange(desc(Precision)) %>% 
+  head(1) %>% 
+  pull(prob_threshold))
+
+links = 
+  links %>% 
+  mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 0, LINK_PROBA))
+
+```
+
+
+### Determinist prediction
+This is just where we are sure that no link can exist because there is no coop. 
+```{r}
+links =
+  links %>% 
+  mutate(LINK_PROBA_THRESH = if_else(CELL_NO_POTENTIAL_LINK, 
+                              0, 
+                              LINK_PROBA_THRESH)) # it could also be 1 here, since we normalise then. But keep some variation between links with a positive proba. 
+
+links$LINK_PROBA %>% quantile(seq(0.99, 1, 0.001), na.rm = T)
+links$LINK_PROBA_THRESH %>% quantile(seq(0.999, 1, 0.0001), na.rm = T)
+
+```
 
 
 
 
 
+# POST-PROCESSING 
+
+## Unconditional probabilities
+Here we multiply probabilities predicted in each stage by each other and/or by the share of cocoa presence. 
+This is all at the Links level. 
+There are several combinations, yielding different interpretations: 
+
+```{r}
+links_beforepost = links
+
+links = 
+  links %>% 
+  left_join(
+    cells %>% select(CELL_SHARE_COOP_SIGNI, CELL_ID), # CELL_SHARE_COOP, not even sure it is necessary to join this. 
+    by = "CELL_ID"
+  ) 
+
+links = 
+  links %>% 
+  mutate(
+    LINK_UNCOND_PROBA = CELL_SHARE_COOP_SIGNI * LINK_PROBA, # include this just for exploration. 
+    LINK_UNCOND_PROBA_THRESH = CELL_SHARE_COOP_SIGNI * LINK_PROBA_THRESH
+  )
+
+```
 
 
 
-# Hold-out validation (deprecated) ---------
+## Normalisation (cell perspective)
+We do it after unconditioning, to normalise unconditional probabilities too. 
+```{r}
+links = 
+  links %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    # Work non-thresholded proba for now, but we will surely not keep them. 
+    CELL_NORMSUM = sum(LINK_PROBA), 
+    CELL_UNCOND_NORMSUM = sum(LINK_UNCOND_PROBA),
+    
+    CELL_NORMSUM_THRESH = sum(LINK_PROBA_THRESH), 
+    CELL_UNCOND_NORMSUM_THRESH = sum(LINK_UNCOND_PROBA_THRESH)
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    # Work non-thresholded proba for now, but we will surely not keep them. 
+    LINK_PROBA_NORMED = LINK_PROBA / CELL_NORMSUM, 
+    LINK_UNCOND_PROBA_NORMED = LINK_UNCOND_PROBA / CELL_UNCOND_NORMSUM, 
+    
+    LINK_PROBA_THRESH_NORMED = LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
+    LINK_UNCOND_PROBA_THRESH_NORMED = LINK_UNCOND_PROBA_THRESH / CELL_UNCOND_NORMSUM_THRESH,
+  )
+
+stopifnot(
+links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% filter(CELL_IS_IN_AOA) %>% nrow() == 0
+)
+
+summary(links$CELL_NORMSUM_THRESH)
+summary(links$CELL_UNCOND_NORMSUM_THRESH)
+
+stopifnot(
+  links$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) == length(unique(links_topredict$CELL_ID)) |
+  links$LINK_UNCOND_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) == length(unique(links_topredict$CELL_ID))
+)
+
+```
+
+
+## Sharp polygons
+Sharp means non-overlapping. 
+This is an important step, where we define, for every cell, to which coop it most likely supplies. 
+We do two versions of this, either focusing on actual or on potential sourcing sheds. 
+```{r}
+# Find the max conditional, normalised proba in every cell,
+# first, if they are all null
+links = 
+  links %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    LINK_PROBA_THRESH_NORMED_CELLMAX = max(LINK_PROBA_THRESH_NORMED), 
+    CELL_N_MAX_PROBA = sum(LINK_PROBA_THRESH_NORMED_CELLMAX)
+  ) %>% 
+  ungroup() %>% 
+  mutate(LINK_IS_MOST_LIKELY_IN_CELL = case_when(
+    LINK_PROBA_THRESH_NORMED_CELLMAX == 0 | 
+    LINK_PROBA_THRESH_NORMED_CELLMAX > LINK_PROBA_THRESH_NORMED ~ FALSE, 
+    TRUE ~ TRUE
+  )
+) 
+
+# How to handle equi-probabilities? 
+links %>%   
+  filter(CELL_N_MAX_PROBA > 1) %>%   
+  View()
+
+
+# Cell categories!  
+links = 
+  links %>% 
+  mutate(
+    CELL_IN_SOURCING_SHED = CELL_SHARE_COOP_SIGNI > 0, 
+     # This is where no cocoa is estimated to be sold to coops, but independent of that, some coops are still predicted to source from there.  
+     CELL_IN_INFLUENCE_SHED = CELL_SHARE_COOP_SIGNI == 0 & CELL_N_MAX_PROBA > 0)
+
+
+```
+
+
+
+
+## Productive vs. unproductive 
+What is the task exactly here? 
+I think we've already catagorised cells according to presence of cocoa at the top of the script. Nothing more needed here... 
+```{r}
+links = 
+  links %>% 
+  mutate(
+    across(.cols = contains("_PROBA_"), 
+           .fns = ~ .x  * CELL_COCOA_SHARE, 
+           .names = paste0("{.col}", "_COCOA"))
+  )
+
+```
+
+
+## Normalisation (coop perspective)
+We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
+either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
+```{r}
+
+```
+
+
+# DEPRECATED CODE   
+
+
+## Hold-out validation 
+```{r}
+
 (test_pred_prob <- predict(stg2_mfit, 
                              new_data=stg2_test, 
                              type = "prob"))
 
-stg2_test$LINK_PRED_ACTUAL_COOP_prob = test_pred_prob$`.pred_Actual links`
+stg2_test$LINK_PRED_ACTUAL_COOP_prob = test_pred_prob$`.pred_Actual_links`
 
 
 (test_pred_class <- predict(stg2_mfit, 
@@ -1029,12 +1628,13 @@ stg2_test$LINK_PRED_ACTUAL_COOP_class = test_pred_class$.pred_class
 
 stg2_test = 
   stg2_test %>% 
-  mutate(TP = LINK_PRED_ACTUAL_COOP_class == "Actual links"  & LINK_IS_ACTUAL_COOP_class == "Actual links",
-         TN = LINK_PRED_ACTUAL_COOP_class == "Virtual links" & LINK_IS_ACTUAL_COOP_class == "Virtual links",
-         FP = LINK_PRED_ACTUAL_COOP_class == "Actual links"  & LINK_IS_ACTUAL_COOP_class == "Virtual links",
-         FN = LINK_PRED_ACTUAL_COOP_class == "Virtual links" & LINK_IS_ACTUAL_COOP_class == "Actual links")
+  mutate(TP = LINK_PRED_ACTUAL_COOP_class == "Actual_links"  & LINK_IS_ACTUAL_COOP_class == "Actual_links",
+         TN = LINK_PRED_ACTUAL_COOP_class == "Virtual_links" & LINK_IS_ACTUAL_COOP_class == "Virtual_links",
+         FP = LINK_PRED_ACTUAL_COOP_class == "Actual_links"  & LINK_IS_ACTUAL_COOP_class == "Virtual_links",
+         FN = LINK_PRED_ACTUAL_COOP_class == "Virtual_links" & LINK_IS_ACTUAL_COOP_class == "Actual_links")
 
 ```
+
 
 ### Accuracy 
 we can calculate the overall accuracy score as a sum of instances where predicted and actual classes match divided by the total number of rows:
@@ -1123,170 +1723,6 @@ legend(
 ```
 
 
-
-# PREDICTION
-Here, we build the prediction setS for each stage. 
-Based on AoA of 1st stage model. 
-Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
-
-## AoA
-```{r}
-# Requires the model to be trained with caret, with cross-validation and not bootstraps
-
-model1_caret = 
-  train(
-    x = stg1_development %>% select(all_of(model1@required_features)),
-    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
-    method="rf", 
-    importance=TRUE, 
-    tuneLength=1,
-    trControl=trainControl(method="cv",number=5,savePredictions=T)
-  )
-
-
-aoa1 = 
-  aoa(newdata = cells %>% select(all_of(model1@required_features)),
-      model = model1_caret)
-
-cells$CELL_IS_IN_AOA = if_else(aoa1$AOA == 1, TRUE, FALSE)
-
-cells$CELL_IS_IN_AOA %>% summary()
-
-# Map 
-
-toplot = 
-  cells %>% 
-  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
-  st_transform(civ_crs) 
-
-ggplot(toplot) +
-    geom_sf(aes(col = CELL_IS_IN_AOA), size = 1) + #, shape = 15
-    geom_sf(data = departements, fill = "transparent", col = "black")
-
-```
-
-
-## Novelty
-```{r}
-# Novelty in development data 
-devdat_prediction_1 = read.csv2(here(stage1_results, "prediction", "prediction.csv"))
-devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
-
-devdat_prediction_1$novelty %>% as.numeric() %>% summary()
-
-# It is possible to add features that were not in the model initial formula, to gauge novelty (?)
-# but would it make sense (to include LU vars) here? 
-
-# Novelty in to-predict data
-
-cells$CELL_NOVELTY = predict(object = model1, newdata = cells, type = "novelty")
-
-cells$CELL_NOVELTY %>% summary()
-
-# Novelty in the Cells data is in the range of novelty in the 1st stage dev data. 
-# So we don't take it further into account. 
-```
-
-
-
-## Prediction sets
-```{r}
-# Keep cells that are sufficiently close in terms of AoA, and, 
-#to reduce computation, that have no close (72km) coop, as for those we attribute null probas.  
-cells_topredict = 
-  cells %>% 
-  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
-
-links = 
-  links %>%
-  left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
-            by = "CELL_ID")
-
-# SHOULD IT BE THE UNDER-SAMPLED DATA RATHER HERE??? No I don't think so. We do want to make predictions for all virtual links! 
-links_topredict =
-  links %>% 
-  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
-
-
-```
-
-## Development/prediction balance tests
- 
-```{r}
-
-```
-
-
-## Predict 1st stage
-```{r}
-cells_topredict$CELL_PREDICTED_PROP_VOLUME_COOPS = predict(model1, newdata = cells_topredict)$predicted_outcome
-
-# saveRDS(model1_prediction, 
-#         here("temp_data", "predictions", "stage_1", paste0(model_date, "_inaoa_prediction")))
-
-
-cells_topredict$CELL_PREDICTED_PROP_VOLUME_COOPS %>% summary()
-
-cells = 
-  cells %>% 
-  left_join(cells_topredict %>% select(CELL_ID, CELL_PREDICTED_PROP_VOLUME_COOPS), 
-            by = "CELL_ID")
-
-cells =
-  cells %>% 
-  mutate(CELL_PREDICTED_PROP_VOLUME_COOPS = if_else(CELL_NO_POTENTIAL_LINK, 
-                                                    0, 
-                                                    CELL_PREDICTED_PROP_VOLUME_COOPS))
-
-cells$CELL_PREDICTED_PROP_VOLUME_COOPS %>% summary()
-
-stopifnot(sum(is.na(cells$CELL_PREDICTED_PROP_VOLUME_COOPS)) == sum(aoa1$AOA==0))
-
-
-
-
-```
-
-
-## Predict 1st stage
-```{r}
-links_topredict$LINK_PREDICTED_IS_ACTUAL_COOP_class  = predict(model2, newdata = links_topredict)$predicted_outcome
-# Since this is quite long, we save the output
-saveRDS(links_topredict,
-        here("temp_data", "predictions", "stage_2", paste0(model_date, "_inaoa_prediction")))
-
-links_topredict$LINK_PREDICTED_IS_ACTUAL_COOP_class %>% summary()
-
-links = 
-  links %>% 
-  left_join(links_topredict %>% select(LINK_ID, LINK_PREDICTED_IS_ACTUAL_COOP_class), 
-            by = "LINK_ID")
-
-links =
-  links %>% 
-  mutate(LINK_PREDICTED_IS_ACTUAL_COOP_class = if_else(CELL_NO_POTENTIAL_LINK, 
-                                                    "Virtual links", 
-                                                    LINK_PREDICTED_IS_ACTUAL_COOP_class))
-
-links$LINK_PREDICTED_IS_ACTUAL_COOP_class %>% summary()
-
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ## Prediction (deprecated)
 ## Simple predict (deprecated)
 ```{r}
@@ -1322,7 +1758,7 @@ stg2_predict = links
 
 stg2_predict$LINK_PRED_EXIST_PROB = predict(stg2_mfit, 
                                             new_data=stg2_predict, 
-                                            type = "prob")$`.pred_Actual links`
+                                            type = "prob")$`.pred_Actual_links`
   
 
 stg2_predict$LINK_PRED_EXIST_PROB %>% summary()
