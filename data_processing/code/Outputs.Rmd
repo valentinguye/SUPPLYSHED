@@ -1,0 +1,454 @@
+---
+title: "model"
+author: "Valentin"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+      self_contained: false
+---
+# Set up and inputs
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+
+library(aws.s3)
+aws.signature::use_credentials()
+Sys.setenv("AWS_DEFAULT_REGION" = "eu-west-1")
+
+
+library(tidyverse)
+library(sf)
+library(readxl)
+library(xlsx)
+library(stringr)
+library(DescTools)
+library(rnaturalearth)
+library(ggpubr)
+library(units)
+library(scales)
+library(kableExtra)
+library(here)
+library(tictoc)
+library(readstata13)
+library(sjmisc)
+library(terra) # put it after {raster} such that it superceeds homonym functions. 
+library(exactextractr)
+library(stars)
+library(pals)
+library(modelsummary) # necessary to load it after DescTools
+
+# ML libraries
+library(ranger)
+library(parsnip)
+library(xgboost)
+library(pROC)
+library(yardstick)
+library(CAST)
+library(caret)
+
+library(familiar)
+
+# and packages required but some uses of familiar: 
+library(microbenchmark)
+library(glmnet)
+library(fastcluster)
+library(praznik)
+library(power.transform)
+library(isotree)
+library(laGP)
+library(harmonicmeanp)
+library(mboost)
+
+set.seed(8888)
+
+# install.packages("https://cran.r-project.org/src/contrib/Archive/isotree/isotree_0.5.5.tar.gz",
+#                  repos = NULL, 
+#                  type = "source")
+
+dir.create(here("temp_data", "model", "caret", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "model", "caret", "stage_2"), recursive = TRUE)
+
+# These are were summon_familiar will write its outputs
+dir.create(here("temp_data", "model", "familiar", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "model", "familiar", "stage_2"), recursive = TRUE)
+
+# And to save the predictions 
+dir.create(here("temp_data", "model", "predictions", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "model", "predictions", "stage_2"), recursive = TRUE)
+
+# This is to save some of the outputs from being overwritten subsequently (not really used currently). 
+dir.create(here("outputs", "familiar", "stage_1", "performance"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_1", "explanation_vimp"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_1", "models"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_2", "performance"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_2", "explanation_vimp"), recursive = TRUE)
+dir.create(here("outputs", "familiar", "stage_2", "models"), recursive = TRUE)
+
+## Functions
+# Trase palettes etc. for plots
+source(here("code", "theme_trase.R"))
+
+# load in particular the function fn_trader_to_group_names, str_trans, ... 
+source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
+
+# use the projected CRS used by BNETD for their 2020 land use map. 
+civ_crs <- 32630
+
+MODEL_RESOLUTION_KM = 4
+cell_area_ha =(100*MODEL_RESOLUTION_KM^2)
+
+xlabs = c(-8, -6, -4)
+ylabs = c(5, 7, 9)
+
+## Assets
+
+coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
+coopbs22 = coopbsy %>% filter(YEAR == 2022)
+
+consol = readRDS(here("temp_data", "actual_links_consolidated.Rdata"))
+
+cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL_RESOLUTION_KM, "km.Rdata"))) 
+
+links = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", MODEL_RESOLUTION_KM, "km.Rdata")))
+
+departements <- read_sf(here("input_data/s3/CIV_DEPARTEMENTS.geojson"))
+departements = 
+  st_transform(departements, crs = civ_crs)
+
+```
+
+# INPUT DESCRIPTIVES 
+
+
+## Cells data 
+
+### Structure
+```{r}
+# How many cells with actual links
+# cells %>% 
+#   select(!starts_with("CELL_PROP") & !starts_with("CELL_COUNT")) %>% 
+#   datasummary_skim()
+
+# nocat = 
+#   cells %>%
+#   filter(!CELL_NO_POTENTIAL_LINK & !CELL_NO_ACTUAL_LINK_DATA & !CELL_2ND_STAGE_ONLY & !CELL_VOLUME_OBSERVED) %>% 
+#   View()
+# cell_ids_check = nocat$CELL_ID
+# links %>% filter(CELL_ID %in% cell_ids_check) %>% 
+#   pull(CELL_ACTUAL_ONLYOTHER_LINK) %>% summary()
+
+# export
+(datasummary(N + Percent()  ~ 
+              (`No buying station within 72 km` = (CELL_NO_POTENTIAL_LINK==T)) + 
+              (`No actual link data` = (CELL_NO_ACTUAL_LINK_DATA==T)) + 
+              (`Actual link data for 2nd stage only` = (CELL_2ND_STAGE_ONLY==T)) + 
+              (`Actual link data for 1st stage` = (CELL_VOLUME_OBSERVED==T)) + 
+              1, 
+              data = cells,
+              fmt = 1,
+              align = "cccccc",
+              output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
+# Cells with actual link data for both stages have JRC or SC data on actual link existence, size and type of buyer (cooperative or other), that is representative for the whole cell. 
+
+# ?tables::Heading
+
+stg1_development %>% nrow()
+
+```
+
+### Map
+```{r}
+
+# tmptoplot = only_potential_propt %>% filter(!duplicated(CELL_ID))
+# tmptoplot_itm = only_potential_itmpt %>% filter(!duplicated(BUYER_LONGITUDE, BUYER_LATITUDE))
+# 
+# ggplot() +
+#   theme_bw() +
+#   geom_sf(data = tmptoplot, , size = 0.05, 
+#              col = "red") +
+#   geom_sf(data = tmptoplot_itm, , size = 1, 
+#           col = "blue") +
+#     # geom_sf(data = departements, fill = "transparent") +
+#     geom_sf(data = civ_boundary, fill = "transparent") 
+
+
+consol_itm_sf = 
+  consol %>% 
+  filter(!is.na(BUYER_LONGITUDE) & BUYER_IS_COOP) %>% # This excludes other buyers
+  distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326)
+
+unlinked_coopbs = 
+  coopbs22 %>% 
+  filter() %>% 
+  filter(!is.na(LONGITUDE) & !COOP_BS_ID %in% consol_itm_sf$COOP_BS_ID) %>% # This excludes coops already in observed links data
+  distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
+
+toplot = 
+  cells %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs) %>% 
+    mutate(
+      `Cell information content` = case_when(
+        CELL_NO_POTENTIAL_LINK ~ "No buying station within 72 km", 
+        CELL_NO_ACTUAL_LINK_DATA ~ "No actual link data",
+        CELL_VOLUME_OBSERVED ~ "Actual link data for 1st stage",
+        CELL_2ND_STAGE_ONLY ~ "Actual link data for second stage only",
+      )) 
+toplot$`Cell information content` %>% table()    
+
+map1 = 
+ggplot(toplot) +
+    geom_sf(aes(col = `Cell information content`), size = 1) + #, shape = 15
+    geom_sf(data = departements, fill = "transparent", col = "black") +
+    # scale_colour_brewer(na.value = NULL,
+    #                     type = "qual",
+    #                     direction = -1,
+    #                     palette = "Set3") +
+  scale_colour_manual(
+    values = c("blue" , "#8B0000", "lightgrey", "darkgrey")
+  ) +
+  geom_sf(data = consol_itm_sf, size = 1,
+          col = "darkgreen") +
+  geom_sf(data = unlinked_coopbs, size = 0.1,
+          col = "darkgreen") +
+  # scale_size_binned(
+  #   values = c(1, 0.1),
+  #   labels = c("Coops in observed links data", "Other coops")
+  # ) +
+  # labs(fill = "Extent of the Ivorian cocoa growing region") + 
+    theme_minimal() + 
+  theme(legend.key.size = unit(1, "cm")) +
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
+  
+map1
+
+ggsave(  
+  plot = map1, 
+  filename = "input_data_map.png",
+  path = here("outputs", "input_data_descriptives"), 
+  width = 25, 
+  height = 20,
+  units = "cm")
+
+```
+
+
+### Features
+In the development set 
+```{r}
+# names(cells)
+
+cells_development_features =
+  stg1_development %>% 
+  select(Sample = SPLIT, 
+         `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
+         `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
+         `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
+         `Avg. Eucl. distance of the 1 nearest BS (m)` = CELL_MIN_DISTANCE_METERS, 
+         `Avg. road distance of the 1 nearest BS (m)` = CELL_MIN_TRAVEL_METERS, 
+         `Avg. Eucl. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+         `Avg. road distance of the 5 nearest BS (m)` = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
+         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
+          
+         `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
+         `Proportion of 5 nearest cooperatives certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
+         `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
+         `Proportion of 5 nearest cooperatives with CCP` = CELL_PROP_5_NEAREST_COOP_SSI_CARGILL,
+         `Proportion of 5 nearest cooperatives being COOP-CA` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
+         `Proportion of 5 nearest cooperatives being SCOOPS` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
+         `Total # members of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
+         `Total # BS of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
+         `Avg. # buying companies in 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_N_KNOWN_BUYERS,
+         `Avg. TRI around 5 nearest cooperatives (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
+         `Avg. cocoa extent around 5 nearest cooperatives (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_COCOA_HA,
+         `Avg. settlements extent around 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
+         ) 
+
+
+datasummary_skim(data = cells_development_features,
+
+                output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html")))
+
+```
+
+Cell data balance tests
+```{r}
+# (datasummary_balance(~SPLIT, 
+#                       data = cells_features_tobalance, 
+#                       stars = TRUE,
+#                       # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet", 
+#                       notes = "'BS' stands for cooperative buying stations.", 
+#                      output = here("outputs", "input_data_descriptives", "cells_balance.png")))        
+```
+
+### LU 
+```{r}
+(cells_stg2_development$CELL_COCOA_HA/cell_area_ha) %>% summary()
+  
+stg1_development %>% 
+  select(Sample = SPLIT, 
+          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
+          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
+          `Cocoa extent (ha)` = CELL_COCOA_HA,
+          `Coffee extent (ha)` = CELL_COFFEE_HA,
+          `Rubber extent (ha)` = CELL_RUBBER_HA,
+          `Palm extent (ha)` = CELL_PALM_HA,
+          `Coconut extent (ha)` = CELL_COCONUT_HA,
+          `Cashew extent (ha)` = CELL_CASHEW_HA,
+          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
+          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA
+  ) %>% 
+  datasummary_skim(output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
+
+```
+
+
+## Links data
+
+### Observed links 
+This starts from links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there). 
+```{r}
+obs_links_des = 
+  links %>% 
+  filter(LINK_IS_ACTUAL) %>% 
+  mutate(LINK_SOURCE = case_when(
+    grepl("CARGILL", PRO_ID) ~ "Cargill data",
+    grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
+    grepl("JRC", PRO_ID) ~ "JRC data",
+  ))
+
+length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
+
+totbl = 
+  obs_links_des %>% 
+  summarise(.by = LINK_SOURCE,  
+    # Number of 
+    # Links
+    `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
+    `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
+    # Farms
+    `Farms` = length(unique(na.omit(PRO_ID))), 
+    `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
+    # Buyers
+    Buyers = length(unique(na.omit(BUYER_ID))),
+    `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
+    `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
+    `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
+    
+    )
+
+totbl
+
+```
+
+
+## Balance tests in Links features
+With differences between actual and/virtual in development. 
+Alternatively, we could look at: 
+- Only in actual 
+- Only in all (potential)
+
+```{r}
+names(stg2_development)
+stg2_features_tobalance_1 =
+  stg2_development %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class, 
+         LINK_DISTANCE_METERS,
+         LINK_IS_WITH_1_NEAREST_COOPS,
+         LINK_IS_WITH_5_NEAREST_COOPS,
+         CELL_N_BS_WITHIN_DIST,
+         CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
+         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_IMPOSSIBLE_HA, CELL_TRI_MM)
+
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_1, 
+                    output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
+
+stg2_features_tobalance_2 =
+  stg2_development %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class,
+         COOP_FARMERS, 
+         COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
+         starts_with("COOP_STATUS_"), 
+         COOP_CERTIFIED, COOP_RFA, COOP_UTZ, COOP_FT, 
+         COOP_HAS_SSI, starts_with("COOP_SSI_"), 
+         starts_with("COOP_BS_10KM_"))
+
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_2)
+
+```
+
+
+
+### Map of actual links
+```{r}
+
+```
+
+
+
+# OUTPUT DESCRIPTIVES 
+
+## Aggregate sourcing sheds 
+```{r}
+# Make cell categories
+# keep in mind that the purpose of this is a map, not an analysis! 
+
+# Start from link level
+links = 
+  links %>% 
+  mutate(
+    CELL_SOURCING_SHED_ONLY = CELL_SHARE_COOP_SIGNI > 0, 
+     # This is where no cocoa is estimated to be sold to coops, but independent of that, some links with coops are predicted to exist (they pass the threshold). 
+    CELL_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP_SIGNI == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0, 
+    
+    # Productive sourcing sheds: actual, influential and outside 
+    CELL_PRODUCTIVE_SOURCING_SHED_ONLY = CELL_SHARE_COOP_SIGNI > 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE", 
+    CELL_PRODUCTIVE_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP_SIGNI == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE",
+    CELL_PRODUCTIVE_OUTSIDE = CELL_SHARE_COOP_SIGNI == 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE", 
+    
+    # Prospective sourcing sheds: actual, influential and outside 
+    CELL_PROSPECTIVE_SOURCING_SHED_ONLY = CELL_SHARE_COOP_SIGNI > 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
+    CELL_PROSPECTIVE_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP_SIGNI == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
+    CELL_PROSPECTIVE_OUTSIDE = CELL_SHARE_COOP_SIGNI == 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
+
+    
+    `Sourcing shed type` = case_when(
+      CELL_PRODUCTIVE_SOURCING_SHED_ONLY ~ "Productive, actual",
+      CELL_PRODUCTIVE_INFLUENCE_SHED_ONLY ~ "Productive, influential", 
+      CELL_PRODUCTIVE_OUTSIDE ~ "Productive, outside",
+      CELL_PROSPECTIVE_SOURCING_SHED_ONLY ~ "Prospective, actual",
+      CELL_PROSPECTIVE_INFLUENCE_SHED_ONLY ~ "Prospective, influential", 
+      CELL_PROSPECTIVE_OUTSIDE ~ "Prospective, outside",
+
+      TRUE ~ NA
+    )
+    )
+
+# links %>% 
+#   filter(is.na(`Sourcing shed type`)) %>% 
+#   select(CELL_PRODUCTIVE_SOURCING_SHED_ONLY, CELL_PRODUCTIVE_INFLUENCE_SHED_ONLY, CELL_PROSPECTIVE_SOURCING_SHED_ONLY, CELL_PROSPECTIVE_INFLUENCE_SHED_ONLY) %>% 
+#   summary()
+
+cells_save = cells
+
+cells = 
+  cells %>% 
+  left_join(
+    links %>% select(CELL_ID, `Sourcing shed type`) %>% distinct(CELL_ID, .keep_all = TRUE), 
+    by = "CELL_ID", multiple = "all"
+  )
+cells$`Sourcing shed type` %>% table()
+
+# Check that we cover all cells we predicted a coop outlet share (i.e. excluding not in AoA)
+stopifnot(
+cells %>% filter(!is.na(CELL_SHARE_COOP)) %>% nrow() == sum(table(cells$`Sourcing shed type`))
+)
+```

@@ -64,24 +64,24 @@ set.seed(8888)
 #                  repos = NULL, 
 #                  type = "source")
 
-dir.create(here("temp_data", "caret", "stage_1"), recursive = TRUE)
-dir.create(here("temp_data", "caret", "stage_2"), recursive = TRUE)
+dir.create(here("temp_data", "model", "caret", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "model", "caret", "stage_2"), recursive = TRUE)
 
 # These are were summon_familiar will write its outputs
-dir.create(here("temp_data", "familiar", "stage_1"), recursive = TRUE)
-dir.create(here("temp_data", "familiar", "stage_2"), recursive = TRUE)
+dir.create(here("temp_data", "model", "familiar", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "model", "familiar", "stage_2"), recursive = TRUE)
 
-# This is to save some of the outputs from being overwritten subsequently. 
+# And to save the predictions 
+dir.create(here("temp_data", "model", "predictions", "stage_1"), recursive = TRUE)
+dir.create(here("temp_data", "model", "predictions", "stage_2"), recursive = TRUE)
+
+# This is to save some of the outputs from being overwritten subsequently (not really used currently). 
 dir.create(here("outputs", "familiar", "stage_1", "performance"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_1", "explanation_vimp"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_1", "models"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_2", "performance"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_2", "explanation_vimp"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_2", "models"), recursive = TRUE)
-
-# And to save the predictions 
-dir.create(here("temp_data", "predictions", "stage_1"), recursive = TRUE)
-dir.create(here("temp_data", "predictions", "stage_2"), recursive = TRUE)
 
 ## Functions
 # Trase palettes etc. for plots
@@ -178,6 +178,7 @@ cells =
          # and of impossible land
          CELL_IMPOSSIBLE_SHARE = CELL_IMPOSSIBLE_HA / 1600 
          )
+table(cells$CELL_PRODUCTION_STATUS)
 
 links = 
   links %>% 
@@ -282,284 +283,6 @@ cells_stg2_development =
 
 
 
-# DESCRIPTIVES 
-
-
-## Cells data 
-
-### Structure
-```{r}
-# How many cells with actual links
-# cells %>% 
-#   select(!starts_with("CELL_PROP") & !starts_with("CELL_COUNT")) %>% 
-#   datasummary_skim()
-
-# nocat = 
-#   cells %>%
-#   filter(!CELL_NO_POTENTIAL_LINK & !CELL_NO_ACTUAL_LINK_DATA & !CELL_2ND_STAGE_ONLY & !CELL_VOLUME_OBSERVED) %>% 
-#   View()
-# cell_ids_check = nocat$CELL_ID
-# links %>% filter(CELL_ID %in% cell_ids_check) %>% 
-#   pull(CELL_ACTUAL_ONLYOTHER_LINK) %>% summary()
-
-# export
-(datasummary(N + Percent()  ~ 
-              (`No buying station within 72 km` = (CELL_NO_POTENTIAL_LINK==T)) + 
-              (`No actual link data` = (CELL_NO_ACTUAL_LINK_DATA==T)) + 
-              (`Actual link data for 2nd stage only` = (CELL_2ND_STAGE_ONLY==T)) + 
-              (`Actual link data for 1st stage` = (CELL_VOLUME_OBSERVED==T)) + 
-              1, 
-              data = cells,
-              fmt = 1,
-              align = "cccccc",
-              output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
-# Cells with actual link data for both stages have JRC or SC data on actual link existence, size and type of buyer (cooperative or other), that is representative for the whole cell. 
-
-# ?tables::Heading
-
-stg1_development %>% nrow()
-
-```
-
-### Map
-```{r}
-
-# tmptoplot = only_potential_propt %>% filter(!duplicated(CELL_ID))
-# tmptoplot_itm = only_potential_itmpt %>% filter(!duplicated(BUYER_LONGITUDE, BUYER_LATITUDE))
-# 
-# ggplot() +
-#   theme_bw() +
-#   geom_sf(data = tmptoplot, , size = 0.05, 
-#              col = "red") +
-#   geom_sf(data = tmptoplot_itm, , size = 1, 
-#           col = "blue") +
-#     # geom_sf(data = departements, fill = "transparent") +
-#     geom_sf(data = civ_boundary, fill = "transparent") 
-
-
-consol_itm_sf = 
-  consol %>% 
-  filter(!is.na(BUYER_LONGITUDE) & BUYER_IS_COOP) %>% # This excludes other buyers
-  distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
-  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326)
-
-unlinked_coopbs = 
-  coopbs22 %>% 
-  filter() %>% 
-  filter(!is.na(LONGITUDE) & !COOP_BS_ID %in% consol_itm_sf$COOP_BS_ID) %>% # This excludes coops already in observed links data
-  distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
-  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
-
-
-toplot = 
-  cells %>% 
-  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
-  st_transform(civ_crs) %>% 
-    mutate(
-      `Cell information content` = case_when(
-        CELL_NO_POTENTIAL_LINK ~ "No buying station within 72 km", 
-        CELL_NO_ACTUAL_LINK_DATA ~ "No actual link data",
-        CELL_VOLUME_OBSERVED ~ "Actual link data for 1st stage",
-        CELL_2ND_STAGE_ONLY ~ "Actual link data for second stage only",
-      )) 
-toplot$`Cell information content` %>% table()    
-
-map1 = 
-ggplot(toplot) +
-    geom_sf(aes(col = `Cell information content`), size = 1) + #, shape = 15
-    geom_sf(data = departements, fill = "transparent", col = "black") +
-    # scale_colour_brewer(na.value = NULL,
-    #                     type = "qual",
-    #                     direction = -1,
-    #                     palette = "Set3") +
-  scale_colour_manual(
-    values = c("blue" , "#8B0000", "lightgrey", "darkgrey")
-  ) +
-  geom_sf(data = consol_itm_sf, size = 1,
-          col = "black") +
-  geom_sf(data = unlinked_coopbs, size = 0.1,
-          col = "black") +
-  # scale_size_binned(
-  #   values = c(1, 0.1),
-  #   labels = c("Coops in observed links data", "Other coops")
-  # ) +
-  # labs(fill = "Extent of the Ivorian cocoa growing region") + 
-    theme_minimal() + 
-  theme(legend.key.size = unit(1, "cm")) +
-    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
-    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
-  
-map1
-
-ggsave(  
-  plot = map1, 
-  filename = "input_data_map.png",
-  path = here("outputs", "input_data_descriptives"), 
-  width = 25, 
-  height = 20,
-  units = "cm")
-
-```
-
-
-### Features
-In the development set 
-```{r}
-# names(cells)
-
-cells_development_features =
-  stg1_development %>% 
-  select(Sample = SPLIT, 
-         `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
-         `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
-         `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
-         `Avg. Eucl. distance of the 1 nearest BS (m)` = CELL_MIN_DISTANCE_METERS, 
-         `Avg. road distance of the 1 nearest BS (m)` = CELL_MIN_TRAVEL_METERS, 
-         `Avg. Eucl. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
-         `Avg. road distance of the 5 nearest BS (m)` = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
-         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
-          
-         `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
-         `Proportion of 5 nearest cooperatives certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
-         `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
-         `Proportion of 5 nearest cooperatives with CCP` = CELL_PROP_5_NEAREST_COOP_SSI_CARGILL,
-         `Proportion of 5 nearest cooperatives being COOP-CA` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
-         `Proportion of 5 nearest cooperatives being SCOOPS` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
-         `Total # members of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
-         `Total # BS of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
-         `Avg. # buying companies in 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_N_KNOWN_BUYERS,
-         `Avg. TRI around 5 nearest cooperatives (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
-         `Avg. cocoa extent around 5 nearest cooperatives (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_COCOA_HA,
-         `Avg. settlements extent around 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
-         ) 
-
-
-datasummary_skim(data = cells_development_features,
-
-                output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html")))
-
-```
-
-Cell data balance tests
-```{r}
-# (datasummary_balance(~SPLIT, 
-#                       data = cells_features_tobalance, 
-#                       stars = TRUE,
-#                       # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet", 
-#                       notes = "'BS' stands for cooperative buying stations.", 
-#                      output = here("outputs", "input_data_descriptives", "cells_balance.png")))        
-```
-
-### LU 
-```{r}
-(cells_stg2_development$CELL_COCOA_HA/cell_area_ha) %>% summary()
-  
-stg1_development %>% 
-  select(Sample = SPLIT, 
-          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
-          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
-          `Cocoa extent (ha)` = CELL_COCOA_HA,
-          `Coffee extent (ha)` = CELL_COFFEE_HA,
-          `Rubber extent (ha)` = CELL_RUBBER_HA,
-          `Palm extent (ha)` = CELL_PALM_HA,
-          `Coconut extent (ha)` = CELL_COCONUT_HA,
-          `Cashew extent (ha)` = CELL_CASHEW_HA,
-          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
-          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
-          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA
-  ) %>% 
-  datasummary_skim(output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
-
-```
-
-
-## Links data
-
-### Observed links 
-This starts from links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there). 
-```{r}
-obs_links_des = 
-  links %>% 
-  filter(LINK_IS_ACTUAL) %>% 
-  mutate(LINK_SOURCE = case_when(
-    grepl("CARGILL", PRO_ID) ~ "Cargill data",
-    grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
-    grepl("JRC", PRO_ID) ~ "JRC data",
-  ))
-
-length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
-
-totbl = 
-  obs_links_des %>% 
-  summarise(.by = LINK_SOURCE,  
-    # Number of 
-    # Links
-    `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
-    `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
-    # Farms
-    `Farms` = length(unique(na.omit(PRO_ID))), 
-    `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
-    # Buyers
-    Buyers = length(unique(na.omit(BUYER_ID))),
-    `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
-    `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
-    `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
-    
-    )
-
-totbl
-
-```
-
-
-## Balance tests in Links features
-With differences between actual and/virtual in development. 
-Alternatively, we could look at: 
-- Only in actual 
-- Only in all (potential)
-
-```{r}
-names(stg2_development)
-stg2_features_tobalance_1 =
-  stg2_development %>%
-  mutate(across(where(is.logical), as.integer)) %>% 
-  select(LINK_IS_ACTUAL_COOP_class, 
-         LINK_DISTANCE_METERS,
-         LINK_IS_WITH_1_NEAREST_COOPS,
-         LINK_IS_WITH_5_NEAREST_COOPS,
-         CELL_N_BS_WITHIN_DIST,
-         CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
-         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_IMPOSSIBLE_HA, CELL_TRI_MM)
-
-datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
-                    data = stg2_features_tobalance_1, 
-                    output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
-
-stg2_features_tobalance_2 =
-  stg2_development %>%
-  mutate(across(where(is.logical), as.integer)) %>% 
-  select(LINK_IS_ACTUAL_COOP_class,
-         COOP_FARMERS, 
-         COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
-         starts_with("COOP_STATUS_"), 
-         COOP_CERTIFIED, COOP_RFA, COOP_UTZ, COOP_FT, 
-         COOP_HAS_SSI, starts_with("COOP_SSI_"), 
-         starts_with("COOP_BS_10KM_"))
-
-datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
-                    data = stg2_features_tobalance_2)
-
-```
-
-
-
-### Map of actual links
-```{r}
-
-```
-
-
-
 # FIRST STAGE 
 
 ## Formula
@@ -644,7 +367,7 @@ model1_caret =
   )
 
 saveRDS(model1_caret, 
-        file = here("temp_data", "caret", "stage_1", "allfeatures_rf_400boot632_5tuneL"))
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_rf_400boot632_5tuneL"))
 
 model1_caret_xgb = 
   train(
@@ -657,7 +380,7 @@ model1_caret_xgb =
   )
 
 saveRDS(model1_caret_xgb, 
-        file = here("temp_data", "caret", "stage_1", "allfeatures_xgbtree_4boot632_5tuneL"))
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_xgbtree_4boot632_5tuneL"))
 ```
 
 
@@ -688,7 +411,7 @@ exp_design = "bt(fs+mb,40)"
 
 # Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
-stage1_expdes_repo = here("temp_data", "familiar", "stage_1", gsub(",","_",exp_design))
+stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
 dir.create(stage1_expdes_repo)
 
 # let's go
@@ -956,6 +679,8 @@ stg2_allfeatures =
   stg2_development %>% 
   select(
     # Do not include any LU var, on either cell or coop level, except for settlements. 
+    # Do not include SSI-related vars either, because the development data is biased towards CCP, and thus ANY_SSI and not any other SSI. 
+    # stg2_development %>% filter(grepl("CARGILL", PRO_ID)) %>% pull(COOP_SSI_CARGILL) %>% summary()
     
     # Cell level
     CELL_TRI_MM, CELL_SETTLEMENT_HA,
@@ -978,7 +703,7 @@ stg2_allfeatures =
     # More endogenous: 
     COOP_N_KNOWN_BUYERS, 
     COOP_RFA, COOP_UTZ, COOP_FT,
-    starts_with("COOP_CERTIFIED"), 
+    COOP_CERTIFIED 
     # Never include those, because our observed links data is biased towards link existence when there is a SSI (the CCP, Cargill's SSI). 
     # Don't include dummies for other SSIs than Cargill's, because having many training data from Cargill means our observed links data is biased towards link existence when there is no other SSI than Cargill's. 
     # COOP_HAS_SSI, 
@@ -1071,6 +796,10 @@ model2_caret_xgb =
 
 model2_caret_xgb
 
+saveRDS(model2_caret_xgb, 
+        here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
+
+model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
 
 ```
 
@@ -1087,7 +816,7 @@ exp_design = "cv(fs+mb, 5)"  # "bt(fs+mb,5)"
 
 # Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
-stage2_expdes_repo = here("temp_data", "familiar", "stage_2", gsub(",","_",exp_design))
+stage2_expdes_repo = here("temp_data", "model", "familiar", "stage_2", gsub(",","_",exp_design))
 dir.create(stage2_expdes_repo)
 
 # let's go
@@ -1266,6 +995,12 @@ Here, we build the prediction setS for each stage.
 Based on AoA of 1st stage model. 
 Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
 
+## Read developed models
+```{r}
+
+```
+
+
 ## AoA
 ```{r}
 # Requires the model to be trained with caret, with cross-validation and not bootstraps
@@ -1281,7 +1016,6 @@ model1_caret_cv =
   )
 
 model1_caret_cv$results
-model1_caret$results
 
 aoa1 = 
   aoa(newdata = cells %>% select(all_of(model1@required_features)),
@@ -1355,6 +1089,7 @@ links =
   left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
             by = "CELL_ID")
 
+
 # Should it be the under-sampled data rather here? NO, I don't think so. We DO want to make predictions for all virtual links! 
 links_topredict =
   links %>% 
@@ -1399,6 +1134,9 @@ cells =
                                          0, 
                                          CELL_SHARE_COOP))
 
+cells$CELL_SHARE_COOP %>% summary()
+cells$CELL_SHARE_COOP_SIGNI %>% summary()
+
 ```
 
 ### Determinist prediction
@@ -1410,9 +1148,9 @@ cells =
                                           0, 
                                           CELL_SHARE_COOP_SIGNI))
 
-cells$CELL_SHARE_COOP %>% summary()
+cells$CELL_SHARE_COOP_SIGNI %>% summary()
 
-stopifnot(sum(is.na(cells$CELL_SHARE_COOP)) == sum(aoa1$AOA==0))
+stopifnot(sum(is.na(cells$CELL_SHARE_COOP_SIGNI)) == sum(aoa1$AOA==0))
 ```
 
 
@@ -1420,7 +1158,9 @@ stopifnot(sum(is.na(cells$CELL_SHARE_COOP)) == sum(aoa1$AOA==0))
 ```{r}
 # Predict the existence that a link exists
 tic()
-links_topredict$LINK_PROBA = predict(model2_caret_xgb, newdata = links_topredict[, stg2_allfeatures], type = "prob")$Actual_links
+links_topredict$LINK_PROBA = predict(model2_caret_xgb, 
+                                     newdata = links_topredict %>% select(all_of(model2_caret_xgb$finalModel$feature_names)), 
+                                     type = "prob")$Actual_links
 toc()
 
 # From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
@@ -1452,8 +1192,9 @@ optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.
 
 links = 
   links %>% 
-  mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 0, LINK_PROBA))
-
+  mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 
+                                     0, 
+                                     LINK_PROBA)) # returns NA for NA probas (!AoA)
 ```
 
 
@@ -1465,6 +1206,16 @@ links =
   mutate(LINK_PROBA_THRESH = if_else(CELL_NO_POTENTIAL_LINK, 
                               0, 
                               LINK_PROBA_THRESH)) # it could also be 1 here, since we normalise then. But keep some variation between links with a positive proba. 
+
+# After this, the number of links that are NA is 297074
+links$LINK_PROBA_THRESH %>% summary()
+# which is the same as the number of links in cells outside the AoA. 
+n_links_outside_aoa = nrow(filter(links, !CELL_IS_IN_AOA)) 
+
+stopifnot(
+  links %>% filter(is.na(LINK_PROBA_THRESH)) %>% nrow() ==  n_links_outside_aoa
+)
+
 
 links$LINK_PROBA %>% quantile(seq(0.99, 1, 0.001), na.rm = T)
 links$LINK_PROBA_THRESH %>% quantile(seq(0.999, 1, 0.0001), na.rm = T)
@@ -1506,81 +1257,101 @@ links =
 ## Normalisation (cell perspective)
 We do it after unconditioning, to normalise unconditional probabilities too. 
 ```{r}
+    # Work non-thresholded proba for now, but we will surely not keep them. 
+
 links = 
   links %>% 
   group_by(CELL_ID) %>% 
   mutate(
-    # Work non-thresholded proba for now, but we will surely not keep them. 
-    CELL_NORMSUM = sum(LINK_PROBA), 
-    CELL_UNCOND_NORMSUM = sum(LINK_UNCOND_PROBA),
-    
     CELL_NORMSUM_THRESH = sum(LINK_PROBA_THRESH), 
     CELL_UNCOND_NORMSUM_THRESH = sum(LINK_UNCOND_PROBA_THRESH)
   ) %>% 
   ungroup() %>% 
   mutate(
-    # Work non-thresholded proba for now, but we will surely not keep them. 
-    LINK_PROBA_NORMED = LINK_PROBA / CELL_NORMSUM, 
-    LINK_UNCOND_PROBA_NORMED = LINK_UNCOND_PROBA / CELL_UNCOND_NORMSUM, 
-    
-    LINK_PROBA_THRESH_NORMED = LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
-    LINK_UNCOND_PROBA_THRESH_NORMED = LINK_UNCOND_PROBA_THRESH / CELL_UNCOND_NORMSUM_THRESH,
+    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas = 0.
+    # When it's NA, it means we are in a cell outside the AoA, so leave it NA
+    LINK_PROBA_THRESH_NORMED = case_when(
+      CELL_NORMSUM_THRESH > 0 ~ LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
+      is.na(CELL_NORMSUM_THRESH) ~ NA,
+      TRUE ~ 0
+      ), 
+    LINK_UNCOND_PROBA_THRESH_NORMED = case_when(
+      CELL_UNCOND_NORMSUM_THRESH > 0 ~ LINK_UNCOND_PROBA_THRESH / CELL_UNCOND_NORMSUM_THRESH, 
+      is.na(CELL_UNCOND_NORMSUM_THRESH) ~ NA,
+      TRUE ~ 0
+      )
   )
 
 stopifnot(
-links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% filter(CELL_IS_IN_AOA) %>% nrow() == 0
+links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% pull(CELL_IS_IN_AOA) %>% any() == FALSE
 )
+
+links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() 
+links %>% filter(is.na(LINK_UNCOND_PROBA_THRESH_NORMED)) %>% nrow() 
 
 summary(links$CELL_NORMSUM_THRESH)
 summary(links$CELL_UNCOND_NORMSUM_THRESH)
+# It is not anormal that these sums are higher than 1, that's precisely why we normalise actually. 
+
+# links %>% filter(CELL_NORMSUM_THRESH > 1) %>% View()
+
 
 stopifnot(
-  links$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) == length(unique(links_topredict$CELL_ID)) |
-  links$LINK_UNCOND_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) == length(unique(links_topredict$CELL_ID))
+  links$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) + 
+    length(unique(pull(filter(links, CELL_NORMSUM_THRESH == 0), CELL_ID))) == 
+    length(unique(links_topredict$CELL_ID)) |
+    
+  links$LINK_UNCOND_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) + 
+    length(unique(pull(filter(links, CELL_UNCOND_NORMSUM_THRESH == 0), CELL_ID))) == 
+    length(unique(links_topredict$CELL_ID)) 
 )
 
 ```
 
 
-## Sharp polygons
-Sharp means non-overlapping. 
-This is an important step, where we define, for every cell, to which coop it most likely supplies. 
-We do two versions of this, either focusing on actual or on potential sourcing sheds. 
+## Links most likely
+This is an important step, where we define, for every cell, to which coop it most likely supplies (conditional on supplying any coop in the first place). 
+
+This is not yet non-overlapping polygons though, as we still have many equi-probabilities... 
+
 ```{r}
-# Find the max conditional, normalised proba in every cell,
-# first, if they are all null
+# Find the max conditional, normalised proba in every cell. 
+# Using the unconditional probas would yield exactly the same result, as it just differs by a cell-level quantity, 
+# EXCEPT in cells that don't pass the 1st stage threshold. There, unconditional probas would all be null, but conditional probas aren't. So using conditional probas allows to also determine which coop is most likely supplied in cells not selling to coops at all. 
+
 links = 
   links %>% 
   group_by(CELL_ID) %>% 
   mutate(
     LINK_PROBA_THRESH_NORMED_CELLMAX = max(LINK_PROBA_THRESH_NORMED), 
-    CELL_N_MAX_PROBA = sum(LINK_PROBA_THRESH_NORMED_CELLMAX)
   ) %>% 
   ungroup() %>% 
-  mutate(LINK_IS_MOST_LIKELY_IN_CELL = case_when(
-    LINK_PROBA_THRESH_NORMED_CELLMAX == 0 | 
+  mutate(LINK_IS_MOST_LIKELY = case_when(
+    LINK_PROBA_THRESH_NORMED_CELLMAX == 0 | # where all probas are null
+      # or where their maximum is strictly higher than the link's proba, the link is not most likely
     LINK_PROBA_THRESH_NORMED_CELLMAX > LINK_PROBA_THRESH_NORMED ~ FALSE, 
+    is.na(LINK_PROBA_THRESH_NORMED_CELLMAX) ~ NA,
     TRUE ~ TRUE
-  )
-) 
+    )
+  ) %>% 
+  group_by(CELL_ID) %>% 
+  mutate(CELL_N_MOST_LIKELY_LINKS = sum(LINK_IS_MOST_LIKELY, na.rm = T)) %>% 
+  ungroup() 
 
-# How to handle equi-probabilities? 
+# Equi-probabilities are allowed. We have them for many of the observed links, which 
+# predicted probability to exist is 1, and thus normalised probability is 1/n with n is the number of observed links in cell. 
+# Plus a few truly predicted probas. 
 links %>%   
-  filter(CELL_N_MAX_PROBA > 1) %>%   
+  filter(CELL_N_MOST_LIKELY_LINKS > 1) %>% 
+  arrange(CELL_ID) %>% 
   View()
-
-
-# Cell categories!  
-links = 
-  links %>% 
-  mutate(
-    CELL_IN_SOURCING_SHED = CELL_SHARE_COOP_SIGNI > 0, 
-     # This is where no cocoa is estimated to be sold to coops, but independent of that, some coops are still predicted to source from there.  
-     CELL_IN_INFLUENCE_SHED = CELL_SHARE_COOP_SIGNI == 0 & CELL_N_MAX_PROBA > 0)
-
+  
+links %>%   
+  filter(CELL_N_MOST_LIKELY_LINKS > 1) %>% 
+  filter(!is.na(PRO_ID)) %>% 
+  nrow()
 
 ```
-
 
 
 
@@ -1588,6 +1359,8 @@ links =
 What is the task exactly here? 
 I think we've already catagorised cells according to presence of cocoa at the top of the script. Nothing more needed here... 
 ```{r}
+table(cells$CELL_PRODUCTION_STATUS)
+
 links = 
   links %>% 
   mutate(
@@ -1605,6 +1378,47 @@ either conditional or unconditional probabilities to be linked with the coop, fo
 ```{r}
 
 ```
+
+
+
+# EXPORT 
+```{r}
+saveRDS(cells, 
+        here("temp_data", "model", "cells.Rdata"))
+
+saveRDS(links, 
+        here("temp_data", "model", "links.Rdata"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # DEPRECATED CODE   
