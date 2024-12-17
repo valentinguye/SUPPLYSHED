@@ -36,52 +36,15 @@ library(stars)
 library(pals)
 library(modelsummary) # necessary to load it after DescTools
 
-# ML libraries
-library(ranger)
-library(parsnip)
-library(xgboost)
-library(pROC)
-library(yardstick)
-library(CAST)
-library(caret)
-
-library(familiar)
-
-# and packages required but some uses of familiar: 
-library(microbenchmark)
-library(glmnet)
-library(fastcluster)
-library(praznik)
-library(power.transform)
-library(isotree)
-library(laGP)
-library(harmonicmeanp)
-library(mboost)
+library(biscale)
+library(cowplot)
+library(viridis)
 
 set.seed(8888)
 
 # install.packages("https://cran.r-project.org/src/contrib/Archive/isotree/isotree_0.5.5.tar.gz",
 #                  repos = NULL, 
 #                  type = "source")
-
-dir.create(here("temp_data", "model", "caret", "stage_1"), recursive = TRUE)
-dir.create(here("temp_data", "model", "caret", "stage_2"), recursive = TRUE)
-
-# These are were summon_familiar will write its outputs
-dir.create(here("temp_data", "model", "familiar", "stage_1"), recursive = TRUE)
-dir.create(here("temp_data", "model", "familiar", "stage_2"), recursive = TRUE)
-
-# And to save the predictions 
-dir.create(here("temp_data", "model", "predictions", "stage_1"), recursive = TRUE)
-dir.create(here("temp_data", "model", "predictions", "stage_2"), recursive = TRUE)
-
-# This is to save some of the outputs from being overwritten subsequently (not really used currently). 
-dir.create(here("outputs", "familiar", "stage_1", "performance"), recursive = TRUE)
-dir.create(here("outputs", "familiar", "stage_1", "explanation_vimp"), recursive = TRUE)
-dir.create(here("outputs", "familiar", "stage_1", "models"), recursive = TRUE)
-dir.create(here("outputs", "familiar", "stage_2", "performance"), recursive = TRUE)
-dir.create(here("outputs", "familiar", "stage_2", "explanation_vimp"), recursive = TRUE)
-dir.create(here("outputs", "familiar", "stage_2", "models"), recursive = TRUE)
 
 ## Functions
 # Trase palettes etc. for plots
@@ -104,17 +67,68 @@ ylabs = c(5, 7, 9)
 coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
 coopbs22 = coopbsy %>% filter(YEAR == 2022)
 
-consol = readRDS(here("temp_data", "actual_links_consolidated.Rdata"))
+cells = readRDS(here("temp_data", "model", paste0("cells.Rdata"))) 
 
-cells = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_", MODEL_RESOLUTION_KM, "km.Rdata"))) 
-
-links = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", MODEL_RESOLUTION_KM, "km.Rdata")))
+links = readRDS(here("temp_data", "model", paste0("links.Rdata")))
 
 departements <- read_sf(here("input_data/s3/CIV_DEPARTEMENTS.geojson"))
 departements = 
   st_transform(departements, crs = civ_crs)
 
 ```
+
+## map theme
+
+```{r}
+theme_map <- function(...) {
+  theme_minimal() +
+  theme(
+    text = element_text(family = default_font_family,
+                        color = default_font_color),
+    # remove all axes
+    axis.line = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    # add a subtle grid
+    panel.grid.major = element_line(color = "#dbdbd9", size = 0.2),
+    panel.grid.minor = element_blank(),
+    # background colors
+    plot.background = element_rect(fill = default_background_color,
+                                   color = NA),
+    panel.background = element_rect(fill = default_background_color,
+                                    color = NA),
+    legend.background = element_rect(fill = default_background_color,
+                                     color = NA),
+    # borders and margins
+    plot.margin = unit(c(.5, .5, .2, .5), "cm"),
+    panel.border = element_blank(),
+    panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
+    # titles
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 9, hjust = 0,
+                               color = default_font_color),
+    plot.title = element_text(size = 15, hjust = 0.5,
+                              color = default_font_color),
+    plot.subtitle = element_text(size = 10, hjust = 0.5,
+                                 color = default_font_color,
+                                 margin = margin(b = -0.1,
+                                                 t = -0.1,
+                                                 l = 2,
+                                                 unit = "cm"),
+                                 debug = F),
+    # captions
+    plot.caption = element_text(size = 7,
+                                hjust = .5,
+                                margin = margin(t = 0.2,
+                                                b = 0,
+                                                unit = "cm"),
+                                color = "#939184"),
+    ...
+  )
+}
+```
+
 
 # INPUT DESCRIPTIVES 
 
@@ -397,6 +411,10 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 # OUTPUT DESCRIPTIVES 
 
 ## Aggregate sourcing sheds 
+This uses mostly first stage results. 
+
+
+### Discrete map 
 ```{r}
 # Make cell categories
 # keep in mind that the purpose of this is a map, not an analysis! 
@@ -437,8 +455,6 @@ links =
 #   select(CELL_PRODUCTIVE_SOURCING_SHED_ONLY, CELL_PRODUCTIVE_INFLUENCE_SHED_ONLY, CELL_PROSPECTIVE_SOURCING_SHED_ONLY, CELL_PROSPECTIVE_INFLUENCE_SHED_ONLY) %>% 
 #   summary()
 
-cells_save = cells
-
 cells = 
   cells %>% 
   left_join(
@@ -451,4 +467,114 @@ cells$`Sourcing shed type` %>% table()
 stopifnot(
 cells %>% filter(!is.na(CELL_SHARE_COOP)) %>% nrow() == sum(table(cells$`Sourcing shed type`))
 )
+```
+
+A discrete map may be misleading though, as it may represent many cells in the actual sourcing shed, while their predicted shares of coop outlet are small and uncertain. 
+
+### Continuous map
+Use biscale package. Different vignettes, including on available bivariate palettes here: 
+https://cran.r-project.org/web/packages/biscale/index.html
+
+```{r}
+cells$CELL_COCOA_SHARE %>% summary()
+cells$CELL_COCOA_HA %>% summary()
+cells$CELL_SHARE_COOP_SIGNI %>% summary()
+cells$CELL_SHARE_COOP_SIGNI %>% quantile(seq(0, 1, 0.1), na.rm = T)
+
+cells_toplot = 
+  cells %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs)
+
+aoa_cells_toplot = 
+  cells_toplot %>% 
+  filter(CELL_IS_IN_AOA)
+
+oaoa_cells_toplot = 
+  cells_toplot %>% 
+  filter(!CELL_IS_IN_AOA)
+
+# Max share of coop outlet, rounded up for clean display
+max_share_coop = round(max(aoa_cells_toplot$CELL_SHARE_COOP_SIGNI, na.rm = TRUE)+0.05,1)
+
+# Custom breaks bc we want the lowest bin to be 0 only. 
+aoa_cells_toplot$CELL_SHARE_COOP_SIGNI_bin = 
+  cut(aoa_cells_toplot$CELL_SHARE_COOP_SIGNI, 
+      right = FALSE, # implies [a, b[ intervals
+      # by default, right = TRUE means that intervals defined by breaks are closed on the right and open on the left. 
+      # We want the opposite, to include 0 on the left of the first interval.        
+      breaks = c(0,1e-9,0.3,max_share_coop), 
+      include.lowest = TRUE)
+
+aoa_cells_toplot$CELL_SHARE_COOP_SIGNI_bin %>% table()
+
+# This makes the bivariate bins
+aoa_cells_toplot = 
+  aoa_cells_toplot %>% 
+  bi_class(CELL_COCOA_HA,
+            CELL_SHARE_COOP_SIGNI_bin, 
+            dim = 3, 
+            style = "quantile", 
+                  dig_lab = 9)
+
+# This is just for display in the legend
+breaks = 
+  aoa_cells_toplot %>% 
+  bi_class_breaks(CELL_COCOA_HA,
+                  CELL_SHARE_COOP_SIGNI_bin, 
+                  dim = 3, 
+                  style = "quantile", 
+                  dig_lab = 1) 
+breaks$bi_y[1] = "0"
+breaks$bi_y[2] = "]0,0.3]"
+breaks$bi_y[3] = paste0("]0.3,",max_share_coop,"]")
+
+map =
+  ggplot() +
+  geom_sf(data = aoa_cells_toplot, mapping = aes(fill = bi_class, col = bi_class), size = 1, shape = 22, # 22, 
+          show.legend = FALSE) + # 
+  geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
+  bi_scale_fill(pal = "GrPink2", dim = 3, na.value = "transparent") +
+  bi_scale_color(pal = "GrPink2", dim = 3, na.value = "transparent") +
+  labs(
+    title = "Cooperative outlet and cocoa extent",
+    subtitle = ""
+  ) +
+  bi_theme()
+
+legend <- bi_legend(pal = "GrPink2",
+                    dim = 3,
+                    xlab = "Extent of cocoa farms",
+                    ylab = "Share of cooperative outlet",
+                    size = 6, 
+                    breaks = breaks)
+
+
+
+continous_aggregate_plot = 
+  ggdraw() +
+  draw_plot(map, 0, 0, 1, 1) +
+  draw_plot(legend, x = 0.7, y = 0.2, width = 0.3, height = 0.3)
+
+continous_aggregate_plot
+```
+
+
+Continuous productive
+```{r}
+# # This is mainly for plotting purposes - not even actually, it's useless. 
+# table(cells$CELL_PRODUCTION_STATUS)
+# 
+# links = 
+#   links %>% 
+#   mutate(
+#     # Commented out since I don't know what this should be used for - to weights ! (not summing to 1)
+#     # across(.cols = contains("_PROBA_"), 
+#     #        .fns = ~ .x  * CELL_COCOA_SHARE, 
+#     #        .names = paste0("{.col}", "_COCOA")), 
+#     CELL_SHARE_COOP_SIGNI_COCOA = CELL_SHARE_COOP_SIGNI * CELL_COCOA_SHARE
+#   )
+# 
+# links %>% select(ends_with("_COCOA")) %>% names()
+
 ```

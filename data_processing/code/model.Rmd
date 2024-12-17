@@ -170,14 +170,16 @@ cells_actual$CELL_COCOA_HA %>%quantile(probs = seq(0.01,0.1,0.01))
 
 cells = 
   cells %>% 
-  mutate(CELL_PRODUCTION_STATUS = if_else(CELL_COCOA_HA < 80, 
+  mutate(
+    # This one could be moved to Outputs.Rmd
+    CELL_PRODUCTION_STATUS = if_else(CELL_COCOA_HA < 80, 
                                           "PROSPECTIVE", 
                                           "PRODUCTIVE"),
-         # also compute the share of area under cocoa use, to use as weights later on
-         CELL_COCOA_SHARE = CELL_COCOA_HA / 1600, 
-         # and of impossible land
-         CELL_IMPOSSIBLE_SHARE = CELL_IMPOSSIBLE_HA / 1600 
-         )
+   # also compute the share of area under cocoa use, to use below
+   CELL_COCOA_SHARE = CELL_COCOA_HA / 1600, 
+   # and of impossible land
+   CELL_IMPOSSIBLE_SHARE = CELL_IMPOSSIBLE_HA / 1600 
+ )
 table(cells$CELL_PRODUCTION_STATUS)
 
 links = 
@@ -1309,6 +1311,8 @@ stopifnot(
 ```
 
 
+
+
 ## Links most likely
 This is an important step, where we define, for every cell, to which coop it most likely supplies (conditional on supplying any coop in the first place). 
 
@@ -1355,27 +1359,14 @@ links %>%
 
 
 
-## Productive vs. unproductive 
-What is the task exactly here? 
-I think we've already catagorised cells according to presence of cocoa at the top of the script. Nothing more needed here... 
-```{r}
-table(cells$CELL_PRODUCTION_STATUS)
-
-links = 
-  links %>% 
-  mutate(
-    across(.cols = contains("_PROBA_"), 
-           .fns = ~ .x  * CELL_COCOA_SHARE, 
-           .names = paste0("{.col}", "_COCOA"))
-  )
-
-```
 
 
 ## Normalisation (coop perspective)
 We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
 either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
 ```{r}
+# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted cocoa area in all sourcing sheds
+
 
 ```
 
