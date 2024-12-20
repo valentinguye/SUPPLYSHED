@@ -192,6 +192,13 @@ consol <- filter(consol, !is.na(LINK_YEAR))
 # for now remove bc not useful
 consol <- select(consol, -LINK_ID_ONLYACTUAL)
 
+# Make buyer ID
+consol = 
+  consol %>% 
+  group_by(COOP_BS_ID, BUYER_IS_COOP, BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
+  mutate(BUYER_GENERAL_ID = paste0("GENERAL-", cur_group_id())) %>% 
+  ungroup()
+
 ## Export -------
 # For descriptions in next scripts
 saveRDS(consol, here("temp_data", "actual_links_consolidated.Rdata"))
@@ -306,7 +313,7 @@ coopbs_10km_buffer =
 # write_sf(coopbs_10km_buffer, "temp_data/coopbs_10km_buffer/coopbs_10km_buffer.shp")
 
 
-# DEPLOY MODEL STRUCTURE -----------------
+# MAKE DATA STRUCTURE -----------------
 
 ## Set spatial parameters ------------
 # The size of the grid is an important parameter. 

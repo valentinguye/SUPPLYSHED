@@ -1,11 +1,12 @@
 ---
-title: "model"
+title: "model_dev_and_prediction"
 author: "Valentin"
 date: "`r Sys.Date()`"
 output: 
   html_document:
       self_contained: false
 ---
+
 # Set up and inputs
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
@@ -116,8 +117,7 @@ departements =
 
 ```
 
-# Useful pre-ops
-## Columns ops
+## Pre-process columns
 ```{r}
 cells = 
   cells %>% 
@@ -153,20 +153,8 @@ links =
   mutate(LINK_ACTUAL_COOP_ID = gsub("_BS.*", "", LINK_ACTUAL_COOP_BS_ID), 
          LINK_POTENTIAL_COOP_ID = gsub("_BS.*", "", LINK_POTENTIAL_COOP_BS_ID))
 
-```
 
-### Productive and prospective cells
-```{r}
-# Distribution of cocoa extent in cells where we know there are cocoa farms 
-cells_actual = 
-  cells %>% 
-  filter(CELL_ACTUAL_LINK) 
-
-cells_actual$CELL_COCOA_HA %>% summary() # It goes as low as 2 ha, but has on average 443 ha. 
-cells_actual$CELL_COCOA_HA %>%quantile(probs = seq(0.01,0.1,0.01))
-
-# 5% of the cells with actual links is a good threshold, because the cocoa area quantile corresponds to 5% of a cell area
-# (i.e., 80ha, since one cell is 1600ha)
+# Productive & prospective cells
 
 cells = 
   cells %>% 
@@ -188,13 +176,29 @@ links =
     cells %>% select(CELL_PRODUCTION_STATUS, CELL_COCOA_SHARE, CELL_IMPOSSIBLE_SHARE, CELL_ID), 
     by = "CELL_ID")
 
+# Distribution of cocoa extent in cells where we know there are cocoa farms 
+cells_actual = 
+  cells %>% 
+  filter(CELL_ACTUAL_LINK) 
+
+cells_actual$CELL_COCOA_HA %>% summary() # It goes as low as 2 ha, but has on average 443 ha. 
+cells_actual$CELL_COCOA_HA %>%quantile(probs = seq(0.01,0.1,0.01))
+
+# 5% of the cells with actual links is a good threshold, because the cocoa area quantile corresponds to 5% of a cell area
+# (i.e., 80ha, since one cell is 1600ha)
+
+
 ```
 
 
 
-## Remove cell & link instances
-### Based on LU
+
+## Development data
+
+### Remove some cells and links
 ```{r}
+# BASED ON LU 
+
 # Remove cells with virtually no cocoa and no space for cocoa to grow 
 summary(cells$CELL_COCOA_HA)
 summary(cells$CELL_IMPOSSIBLE_HA)
@@ -209,10 +213,9 @@ cells =
 links = 
   links %>% 
   filter(!(CELL_COCOA_SHARE < 0.01 & CELL_IMPOSSIBLE_SHARE > 0.8))
-```
 
-### That make no sense
-```{r}
+
+# FEW EXTRA-TERRITORIAL LEFT
 # Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% pull(SPLIT) %>% unique()
 # cells %>% filter(is.na(CELL_DISTRICT_NAME)) %>% nrow()
@@ -221,17 +224,12 @@ cells =
   # Remove the few cells that still fall in no district 
   filter(!is.na(CELL_DISTRICT_NAME)) 
 
-  # Removing the cells where there is little cocoa (less than 1%) and lots of land where cocoa cannot expand (more than 90%
-  # does not make a big difference (80 cells). So let's not remove them. It's a display issue. In terms of results, we will anyway aggregate cocoa or forest area 
-  # filter(!(CELL_COCOA_HA / cell_area_ha < 0.01 & CELL_IMPOSSIBLE_HA / cell_area_ha > 0.9))
-
 links = 
   links %>% 
   # Remove the few cells that still fall in no district 
   filter(!is.na(CELL_DISTRICT_NAME))
   
-
-# In addition, from links, we also remove: 
+# LINKS NOT TO TRAIN NOR PREDICT 
 links =
   links %>%
   # Remove links with non-IC2B coops or with other buyers, 
@@ -246,9 +244,7 @@ stopifnot(links %>%
 
 ```
 
-
-
-## Under-sample virtual links
+### Under-sample virtual links
 ```{r}
 links_us = 
   links %>% 
@@ -256,7 +252,7 @@ links_us =
   filter(LINK_TO_KEEP_TO_US_VIRTUAL) # this is only TRUE currently. 
 ```
 
-## Extract development sets
+### Extract development sets
 Any processing on explanatory features' values should be made before this step so it is done once for all the data
 ```{r}
 cells = 
@@ -278,17 +274,457 @@ cells_stg2_development =
   stg2_development %>%
   distinct(CELL_ID, .keep_all = TRUE) %>% 
   select(starts_with("CELL_"))
-  
-
 
 ```
 
 
 
-# FIRST STAGE 
+# INPUT DESCRIPTIVES 
 
-## Formula
+## Observed links data
+
+### Table 
 ```{r}
+# Filter data
+jrcdata <- consol %>% filter(grepl("JRC", PRO_ID))
+scdata <- consol %>% filter(grepl("SUSTAINCOCOA", PRO_ID))
+cargilldata <- consol %>% filter(grepl("CARGILL", PRO_ID))
+
+paste0("There are ", 
+       nrow(jrcdata), " farmer-buyer links, between ",
+       length(unique(jrcdata$PRO_ID)), " farmers located in ",
+       length(unique(jrcdata$PRO_VILLAGE_NAME)), " villages and ",
+       nrow(filter(jrcdata, BUYER_IS_COOP)) + nrow(filter(jrcdata, !BUYER_IS_COOP)), " buyers. ",
+       nrow(filter(jrcdata, BUYER_IS_COOP)), " links are with cooperatives, ", 
+       nrow(filter(jrcdata, !is.na(COOP_BS_ID))), " of which are links with IC2B, and ", 
+       nrow(filter(jrcdata, !BUYER_IS_COOP)), " are links with another kind of buyers. ",
+       nrow(filter(jrcdata, !is.na(LINK_VOLUME_KG))), " links have clean volume information."
+)
+
+paste0("There are ", 
+       nrow(scdata), " farmer-buyer links, between ",
+       length(unique(scdata$PRO_ID)), " farmers located in ",
+       length(unique(scdata$PRO_VILLAGE_NAME)), " villages and ",
+       nrow(filter(scdata, BUYER_IS_COOP)) + nrow(filter(scdata, !BUYER_IS_COOP)), " buyers. ",
+       nrow(filter(scdata, BUYER_IS_COOP)), " links are with cooperatives, ", 
+       nrow(filter(scdata, !is.na(COOP_BS_ID))), " of which are links with IC2B, and ", 
+       nrow(filter(scdata, !BUYER_IS_COOP)), " are links with another kind of buyers. ",
+       nrow(filter(scdata, !is.na(LINK_VOLUME_KG))), " links have clean volume information."
+)
+
+paste0("There are ", 
+       nrow(cargilldata), " farmer-buyer links, between ",
+       length(unique(cargilldata$PRO_ID)), " farmers located in ",
+       length(unique(cargilldata$PRO_VILLAGE_NAME)), " villages and ",
+       nrow(filter(cargilldata, BUYER_IS_COOP)) + nrow(filter(cargilldata, !BUYER_IS_COOP)), " buyers. ",
+       nrow(filter(cargilldata, BUYER_IS_COOP)), " links are with cooperatives, ", 
+       nrow(filter(cargilldata, !is.na(COOP_BS_ID))), " of which are links with IC2B, and ", 
+       nrow(filter(cargilldata, !BUYER_IS_COOP)), " are links with another kind of buyers. ",
+       nrow(filter(cargilldata, !is.na(LINK_VOLUME_KG))), " links have clean volume information."
+)
+
+
+# Create summary data frames
+summary_data <- data.frame(
+Metric = c("Source", 
+            "Year", 
+            "Spatial information", 
+            "Volume information", 
+            "Villages", 
+            "Farmers", 
+            "Farmer-Buyer Links", 
+                 "With cooperatives", 
+                 "With other buyers", 
+            "Buyers", 
+                 "Cooperatives", 
+                 "Other buyers"
+              ),
+  JRC = c(
+          "JRC", "2019", "Farm point", "Yes",
+          length(unique(jrcdata$PRO_VILLAGE_NAME)), 
+          length(unique(jrcdata$PRO_ID)), 
+          nrow(jrcdata), 
+          nrow(filter(jrcdata, !is.na(COOP_BS_ID))), 
+          nrow(filter(jrcdata, !BUYER_IS_COOP)), 
+          length(unique(jrcdata$BUYER_GENERAL_ID)),
+          length(unique(pull(filter(jrcdata, !is.na(COOP_BS_ID)), BUYER_GENERAL_ID))),
+          length(unique(pull(filter(jrcdata, !BUYER_IS_COOP), BUYER_GENERAL_ID)))
+          ),
+  SC = c(
+          "Sustain-Cocoa project", "2022", "Village point", "Yes",
+          length(unique(scdata$PRO_VILLAGE_NAME)), 
+          length(unique(scdata$PRO_ID)), 
+          nrow(scdata), 
+          nrow(filter(scdata, !is.na(COOP_BS_ID))), 
+          nrow(filter(scdata, !BUYER_IS_COOP)), 
+          length(unique(scdata$BUYER_GENERAL_ID)), 
+          length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_GENERAL_ID))),
+          "Unknown"
+          ),
+  CARGILL = c(
+          "Public repository", "2019", "Farm polygon", "No",
+          "Unknown", 
+          length(unique(cargilldata$PRO_ID)), 
+          nrow(cargilldata), 
+          nrow(filter(cargilldata, !is.na(COOP_BS_ID))), 
+          nrow(filter(cargilldata, !BUYER_IS_COOP)), 
+          length(unique(cargilldata$BUYER_GENERAL_ID)), 
+          length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_GENERAL_ID))),
+          length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_GENERAL_ID)))
+          )
+) 
+colnames(summary_data) = c(" ", "JRC Data", "SC Data", "Cargill Data")
+  
+# Create table with kableExtra and add indentation
+table <- summary_data %>%
+  kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive")) %>%
+  
+  row_spec(8, extra_css = "padding-left: 20px;") %>%
+  row_spec(9, extra_css = "padding-left: 20px;") %>%
+  row_spec(11, extra_css = "padding-left: 20px;") %>%
+  row_spec(12, extra_css = "padding-left: 20px;")
+
+save_kable(table, here("outputs", "input_data_descriptives", "Observed_links_table.png"))
+
+```
+
+
+### Map 
+```{r}
+consol = 
+  consol %>% 
+  mutate(Source = case_when(grepl("JRC", PRO_ID) ~ "JRC", 
+                            grepl("SUSTAINCOCOA", PRO_ID) ~ "SC", 
+                            grepl("CARGILL", PRO_ID) ~ "CARGILL", 
+                            TRUE ~ "OTHER"))
+
+consol_farm_sf = 
+  consol %>% 
+  st_as_sf(coords = c("PRO_LONGITUDE", "PRO_LATITUDE"), crs = 4326, remove = FALSE)
+
+consol_coop_sf = 
+  consol %>% 
+  filter(!is.na(BUYER_LONGITUDE) & BUYER_IS_COOP) %>% # This excludes other buyers
+  distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) 
+
+unlinked_coopbs_sf = 
+  coopbs22 %>% 
+  filter(!is.na(LONGITUDE) & !COOP_BS_ID %in% consol_coop_sf$COOP_BS_ID) %>% # This excludes coops already in observed links data
+  distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
+# Function to create a line geometry
+create_line <- function(b_lon, b_lat, p_lon, p_lat) {
+  st_linestring(matrix(c(b_lon, b_lat, 
+                         p_lon, p_lat), 
+                       ncol = 2, 
+                       byrow = TRUE))
+}
+
+# Apply the function to each row
+df = consol %>% 
+  # Exclude other buyers than IC2B (thus geolocalised) coops. 
+  filter(!is.na(BUYER_LONGITUDE) & BUYER_IS_COOP) 
+
+df = df %>% 
+  mutate(geometry = mapply(create_line, 
+                      BUYER_LONGITUDE, BUYER_LATITUDE, 
+                      PRO_LONGITUDE, PRO_LATITUDE, 
+                      SIMPLIFY = FALSE)
+  )
+
+# Convert to sf object
+df <- st_sf(df, crs = 4326) 
+
+ggplot() +
+    geom_sf(data = df, aes(col = Source), size = 5) + #, shape = 15
+    geom_sf(data = consol_coop_sf, aes(col = Source), size = 1) +
+    
+    scale_colour_manual(
+        values = c("#8B0000", "red", "darkgreen")) +
+  
+  geom_sf(data = unlinked_coopbs_sf, size = 0.1,
+            col = "black") +
+    
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  
+  theme_minimal() + 
+  theme(legend.key.size = unit(1, "cm")) +
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
+  
+```
+
+
+## Cells data 
+
+### Structure
+```{r}
+# How many cells with actual links
+# cells %>% 
+#   select(!starts_with("CELL_PROP") & !starts_with("CELL_COUNT")) %>% 
+#   datasummary_skim()
+
+# nocat = 
+#   cells %>%
+#   filter(!CELL_NO_POTENTIAL_LINK & !CELL_NO_ACTUAL_LINK_DATA & !CELL_2ND_STAGE_ONLY & !CELL_VOLUME_OBSERVED) %>% 
+#   View()
+# cell_ids_check = nocat$CELL_ID
+# links %>% filter(CELL_ID %in% cell_ids_check) %>% 
+#   pull(CELL_ACTUAL_ONLYOTHER_LINK) %>% summary()
+
+# export
+(datasummary(N + Percent()  ~ 
+              (`No buying station within 72 km` = (CELL_NO_POTENTIAL_LINK==T)) + 
+              (`No actual link data` = (CELL_NO_ACTUAL_LINK_DATA==T)) + 
+              (`Actual link data for 2nd stage only` = (CELL_2ND_STAGE_ONLY==T)) + 
+              (`Actual link data for 1st stage` = (CELL_VOLUME_OBSERVED==T)) + 
+              1, 
+              data = cells,
+              fmt = 1,
+              align = "cccccc",
+              output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
+# Cells with actual link data for both stages have JRC or SC data on actual link existence, size and type of buyer (cooperative or other), that is representative for the whole cell. 
+
+# ?tables::Heading
+
+stg1_development %>% nrow()
+
+```
+
+### Map
+```{r}
+
+# tmptoplot = only_potential_propt %>% filter(!duplicated(CELL_ID))
+# tmptoplot_itm = only_potential_itmpt %>% filter(!duplicated(BUYER_LONGITUDE, BUYER_LATITUDE))
+# 
+# ggplot() +
+#   theme_bw() +
+#   geom_sf(data = tmptoplot, , size = 0.05, 
+#              col = "red") +
+#   geom_sf(data = tmptoplot_itm, , size = 1, 
+#           col = "blue") +
+#     # geom_sf(data = departements, fill = "transparent") +
+#     geom_sf(data = civ_boundary, fill = "transparent") 
+
+
+toplot = 
+  cells %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs) %>% 
+    mutate(
+      `Cell information content` = case_when(
+        CELL_NO_POTENTIAL_LINK ~ "No buying station within 72 km", 
+        CELL_NO_ACTUAL_LINK_DATA ~ "No actual link data",
+        CELL_VOLUME_OBSERVED ~ "Actual link data for 1st stage",
+        CELL_2ND_STAGE_ONLY ~ "Actual link data for second stage only",
+      )) 
+toplot$`Cell information content` %>% table()    
+
+map1 = 
+ggplot(toplot) +
+    geom_sf(aes(col = `Cell information content`), size = 1) + #, shape = 15
+    geom_sf(data = departements, fill = "transparent", col = "black") +
+    # scale_colour_brewer(na.value = NULL,
+    #                     type = "qual",
+    #                     direction = -1,
+    #                     palette = "Set3") +
+  scale_colour_manual(
+    values = c("blue" , "#8B0000", "lightgrey", "darkgrey")
+  ) +
+  geom_sf(data = consol_coop_sf, size = 1,
+          col = "darkgreen") +
+  geom_sf(data = unlinked_coopbs_sf, size = 0.1,
+          col = "darkgreen") +
+  # scale_size_binned(
+  #   values = c(1, 0.1),
+  #   labels = c("Coops in observed links data", "Other coops")
+  # ) +
+  # labs(fill = "Extent of the Ivorian cocoa growing region") + 
+    theme_minimal() + 
+  theme(legend.key.size = unit(1, "cm")) +
+    scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+    scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
+  
+map1
+
+ggsave(  
+  plot = map1, 
+  filename = "input_data_map.png",
+  path = here("outputs", "input_data_descriptives"), 
+  width = 25, 
+  height = 20,
+  units = "cm")
+
+```
+
+
+### Features
+In the development set 
+```{r}
+# names(cells)
+
+cells_development_features =
+  stg1_development %>% 
+  select(Sample = SPLIT, 
+         `Cooperative outlet share` = CELL_PROP_VOLUME_COOPS, 
+         `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
+         `# BS within 72km` = CELL_N_BS_WITHIN_DIST, 
+         `Avg. Eucl. distance of the 1 nearest BS (m)` = CELL_MIN_DISTANCE_METERS, 
+         `Avg. road distance of the 1 nearest BS (m)` = CELL_MIN_TRAVEL_METERS, 
+         `Avg. Eucl. distance of the 5 nearest BS (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+         `Avg. road distance of the 5 nearest BS (m)` = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
+         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
+          
+         `Terrain Ruggedness Index (mm)` = CELL_TRI_MM,
+         `Proportion of 5 nearest cooperatives certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
+         `Proportion of 5 nearest cooperatives with SSIs` = CELL_PROP_5_NEAREST_COOP_HAS_SSI,
+         `Proportion of 5 nearest cooperatives with CCP` = CELL_PROP_5_NEAREST_COOP_SSI_CARGILL,
+         `Proportion of 5 nearest cooperatives being COOP-CA` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
+         `Proportion of 5 nearest cooperatives being SCOOPS` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
+         `Total # members of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
+         `Total # BS of 5 nearest cooperatives` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
+         `Avg. # buying companies in 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_N_KNOWN_BUYERS,
+         `Avg. TRI around 5 nearest cooperatives (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
+         `Avg. cocoa extent around 5 nearest cooperatives (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_COCOA_HA,
+         `Avg. settlements extent around 5 nearest cooperatives` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
+         ) 
+
+
+datasummary_skim(data = cells_development_features,
+
+                output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_train_features.html")))
+
+```
+
+Cell data balance tests
+```{r}
+# (datasummary_balance(~SPLIT, 
+#                       data = cells_features_tobalance, 
+#                       stars = TRUE,
+#                       # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet", 
+#                       notes = "'BS' stands for cooperative buying stations.", 
+#                      output = here("outputs", "input_data_descriptives", "cells_balance.png")))        
+```
+
+### LU 
+```{r}
+(cells_stg2_development$CELL_COCOA_HA/cell_area_ha) %>% summary()
+  
+stg1_development %>% 
+  select(Sample = SPLIT, 
+          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
+          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
+          `Cocoa extent (ha)` = CELL_COCOA_HA,
+          `Coffee extent (ha)` = CELL_COFFEE_HA,
+          `Rubber extent (ha)` = CELL_RUBBER_HA,
+          `Palm extent (ha)` = CELL_PALM_HA,
+          `Coconut extent (ha)` = CELL_COCONUT_HA,
+          `Cashew extent (ha)` = CELL_CASHEW_HA,
+          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
+          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA
+  ) %>% 
+  datasummary_skim(output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
+
+```
+
+
+## Links data
+
+### Observed links 
+This starts from links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there). 
+```{r}
+obs_links_des = 
+  links %>% 
+  filter(LINK_IS_ACTUAL) %>% 
+  mutate(LINK_SOURCE = case_when(
+    grepl("CARGILL", PRO_ID) ~ "Cargill data",
+    grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
+    grepl("JRC", PRO_ID) ~ "JRC data",
+  ))
+
+length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
+
+totbl = 
+  obs_links_des %>% 
+  summarise(.by = LINK_SOURCE,  
+    # Number of 
+    # Links
+    `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
+    `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
+    # Farms
+    `Farms` = length(unique(na.omit(PRO_ID))), 
+    `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
+    # Buyers
+    Buyers = length(unique(na.omit(BUYER_ID))),
+    `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
+    `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
+    `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
+    
+    )
+
+totbl
+
+```
+
+
+### Balance tests in Links features
+With differences between actual and/virtual in development. 
+Alternatively, we could look at: 
+- Only in actual 
+- Only in all (potential)
+
+```{r}
+names(stg2_development)
+stg2_features_tobalance_1 =
+  stg2_development %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class, 
+         LINK_DISTANCE_METERS,
+         LINK_IS_WITH_1_NEAREST_COOPS,
+         LINK_IS_WITH_5_NEAREST_COOPS,
+         CELL_N_BS_WITHIN_DIST,
+         CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
+         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_IMPOSSIBLE_HA, CELL_TRI_MM)
+
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_1, 
+                    output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
+
+stg2_features_tobalance_2 =
+  stg2_development %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class,
+         COOP_FARMERS, 
+         COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
+         starts_with("COOP_STATUS_"), 
+         COOP_CERTIFIED, COOP_RFA, COOP_UTZ, COOP_FT, 
+         COOP_HAS_SSI, starts_with("COOP_SSI_"), 
+         starts_with("COOP_BS_10KM_"))
+
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_2)
+
+```
+
+
+# MODEL DEVELOPMENT
+
+## 1st stage
+### Design & Formula
+```{r}
+# Experimental design 
+exp_design = "bt(fs+mb,40)"
+
+# Repository for familiar 1st stage 
+# summon_familiar writes all it does in a repo. It returns nothing here.  
+stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
+dir.create(stage1_expdes_repo)
+
+
 anyNA(stg1_development)
 # names(cells)
 # anyNA(cells)
@@ -332,7 +768,7 @@ stg1_mformula_exofeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste
 
 The first stage has `r length(stg1_allfeatures)` potential features, `r length(stg1_exofeatures)` of which are exogenous to further applications. 
 
-## Simple fit 
+### Simple fit 
 This is simple because it does not do feature selection nor optimize hyper-parameters.
 ```{r}
 stg1_mfit = ranger(data = stg1_development, 
@@ -353,7 +789,6 @@ print(stg1_mfit)
 
 ```
 
-## Model development
 
 ### caret
 ```{r}
@@ -385,6 +820,38 @@ saveRDS(model1_caret_xgb,
         file = here("temp_data", "model", "caret", "stage_1", "allfeatures_xgbtree_4boot632_5tuneL"))
 ```
 
+Performance
+```{r}
+# That's the average across all the 500 trees
+model1_caret$finalModel$mse %>% mean()
+# But the ensemble's mse is averaged with weights equal to each tree's performance (or something)
+model1_caret$finalModel
+
+# And this is for all the 400 repetitions of the ensemble 
+# It is quite worse and I am not sure why.
+resamples <- model1_caret$resample
+mean(resamples$RMSE^2)
+
+sd(resamples$RMSE)
+
+mean(resamples$Rsquared)
+sd(resamples$Rsquared)
+
+# For XGB
+resample1_xgb = model1_caret_xgb$resample 
+
+mean(resample1_xgb$RMSE^2)
+sd(resample1_xgb$RMSE^2)
+mean(resample1_xgb$Rsquared)
+sd(resample1_xgb$Rsquared)
+
+
+
+# This is to access performance metrics aggregated over resamples for different models 
+resamps <- resamples(list(first_caret = model1_caret_xgb, first_caret2 = model1_caret))
+summary(resamps)
+
+```
 
 ### familiar
 Doing feature ranking and hyper-parameter optimization
@@ -408,13 +875,6 @@ predict function like anywhere else.
 
 anyNA(stg1_development)
 
-# Experimental design 
-exp_design = "bt(fs+mb,40)"
-
-# Repository for familiar 1st stage 
-# summon_familiar writes all it does in a repo. It returns nothing here.  
-stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
-dir.create(stage1_expdes_repo)
 
 # let's go
 summon_familiar(
@@ -475,106 +935,6 @@ summon_familiar(
 The results folder outputed by summon_familiar is saved manually to different place, to protect it from being overwritten in a subsequent run of the above block. 
 
 
-#### Finders
-This block produces convenient finder objects to access familiar outputs. 
-```{r}
-## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
-# ---------------------------------------------
-model_date = "20241204190335"
-# ---------------------------------------------
-
-# Finders of familiar outputs
-
-# Feature info - this gives generic info about the features in the model 
-# feature_info = readRDS(here(stage1_expdes_repo, "20241127134237_feature_info.RDS"))
-
-# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
-# iterations = readRDS(here(stage1_expdes_repo, "20241125194101_iterations.RDS"))
-
-# familiar_data - a maxi list containing all info of a run. 
-# famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
-
-# Model development results - to report model performance
-stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
-
-# Models - to run predictions
-stage1_model_path = here(stage1_expdes_repo, 
-                         "trained_models", 
-                         "random_forest_ranger", 
-                         "random_forest_ranger_permutation")
-
-# Select the model/ensemble we want to work with 
-
-stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
-model1_name = 
-  stage1_ensemble_names %>% 
-  grep(~.,  
-       pattern = model_date, 
-       value = TRUE) # take the first one in case there are several
-                                          
-model1 = readRDS(here(stage1_model_path, model1_name))
-model1
-
-```
-
-## Performance
-### caret
-```{r}
-# That's the average across all the 500 trees
-model1_caret$finalModel$mse %>% mean()
-# But the ensemble's mse is averaged with weights equal to each tree's performance (or something)
-model1_caret$finalModel
-
-# And this is for all the 400 repetitions of the ensemble 
-# It is quite worse and I am not sure why.
-resamples <- model1_caret$resample
-mean(resamples$RMSE^2)
-
-sd(resamples$RMSE)
-
-mean(resamples$Rsquared)
-sd(resamples$Rsquared)
-
-# For XGB
-resample1_xgb = model1_caret_xgb$resample 
-
-mean(resample1_xgb$RMSE^2)
-sd(resample1_xgb$RMSE^2)
-mean(resample1_xgb$Rsquared)
-sd(resample1_xgb$Rsquared)
-
-
-
-# This is to access performance metrics aggregated over resamples for different models 
-resamps <- resamples(list(first_caret = model1_caret_xgb, first_caret2 = model1_caret))
-summary(resamps)
-
-```
-
-```{r}
-# Performance metrics are stored here
-perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
-
-perf_metrics
-
-# Normalement ces plots sont déjà exportés automatiquement par summon_familiar, mais apparemment pas pour toutes les métriques. 
-# This takes ~10min with a 200-models ensemble
-plot_perf_model1 = 
-  familiar::plot_model_performance(
-  object = model1,
-  draw = TRUE,
-  facet_by = "metric",
-  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
-  estimation_type = "bci",
-  metric = c("mse", "rse", "r2_score")) #"rmse",  "explained_variance", 
-
-# Save plot
-plot_perf_model1
-ggsave(
-  filename = paste0("performance_metrics.png"),
-  path = here("outputs", "familiar", "stage_1", model_date))
-
-```
 
 Several things to say: 
 
@@ -584,42 +944,7 @@ The relative squared error being lower than 1, the model still performs better t
 
 
 
-## Feature importance & explanation
-Importance ranks features wrt. each other but cannot tell direction or magnitude. 
-Explanation is produced by feature, and can be interpreted in target scale. 
 
-### Feature importance
-#### caret
-```{r}
-varImp(model1_caret)
-
-model1_caret$finalModel$importance %>% as.data.frame() %>% arrange(desc(`%IncMSE`))
-
-
-```
-
-#### familiar
-```{r}
-importance_repo = here(stage1_results, "variable_importance")
-
-permut_vimp = read.csv2(here(importance_repo, "variable_importance_permutation.csv"))
-
-vimp_top10 = 
-  permut_vimp %>% 
-  filter(similarity_threshold == 1 & data_set == "development" & value !=0) %>% 
-  arrange(desc(value)) %>% 
-  pull(feature) %>% 
-  head(10)
-
-# The plot_model_signature_occurrence method plots the occurrence of features among the first 5 ranks across an ensemble of models (if available). The rank threshold can be specified using the rank_threshold argument or the eval_aggregation_rank_threshold parameter (summon_familiar).
-
-
-#Note: -------
-# The summon_familiar outputs below are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
-# stage1_vimp = here(stage1_expdes_repo, "variable_importance")
-# vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
-# vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
-```
 The most important variables, across the ensemble of models, are: 
 1/ the number of (CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS); 
 2/ the road distance to the closest buying station (CELL_MIN_DISTANCE_METERS);
@@ -631,46 +956,14 @@ The most important variables, across the ensemble of models, are:
 
 Now, let's see whether these features contribute to increase or decrease the cell's share of cooperative outlet.  
 
-### Explanation
-Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots.
-All this is sketchy, and interpretations are challenging !!! 
 
-```{r}
-# These plots are readily available in the repository below. 
-explanation_repo = here(stage1_results, "explanation")
-
-# To have a global picture, look at the correlation tests (I am not sure about this!)
-
-pd_corr_table = data.frame()
-for(impvar in vimp_top10){
-  pdvar = 
-    read.csv2(here(explanation_repo, paste0("explanation_pd_", impvar, ".csv"))) %>% 
-    filter(data_set == "development") 
-  
-  cortest_pd = 
-    stats::cor.test(x = as.numeric(pdvar$feature_x_value),
-                    y = as.numeric(pdvar$predicted_outcome))
-
-  cortest_actual = 
-    stats::cor.test(x = stg1_development %>% pull(impvar),
-                    y = stg1_development$CELL_PROP_VOLUME_COOPS)
-
-  pd_corr_table[1:2,impvar] = c(cortest_pd$estimate, cortest_pd$p.value)
-  
-  pd_corr_table[3:4,impvar] = c(cortest_actual$estimate, cortest_actual$p.value)
-  row.names(pd_corr_table) = c("Correlation coefficient PD", "p value PD",
-                               "Correlation coefficient", "p value")
-}
-
-pd_corr_table
-```
 All important features positively explain the share of coop outlet, except the distance of the closest coop (which is expected), and the number of RFA farmers (which is surprising). 
 
 
 
-# SECOND STAGE 
+## 2nd stage
 
-## Formula
+### Formula
 ```{r}
 stg2_development %>% names() %>% grep(~., pattern = "CELL_PROP_", value = T)
 stg2_development %>% select(
@@ -731,7 +1024,7 @@ stg2_mformula_exofeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", pa
 
 ```
 
-## Simple fit
+### Simple fit
 ```{r}
 set.seed(8888)
 
@@ -749,9 +1042,6 @@ stg2_simple
 
 ```
 
-
-
-## Model development
 
 ### caret
 ```{r}
@@ -800,9 +1090,6 @@ model2_caret_xgb
 
 saveRDS(model2_caret_xgb, 
         here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
-
-model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
-
 ```
 
 
@@ -906,7 +1193,7 @@ summon_familiar(
 
 ```
 
-#### Finders
+### Finders
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 ## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
@@ -948,8 +1235,89 @@ model2
 
 ```
 
+# READ MODELS
+## 1st stage
+This block produces convenient finder objects to access familiar outputs. 
+```{r}
+# All 1st stage models have been written by familiar in 
+stage1_expdes_repo
 
-## Performance 
+# We use one specifically, identified by: 
+# ---------------------------------------------
+model_date = "20241204190335"
+# ---------------------------------------------
+
+# Finders of familiar outputs
+
+# Feature info - this gives generic info about the features in the model 
+# feature_info = readRDS(here(stage1_expdes_repo, "20241127134237_feature_info.RDS"))
+
+# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
+# iterations = readRDS(here(stage1_expdes_repo, "20241125194101_iterations.RDS"))
+
+# familiar_data - a maxi list containing all info of a run. 
+# famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
+
+# Model development results - to report model performance
+stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
+
+# Models - to run predictions
+stage1_model_path = here(stage1_expdes_repo, 
+                         "trained_models", 
+                         "random_forest_ranger", 
+                         "random_forest_ranger_permutation")
+
+# Select the model/ensemble we want to work with 
+
+stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
+model1_name = 
+  stage1_ensemble_names %>% 
+  grep(~.,  
+       pattern = model_date, 
+       value = TRUE) # take the first one in case there are several
+                                          
+model1 = readRDS(here(stage1_model_path, model1_name))
+model1
+
+```
+
+## 2nd stage 
+```{r}
+model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
+
+```
+
+
+# PERFORMANCE
+
+## 1st stage 
+
+```{r}
+# Performance metrics are stored here
+perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
+
+perf_metrics
+
+# Normalement ces plots sont déjà exportés automatiquement par summon_familiar, mais apparemment pas pour toutes les métriques. 
+# This takes ~10min with a 200-models ensemble
+plot_perf_model1 = 
+  familiar::plot_model_performance(
+  object = model1,
+  draw = TRUE,
+  facet_by = "metric",
+  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
+  estimation_type = "bci",
+  metric = c("mse", "rse", "r2_score")) #"rmse",  "explained_variance", 
+
+# Save plot
+plot_perf_model1
+ggsave(
+  filename = paste0("performance_metrics.png"),
+  path = here("outputs", "familiar", "stage_1", model1_date))
+
+```
+
+## 2nd stage
 ```{r}
 # Access resampling results
 resamples <- model2_caret_xgb$resample
@@ -972,24 +1340,92 @@ summary(resamps)
 
 ```
 
-## Feature importance & explanation
+# EXPLANATION
+
 Importance ranks features wrt. each other but cannot tell direction or magnitude. 
 Explanation is produced by feature, and can be interpreted in target scale. 
 
-### Feature importance
+### 1st stage 
+Importance ranks features wrt. each other but cannot tell direction or magnitude. 
+Explanation is produced by feature, and can be interpreted in target scale. 
+
+Feature importance
+```{r}
+importance_repo = here(stage1_results, "variable_importance")
+
+permut_vimp = read.csv2(here(importance_repo, "variable_importance_permutation.csv"))
+
+vimp_top10 = 
+  permut_vimp %>% 
+  filter(similarity_threshold == 1 & data_set == "development" & value !=0) %>% 
+  arrange(desc(value)) %>% 
+  pull(feature) %>% 
+  head(10)
+
+# The plot_model_signature_occurrence method plots the occurrence of features among the first 5 ranks across an ensemble of models (if available). The rank threshold can be specified using the rank_threshold argument or the eval_aggregation_rank_threshold parameter (summon_familiar).
+
+
+#Note: -------
+# The summon_familiar outputs below are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
+# stage1_vimp = here(stage1_expdes_repo, "variable_importance")
+# vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
+# vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
+```
+
+Explanation
+Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots.
+All this is sketchy, and interpretations are challenging !!! 
+
+```{r}
+# These plots are readily available in the repository below. 
+explanation_repo = here(stage1_results, "explanation")
+
+# To have a global picture, look at the correlation tests (I am not sure about this!)
+
+pd_corr_table = data.frame()
+for(impvar in vimp_top10){
+  pdvar = 
+    read.csv2(here(explanation_repo, paste0("explanation_pd_", impvar, ".csv"))) %>% 
+    filter(data_set == "development") 
+  
+  cortest_pd = 
+    stats::cor.test(x = as.numeric(pdvar$feature_x_value),
+                    y = as.numeric(pdvar$predicted_outcome))
+
+  cortest_actual = 
+    stats::cor.test(x = stg1_development %>% pull(impvar),
+                    y = stg1_development$CELL_PROP_VOLUME_COOPS)
+
+  pd_corr_table[1:2,impvar] = c(cortest_pd$estimate, cortest_pd$p.value)
+  
+  pd_corr_table[3:4,impvar] = c(cortest_actual$estimate, cortest_actual$p.value)
+  row.names(pd_corr_table) = c("Correlation coefficient PD", "p value PD",
+                               "Correlation coefficient", "p value")
+}
+
+pd_corr_table
+```
+
+
+
+### 2nd stage 
+Feature importance
 ```{r}
 varImp(model2_caret_xgb)
 
 model2_caret_xgb$finalModel$importance
 
+
+model2_caret_xgb$finalModel$importance %>% as.data.frame() %>% arrange(desc(`%IncMSE`))
+
+
+
 ```
 
-### Explanation
+Explanation
 ```{r}
 
 ```
-
-
 
 
 # PREDICTION
@@ -999,6 +1435,7 @@ Moreover, we report here on the Novelty of cells and links in (and out of) the p
 
 ## Read developed models
 ```{r}
+model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
 
 ```
 
