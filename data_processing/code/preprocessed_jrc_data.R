@@ -51,6 +51,15 @@ jrc = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "cocoa_UCL
                  generate.factors=TRUE,
                  nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
 
+cocoa_area = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "cocoaland_ha.dta"),
+                        convert.factors = TRUE, # we want those labels. this is the default. 
+                        generate.factors=TRUE,
+                        nonint.factors = TRUE)
+jrc = 
+  jrc %>% 
+  left_join(cocoa_area, 
+            by = "interview__key") %>% 
+  rename(s02cq3__cocoaland_ha = cocoaland_ha)
 
 # 'refer to the buyers that the pisteurs/ coops then sell the cocoa to. Sometimes more than 
 # one is mentioned, therefore there are 221 observations in the data set'
@@ -63,15 +72,15 @@ section3a <- read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "se
                       convert.factors = TRUE, # we want those labels. this is the default. 
                       generate.factors=TRUE,
                       nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
+# it's only different variables in there.
+intersect(names(jrc), names(section3a))
 
 # Economic activity of the household
 econact = read.dta13(here("input_data", "JRC", "Data sharing UC Louvain", "econ_act_UCLouvain.dta"),
                  convert.factors = TRUE, # we want those labels. this is the default. 
                  generate.factors=TRUE,
                  nonint.factors = TRUE) # this is not the default. Necessary to get labels (and thus values of interest) for company (among other vars)
-
-# it's only different variables in there.
-intersect(names(jrc), names(section3a))
+  
 
 
 # IC2B (private) 
@@ -1204,6 +1213,7 @@ toexport =
          PRO_ID = paste0("JRC_FARMER_",PRODUCER_ID),
          LINK_ID_ONLYACTUAL = paste0("JRC_FARMER_",LINK_ID)) %>% # jrc$i00q21__itw_date %>% unique()
   # keep only the variables that we can also compute in other data sources than JRC. 
+  # + the cocoa farm area to use to weight cells by representativeness
   # and apply some naming conventions (order does not matter)
   select(LINK_YEAR, PRO_ID, COOP_BS_ID, 
          LINK_ID_ONLYACTUAL,
@@ -1217,7 +1227,9 @@ toexport =
          # VILLAGE_LONGITUDE,
          # VILLAGE_LATITUDE,
          PRO_LONGITUDE = s00q12__itw_longitude, 
-         PRO_LATITUDE  = s00q12__itw_latitude)  # order does not matter
+         PRO_LATITUDE  = s00q12__itw_latitude, 
+         PRO_COCOA_FARMLAND_HA = s02cq3__cocoaland_ha
+         )  # order does not matter
 
 # remove any duplicate in these attributes we are interested in (but now they are already removed earlier)
 toexport = 
