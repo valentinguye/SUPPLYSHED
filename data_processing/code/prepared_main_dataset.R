@@ -22,7 +22,6 @@ library(terra) # put it after {raster} such that it superceeds homonym functions
 library(exactextractr)
 library(stars)
 
-dir.create("temp_data", "coopbs_10km_buffer") # not use currently
 dir.create(here("temp_data", "terrain"))
 dir.create(here("temp_data", "BNETD"))
 dir.create(here("temp_data", "prepared_main_dataset"))
@@ -317,7 +316,10 @@ coopbs_10km_buffer =
   st_transform(crs = crs(tri))
 
 # export to GEE and re-import here - not anymore, we do it in R only now.   
-# write_sf(coopbs_10km_buffer, "temp_data/coopbs_10km_buffer/coopbs_10km_buffer.shp")
+dir.create(here("temp_data", paste0("coopbs",latest_survey_year,"_10km_buffer"))) 
+write_sf(coopbs_10km_buffer, here("temp_data", 
+                                  paste0("coopbs",latest_survey_year,"_10km_buffer"), 
+                                  paste0("coopbs",latest_survey_year,"_10km_buffer.shp")))
 
 
 # MAKE DATA STRUCTURE -----------------
@@ -336,7 +338,7 @@ cocoa_departements =
             by = "LVL_4_CODE") %>% 
   filter(AVG_COCOA_PRODUCTION_TONNES > 500)
 
-plot(cocoa_departements[,"AVG_COCOA_PRODUCTION_TONNES"])
+# plot(cocoa_departements[,"AVG_COCOA_PRODUCTION_TONNES"])
 
 grid_extent = ext(cocoa_departements)
 grid_extent_geod = project(grid_extent, from = paste0("epsg:",civ_crs), to = "epsg:4326")
@@ -1155,6 +1157,24 @@ stopifnot(
 )
 
 
+# Many links with the same coops can be TRUE on LINK_IS_WITH_1_NEAREST_COOPS (and even more on 5 nearest). 
+# Thus, cells with many actual links (cargill farms typically) will average, and, 
+# more problematically, sum, not across 1 or 5 coops, but across many repeats of these coops. 
+# LINK_IS_WITH_X_NEAREST_COOPS variables are correct, they do reflect what they mean to, 
+# it is how we use them here that needs to be corrected. 
+# Thus, we make a coop selector variable to average/sum over 1 or 5 values corresponding 
+# to the 1 or 5 nearest coops, not many values of the 1 or 5 nearest coops.  
+potential_all = 
+  potential_all %>% 
+  arrange(LINK_TRAVEL_METERS) %>%
+  group_by(CELL_ID) %>% 
+  mutate(
+    COOP_SELECTOR = !duplicated(LINK_POTENTIAL_COOP_BS_ID) 
+  ) %>% 
+  ungroup() 
+# Do this here, because needed to constrain sub-sampling. 
+
+
 ## Coop/BS-level variables ---------------------------
 # CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_ACTUAL_COOP_BS_ID, 
 
@@ -1310,9 +1330,16 @@ names(potential_all)
 
 if(init_nrow_pa != nrow(potential_all)){stop("adding variables also added rows")}
 
+coopbs_10km_buffer_lu %>% anyNA()
+# There should not be any NA where there is a LINK_POTENTIAL_COOP_BS_ID. 
+# Otherwise, it is probably because the input to produce coopbs_10km_buffer_lu in 
+# GEE is not the same set of coops as the one on which the current script is running.
+stopifnot(
+  potential_all %>% 
+    filter(!is.na(LINK_POTENTIAL_COOP_BS_ID) & is.na(COOP_BS_10KM_SETTLEMENT_HA)) %>% nrow() == 0 
+)
 
-
-
+# setdiff(potential_all$LINK_POTENTIAL_COOP_BS_ID, coopb$COOP_BS_ID)
 
 # SUB-SAMPLING ----------
 set.seed(8888)
@@ -1326,10 +1353,12 @@ set.seed(8888)
 # We correct by sub-sampling at household link level. 
 
 # So concretely, we want to remove some actual links between SC farmers and coops. 
-
+# but impose that one actual link remains with every coop (with !COOP_SELECTOR), for convenience in the 
+# 1st stage data making section (otherwise it can happen that all links with the nearest coop are removed by sub-sampling which creates NAs).
+# (that's not for 2nd stage, because sub-sampling is not even applied to data for 2nd stage).     
 sc_coop_links = 
   potential_all %>% 
-  filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP) %>% 
+  filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP & !COOP_SELECTOR) %>% 
   pull(LINK_ID) 
 
 sc_coop_share = 
@@ -1588,6 +1617,7 @@ rm(potential_all_save, potential)
 # 1ST STAGE DATA --------------
 potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
 
+
 ## Apply sub-sampling -------------
 # We apply only 1st stage sub-sampling. 
 potential_1st = 
@@ -1679,24 +1709,6 @@ potential_1st %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>%
 
 
 ## Cell level Xs -----------
-
-# We need to do differently, because many links with the same coops can be TRUE on LINK_IS_WITH_1_NEAREST_COOPS 
-# (and even more on 5 nearest). Thus, cells with many actual links (cargill farms typically) will average, and, 
-# more problematically, sum, not across 1 or 5 coops, but across many repeats of these coops. 
-# LINK_IS_WITH_X_NEAREST_COOPS variables are correct, they do reflect what they mean to, 
-# it is how we use them here that needs to be corrected. 
-
-# Thus, we make a coop selector variable to average/sum over 1 or 5 values corresponding 
-# to the 1 or 5 nearest coops, not many values of the 1 or 5 nearest coops.  
-potential_1st = 
-  potential_1st %>% 
-  arrange(LINK_TRAVEL_METERS) %>% 
-  group_by(CELL_ID) %>% 
-  mutate(
-    COOP_SELECTOR = !duplicated(COOP_ID) 
-  ) %>% 
-  ungroup() 
-
 
 # there are cells where there are potential links, but they are with buyers that are not spatially explicit and thus distance is NA.
 # it is important to remove these NAs so they don't make cell distance summaries NAs. 
@@ -1820,20 +1832,38 @@ cell_binaryvars =
   select(!starts_with("CELL_ID..."))
   
 # Checks- 
-potential_1st %>% 
-  arrange(!CELL_ANY_ACTUAL_COOP_LINK, CELL_ID, PRO_ID) %>% 
-  select(CELL_ID, PRO_ID, COOP_ID, COOP_SELECTOR, contains("NEAREST"), contains("METERS"), contains("CERTIF"), contains("STATUS")) %>% 
-  filter(CELL_ID == 6545) %>% 
-  View("links")
-
-cell_cellvars %>% 
-  filter(CELL_ID == 6545) %>% 
-  View("cell")
- 
-cell_binaryvars %>% 
-  filter(CELL_ID == 6545) %>% 
-  select(contains("1_NEAREST")) %>% 
-  View("prop_cells")
+stopifnot(
+  cell_cellvars %>% filter(is.na(CELL_MIN_DISTANCE_METERS) & !CELL_NO_POTENTIAL_LINK) %>% nrow() == 0
+)
+# potential_1st %>% 
+#   arrange(!CELL_ANY_ACTUAL_COOP_LINK, CELL_ID, PRO_ID) %>% 
+#   select(CELL_ID, PRO_ID, COOP_ID, COOP_SELECTOR, contains("NEAREST"), contains("METERS"), contains("10KM"), contains("COOP")) %>% 
+#   filter(CELL_ID == 13818) %>% 
+#   View("links")
+# potential_1st %>% 
+#   arrange(!CELL_ANY_ACTUAL_COOP_LINK, CELL_ID, PRO_ID) %>% 
+#   select(CELL_ID, PRO_ID, COOP_ID, COOP_SELECTOR, contains("NEAREST"), contains("METERS"), contains("CERTIF"), contains("STATUS")) %>% 
+#   filter(CELL_ID == 14438) %>% 
+#   View("links_na")
+# 
+# cell_cellvars %>% 
+#   filter(CELL_ID == 14438) %>% 
+#   View("cell")
+# 
+# potential_1st %>% 
+#   arrange(!CELL_ANY_ACTUAL_COOP_LINK, CELL_ID, PRO_ID) %>% 
+#   select(CELL_ID, PRO_ID, COOP_ID, COOP_SELECTOR, contains("NEAREST"), contains("METERS"), contains("CERTIF"), contains("STATUS")) %>% 
+#   filter(CELL_ID == 6545) %>% 
+#   View("links")
+# 
+# cell_cellvars %>% 
+#   filter(CELL_ID == 6545) %>% 
+#   View("cell")
+#  
+# cell_binaryvars %>% 
+#   filter(CELL_ID == 6545) %>% 
+#   select(contains("1_NEAREST")) %>% 
+#   View("prop_cells")
 
 ### Mean others ------------
 fn_coop_mean_summary = function(COOP_VAR){

@@ -346,9 +346,9 @@ Metric = c("Source",
           nrow(jrcdata), 
           nrow(filter(jrcdata, !is.na(COOP_BS_ID))), 
           nrow(filter(jrcdata, !BUYER_IS_COOP)), 
-          length(unique(jrcdata$BUYER_GENERAL_ID)),
-          length(unique(pull(filter(jrcdata, !is.na(COOP_BS_ID)), BUYER_GENERAL_ID))),
-          length(unique(pull(filter(jrcdata, !BUYER_IS_COOP), BUYER_GENERAL_ID)))
+          length(unique(jrcdata$BUYER_ACTUAL_LINK_ID)),
+          length(unique(pull(filter(jrcdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
+          length(unique(pull(filter(jrcdata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           ),
   SC = c(
           "Sustain-Cocoa project", "2022", "Village point", "Yes",
@@ -357,8 +357,8 @@ Metric = c("Source",
           nrow(scdata), 
           nrow(filter(scdata, !is.na(COOP_BS_ID))), 
           nrow(filter(scdata, !BUYER_IS_COOP)), 
-          length(unique(scdata$BUYER_GENERAL_ID)), 
-          length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_GENERAL_ID))),
+          length(unique(scdata$BUYER_ACTUAL_LINK_ID)), 
+          length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           "Unknown"
           ),
   CARGILL = c(
@@ -368,9 +368,9 @@ Metric = c("Source",
           nrow(cargilldata), 
           nrow(filter(cargilldata, !is.na(COOP_BS_ID))), 
           nrow(filter(cargilldata, !BUYER_IS_COOP)), 
-          length(unique(cargilldata$BUYER_GENERAL_ID)), 
-          length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_GENERAL_ID))),
-          length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_GENERAL_ID)))
+          length(unique(cargilldata$BUYER_ACTUAL_LINK_ID)), 
+          length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
+          length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           )
 ) 
 colnames(summary_data) = c(" ", "JRC Data", "SC Data", "Cargill Data")
@@ -384,6 +384,8 @@ table <- summary_data %>%
   row_spec(9, extra_css = "padding-left: 20px;") %>%
   row_spec(11, extra_css = "padding-left: 20px;") %>%
   row_spec(12, extra_css = "padding-left: 20px;")
+
+table
 
 save_kable(table, here("outputs", "input_data_descriptives", "Observed_links_table.png"))
 
@@ -484,6 +486,15 @@ ggsave(
   width = 25, 
   height = 20,
   units = "cm")
+
+# ggplot() +
+#     geom_sf(data = coopbs_omit_sf, col = "red", size = 2) +
+#   geom_sf(data = departements, fill = "transparent", col = "black") +
+# 
+#   theme_bw() +
+#   theme(legend.key.size = unit(1, "cm")) +
+#     scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+#     scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N'))
 
 ```
 
