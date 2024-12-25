@@ -1484,7 +1484,8 @@ toplot$`Cell information content` %>% table()
 
 cell_info_map = 
   ggplot(toplot) +
-    geom_sf(aes(col = `Cell information content`, fill = `Cell information content`), size = 0.3, shape = 22) + #, shape = 15
+    geom_sf(aes(col = `Cell information content`, fill = `Cell information content`), 
+            size = 0.3, shape = 22) + #, shape = 15
     scale_colour_manual(
       values = c("Data for both stages" = "purple",
                  "Data for 2nd stage only" = "blue", 
@@ -1847,6 +1848,23 @@ either conditional or unconditional probabilities to be linked with the coop, fo
 ```{r}
 # The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted cocoa area in all sourcing sheds
 
+
+```
+
+
+## Number of linked coops 
+```{r}
+cell_nlinks = 
+  links %>% 
+  summarise(.by = "CELL_ID",
+            CELL_N_LINKED_COOPS = sum(LINK_PROBA_THRESH_NORMED_CELLMAX > 0))
+
+cells = 
+  cells %>% 
+  inner_join(cell_nlinks, 
+             by = "CELL_ID")
+
+rm(cell_nlinks)
 
 ```
 
