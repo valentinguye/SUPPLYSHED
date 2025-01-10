@@ -47,6 +47,10 @@ set.seed(8888)
 #                  repos = NULL, 
 #                  type = "source")
 
+# Storage directories
+dir.create(here("outputs", "aggregate_sheds"), recursive = TRUE)
+
+
 ## Functions
 # Trase palettes etc. for plots
 source(here("code", "theme_trase.R"))
@@ -65,16 +69,28 @@ ylabs = c(5, 7, 9)
 
 ## Assets
 
-coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
-coopbs22 = coopbsy %>% filter(YEAR == 2022)
-
-cells = readRDS(here("temp_data", "model", paste0("cells.Rdata"))) 
-
-links = readRDS(here("temp_data", "model", paste0("links.Rdata")))
-
 departements <- read_sf(here("input_data/s3/CIV_DEPARTEMENTS.geojson"))
 departements = 
   st_transform(departements, crs = civ_crs)
+
+coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
+coopbs22 = coopbsy %>% filter(YEAR == 2022)
+
+links = readRDS(here("temp_data", "model", paste0("links.Rdata")))
+
+cells = readRDS(here("temp_data", "model", paste0("cells.Rdata"))) 
+
+# Useful variables 
+cells = 
+  cells %>% 
+  mutate(
+    CELL_NODEF_EXPANSION_HA = 
+           1600
+         - CELL_COCOA_HA
+         - CELL_DENSEFOREST_HA
+         - CELL_OTHERFORESTS_HA
+         - CELL_IMPOSSIBLE_HA, 
+    CELL_1minusSHARE_COOP_SIGNI = 1 - CELL_SHARE_COOP_SIGNI) 
 
 ```
 
@@ -98,7 +114,49 @@ This uses mostly first stage results.
 
 ## Outside vs. Within
 
-### Univariate 
+### Aggregate numbers
+
+```{r}
+# The area of each LU category WITHIN the aggregate sourcing shed: 
+fn_aggregate_lu = function(out_or_in_share){
+  cells %>%
+  summarise(.by = CELL_IS_IN_AOA, 
+            `N CELLS` = sum({{out_or_in_share}}>0), # this will probably be removed eventually
+            TOTAL          = round(sum({{out_or_in_share}}*1600) / 1000, 1),
+            COCOA          = round(sum({{out_or_in_share}}*CELL_COCOA_HA) / 1000, 1),
+            FOREST         = round(sum({{out_or_in_share}}*(CELL_DENSEFOREST_HA+CELL_OTHERFORESTS_HA)) / 1000, 1),
+            `DENSE FOREST` = round(sum({{out_or_in_share}}*CELL_DENSEFOREST_HA) / 1000, 1),
+            `OTHER FOREST` = round(sum({{out_or_in_share}}*CELL_OTHERFORESTS_HA) / 1000, 1),
+            `AVAILABLE, NOT FORESTED LAND` = round(sum({{out_or_in_share}}*CELL_NODEF_EXPANSION_HA) / 1000, 1)
+            ) %>% 
+  filter(CELL_IS_IN_AOA) %>% 
+  select(-CELL_IS_IN_AOA)
+}
+aggr_tbl = 
+  rbind(
+    fn_aggregate_lu(CELL_SHARE_COOP_SIGNI) %>% 
+      mutate(` ` = "Within", .before = everything()),
+    fn_aggregate_lu(CELL_1minusSHARE_COOP_SIGNI) %>% 
+      mutate(` ` = "Outside", .before = everything())
+  )
+  
+aggr_tbl
+
+out_tbl = 
+  aggr_tbl %>% 
+  kbl() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"))
+  # row_spec(12, extra_css = "padding-left: 20px;")
+
+out_tbl
+
+save_kable(out_tbl, here("outputs", "aggregate_sheds", "LU_in_out.png"))
+
+```
+
+
+### Univariate map 
+Decide to have 3 or 4 bins in the end, based on final data. 
 ```{r}
 cells_toplot$CELL_COCOA_SHARE %>% summary()
 cells_toplot$CELL_COCOA_HA %>% summary()
@@ -163,12 +221,18 @@ map =
   ) 
 
 map
-
+ggsave(
+  plot = map,
+  filename = paste0("cooperative_outlet.png"),
+  path = here("outputs", "aggregate_sheds"), 
+  width = 25, 
+  height = 20,
+  units = "cm")
 ```
 
 
 
-### Bivariate 
+### Bivariate maps
 Use biscale package. Different vignettes, including on available bivariate palettes here: 
 https://cran.r-project.org/web/packages/biscale/index.html
 
