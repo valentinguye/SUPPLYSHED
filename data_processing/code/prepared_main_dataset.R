@@ -51,7 +51,6 @@ licens21 = read.csv2(here("input_data", "CCC", "ACHATEURS_AGREES_2021_GEOCODED.c
 # Cargill link data
 carg_links = read.csv(here("temp_data", "preprocessed_cargill", "cargill_links_standardized.csv")) %>% 
   mutate(PRO_VILLAGE_NAME = NA)
-  
 
 # JRC link data
 jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_standardized.csv")) %>% 
@@ -67,6 +66,8 @@ jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_stand
 #   filter(!BUYER_IS_COOP) %>% 
 #   select(-BUYER_IS_COOP) 
 
+# KIT link data
+kit_links = read.csv(here("temp_data", "preprocessed_kit", "kit_hh_pseudolinks_standardized.csv"))  
 
 # Sustain-cocoa link data
 # sc_links_vil = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
@@ -122,6 +123,15 @@ tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
 # In hectares of 11 LU classes, aggregated in GEE to 1km
 bnetd = rast(here("input_data/GEE/BNETD_binary_1km.tif"))
 # bnetd %>% values() %>% summary()
+
+old_def = rast(here("input_data/GEE/old_cocoa_def_binary_1km.tif"))
+rec_def = rast(here("input_data/GEE/recent_cocoa_def_binary_1km.tif"))
+
+names(old_def) <- "oldCocoaDef"
+names(rec_def) <- "recentCocoaDef"
+
+# Stack them with bnetd (we could do it in GEE, but for now it's here)
+bnetd = c(bnetd, old_def, rec_def)
 
 # coopbs_tmplt = coopbsy[235:240,]
 # example = head(carg_links)
@@ -184,6 +194,14 @@ initcoln <- ncol(consol)
 initrown <- nrow(consol)
 consol <- full_join(consol, sc_links, 
                     by = intersect(colnames(consol), colnames(sc_links)), multiple = "all") 
+
+if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
+
+# Add KIT
+initcoln <- ncol(consol)
+initrown <- nrow(consol)
+consol <- full_join(consol, kit_links, 
+                    by = intersect(colnames(consol), colnames(kit_links)), multiple = "all") 
 
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
@@ -947,7 +965,7 @@ only_potential_propt =
   
   # In addition, remove the SC links with other buyers or unmatched coops bc they miss coordinates. 
   # but leave links between JRC producers and their geolocated other buyers. 
-  filter(!(grepl("SUSTAINCOCOA", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
+  filter(!(grepl("SUSTAINCOCOA|KIT", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
 
 # plot(st_geometry(only_potential_propt)) don't plot, its too heavy at 3km cells
 
@@ -1697,16 +1715,31 @@ cell_depvars %>% filter(!is.na(CELL_VOLUME_KG_COOPS)) %>% nrow()
 potential_1st %>% filter(LINK_VOLUME_KG == 0) %>% View()
 cell_depvars %>% filter(CELL_VOLUME_KG == 0) %>% nrow()
 
-potential_1st %>% filter(grepl(pattern = "SUSTAIN|JRC", PRO_ID)) %>% 
+potential_1st %>% filter(grepl(pattern = "KIT|JRC|SUSTAIN", PRO_ID)) %>% 
   group_by(CELL_ID) %>% filter(n()>5) %>%
   arrange(CELL_ID) %>% 
   select(!starts_with("COOP_")) %>% 
   View()
 
+potential_1st %>% filter(grepl(pattern = "KIT", PRO_ID)) %>% View()
+  
 # potential_1st$LINK_TRAVEL_METERS %>% summary()
 # potential_1st %>% filter(is.na(LINK_TRAVEL_METERS)) %>% pull(CELL_ACTUAL_ONLYCOOP_LINK) %>% summary()
 # potential_1st %>% filter(is.na(LINK_TRAVEL_METERS) & CELL_NO_POTENTIAL_LINK) %>% View() 
 
+## Cell Sources -----------
+potential_1st = 
+  potential_1st %>% 
+  mutate(LINK_SOURCE = case_when(grepl("JRC", PRO_ID) ~ "JRC", 
+                                 grepl("KIT", PRO_ID) ~ "KIT", 
+                                 grepl("SUSTAINCOCOA", PRO_ID) ~ "SC", 
+                                 grepl("CARGILL", PRO_ID) ~ "CARGILL", 
+                                 TRUE ~ NA))
+cell_sources = 
+  potential_1st %>% 
+  summarise(.by = "CELL_ID",
+            CELL_SOURCES = paste0(na.omit(unique(LINK_SOURCE)), collapse = "; "))
+          
 
 ## Cell level Xs -----------
 
@@ -1961,17 +1994,17 @@ cell_weights =
   summarise(.by = "CELL_ID", 
             CELL_DATA_SOURCE = list(na.omit(unique(gsub("_.*", replacement = "", x = PRO_ID)))),
             CELL_N_JRC_FARMERS = length(na.omit(unique(grep(pattern = "JRC_", x = PRO_ID, value = TRUE)))),
-            CELL_JRC_COCOA_FARMLAND_HA = sum(PRO_COCOA_FARMLAND_HA, na.rm = TRUE),
+            CELL_JRCKIT_COCOA_FARMLAND_HA = sum(PRO_COCOA_FARMLAND_HA, na.rm = TRUE),
             CELL_COCOA_HA = unique(CELL_COCOA_HA)) %>% 
   mutate(
     CELL_REPRESENTATIVITY_WEIGHT = case_when(
-      CELL_COCOA_HA > 0 ~ CELL_JRC_COCOA_FARMLAND_HA/CELL_COCOA_HA, 
+      CELL_COCOA_HA > 0 ~ CELL_JRCKIT_COCOA_FARMLAND_HA/CELL_COCOA_HA, 
       TRUE ~ NA
     ),
     NORMALIZER = sum(CELL_REPRESENTATIVITY_WEIGHT, na.rm = TRUE), 
     CELL_REPRESENTATIVITY_NORM_WEIGHT = case_when(
       grepl("SUSTAINCOCOA", paste0(CELL_DATA_SOURCE)) ~ 1, 
-      grepl("JRC", paste0(CELL_DATA_SOURCE)) ~ CELL_REPRESENTATIVITY_WEIGHT/NORMALIZER, 
+      grepl("JRC|KIT", paste0(CELL_DATA_SOURCE)) ~ CELL_REPRESENTATIVITY_WEIGHT/NORMALIZER, 
       TRUE ~ NA)
     ) %>% 
   select(CELL_ID, CELL_DATA_SOURCE, CELL_REPRESENTATIVITY_WEIGHT, CELL_REPRESENTATIVITY_NORM_WEIGHT)
@@ -1983,6 +2016,8 @@ cell_weights$CELL_REPRESENTATIVITY_NORM_WEIGHT %>% summary()
 ## Merge all cell variables -------------
 cell_all = 
   cell_depvars %>%  
+  inner_join(cell_sources, 
+             by = "CELL_ID") %>% 
   inner_join(cell_cellvars, 
              by = "CELL_ID") %>% 
   inner_join(cell_binaryvars, 

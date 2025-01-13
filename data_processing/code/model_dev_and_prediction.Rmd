@@ -126,9 +126,11 @@ cells =
          CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_5_NEAREST_COOP_STATUS_COOP-CA`) %>% 
   # this is just for descriptives a priori
   mutate(CELL_2ND_STAGE_ONLY = CELL_ANY_ACTUAL_COOP_LINK & !CELL_VOLUME_OBSERVED, 
+         CELL_1ST_STAGE_ONLY = !CELL_ANY_ACTUAL_COOP_LINK & CELL_VOLUME_OBSERVED, 
          CELL_NO_ACTUAL_LINK_DATA = CELL_ONLY_VIRTUAL_LINK | (!CELL_ONLY_VIRTUAL_LINK & 
                                                               CELL_ACTUAL_ONLYOTHER_LINK & 
                                                               !CELL_VOLUME_OBSERVED))
+# cells %>% filter(CELL_1ST_STAGE_ONLY) %>% View
 
 links = 
   links %>% 
@@ -288,6 +290,7 @@ cells_stg2_development =
 # Filter data
 jrcdata <- consol %>% filter(grepl("JRC", PRO_ID))
 scdata <- consol %>% filter(grepl("SUSTAINCOCOA", PRO_ID))
+kitdata <- consol %>% filter(grepl("KIT", PRO_ID))
 cargilldata <- consol %>% filter(grepl("CARGILL", PRO_ID))
 
 paste0("There are ", 
@@ -310,6 +313,16 @@ paste0("There are ",
        nrow(filter(scdata, !is.na(COOP_BS_ID))), " of which are links with IC2B, and ", 
        nrow(filter(scdata, !BUYER_IS_COOP)), " are links with another kind of buyers. ",
        nrow(filter(scdata, !is.na(LINK_VOLUME_KG))), " links have clean volume information."
+)
+
+paste0("There are ", 
+       nrow(kitdata), " farmer-buyer links, between ",
+       length(unique(kitdata$PRO_ID)), " farmers located in ",
+       length(unique(kitdata$PRO_VILLAGE_NAME)), " villages and ",
+       "an unknown number of buyers. ",
+       nrow(filter(kitdata, BUYER_IS_COOP)), " farmers sell to cooperatives, ", 
+       nrow(filter(kitdata, !BUYER_IS_COOP)), " farmers sell to another kind of buyers. ",
+       nrow(filter(kitdata, !is.na(LINK_VOLUME_KG))), " links have clean volume information."
 )
 
 paste0("There are ", 
@@ -361,8 +374,19 @@ Metric = c("Source",
           length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           "Unknown"
           ),
+  KIT = c(
+          "Bymolt et al. 2018", "2017", "Village point", "Yes",
+          length(unique(kitdata$PRO_VILLAGE_NAME)), 
+          length(unique(kitdata$PRO_ID)), 
+          nrow(kitdata), 
+          nrow(filter(kitdata, BUYER_IS_COOP)), 
+          nrow(filter(kitdata, !BUYER_IS_COOP)), 
+          "Unknown", 
+          "Unknown",
+          "Unknown"
+            ),
   CARGILL = c(
-          "Public repository", "2019", "Farm polygon", "No",
+          "Online repository", "2019", "Farm polygon", "No",
           "Unknown", 
           length(unique(cargilldata$PRO_ID)), 
           nrow(cargilldata), 
@@ -373,8 +397,9 @@ Metric = c("Source",
           length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           )
 ) 
-colnames(summary_data) = c(" ", "JRC Data", "SC Data", "Cargill Data")
-  
+colnames(summary_data) = c(" ", "JRC Data", "SC Data", "KIT Data", "Cargill Data")
+
+
 # Create table with kableExtra and add indentation
 table <- summary_data %>%
   kbl() %>%
@@ -456,6 +481,8 @@ df <- st_sf(df, crs = 4326) %>%
   st_transform(civ_crs) %>% 
   arrange(Source)
 
+df = df %>% arrange(desc(PRO_ID))
+coops_toplot = coops_toplot %>% arrange(desc(Source))
 
 map_links = 
   ggplot() +
