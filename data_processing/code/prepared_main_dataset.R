@@ -132,6 +132,10 @@ names(rec_def) <- "recentCocoaDef"
 
 # Stack them with bnetd (we could do it in GEE, but for now it's here)
 bnetd = c(bnetd, old_def, rec_def)
+# Check defo magnitude  
+old_cd = bnetd$oldCocoaDef %>% values() %>% sum(na.rm = T) 
+recent_cd = bnetd$recentCocoaDef %>% values() %>% sum(na.rm = T)
+old_cd+recent_cd
 
 # coopbs_tmplt = coopbsy[235:240,]
 # example = head(carg_links)
@@ -478,6 +482,8 @@ grid_st =
          CELL_OTHERAG_HA = otherAg,
          CELL_SETTLEMENT_HA = settlements,
          CELL_IMPOSSIBLE_HA = impossible,
+         CELL_OLD_CD_HA = oldCocoaDef, 
+         CELL_REC_CD_HA = recentCocoaDef,
          CELL_TRI_MM = tri) # tri is in millimeters in Nunn & Puga data. 
        # CELL_GAEZCOCOA_AESI = Cocoa
 
@@ -509,6 +515,8 @@ consol_IC2Bcoops_sf =
           CELL_OTHERAG_HA,
           CELL_SETTLEMENT_HA,
           CELL_IMPOSSIBLE_HA,
+          CELL_OLD_CD_HA,
+          CELL_REC_CD_HA,
           CELL_TRI_MM)
         # CELL_GAEZCOCOA_AESI
   )
@@ -1878,6 +1886,8 @@ cell_cellvars =
             CELL_OTHERAG_HA = unique(CELL_OTHERAG_HA),
             CELL_SETTLEMENT_HA = unique(CELL_SETTLEMENT_HA),
             CELL_IMPOSSIBLE_HA = unique(CELL_IMPOSSIBLE_HA),
+            CELL_OLD_CD_HA = unique(CELL_OLD_CD_HA),
+            CELL_REC_CD_HA = unique(CELL_REC_CD_HA),
             CELL_TRI_MM = unique(CELL_TRI_MM), 
             # CELL_GAEZCOCOA_AESI = unique(CELL_GAEZCOCOA_AESI),
             CELL_DISTRICT_GEOCODE = unique(CELL_DISTRICT_GEOCODE),

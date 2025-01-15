@@ -84,6 +84,9 @@ dir.create(here("outputs", "familiar", "stage_2", "performance"), recursive = TR
 dir.create(here("outputs", "familiar", "stage_2", "explanation_vimp"), recursive = TRUE)
 dir.create(here("outputs", "familiar", "stage_2", "models"), recursive = TRUE)
 
+# This is to save bootstrapped predictions of the model 
+dir.create(here("temp_data", "predictions", "stage_1"), recursive = TRUE)
+
 ## Functions
 # Trase palettes etc. for plots
 source(here("code", "theme_trase.R"))
@@ -127,9 +130,17 @@ cells =
   # this is just for descriptives a priori
   mutate(CELL_2ND_STAGE_ONLY = CELL_ANY_ACTUAL_COOP_LINK & !CELL_VOLUME_OBSERVED, 
          CELL_1ST_STAGE_ONLY = !CELL_ANY_ACTUAL_COOP_LINK & CELL_VOLUME_OBSERVED, 
-         CELL_NO_ACTUAL_LINK_DATA = CELL_ONLY_VIRTUAL_LINK | (!CELL_ONLY_VIRTUAL_LINK & 
-                                                              CELL_ACTUAL_ONLYOTHER_LINK & 
-                                                              !CELL_VOLUME_OBSERVED))
+         CELL_BOTH_STAGES = CELL_VOLUME_OBSERVED & CELL_ANY_ACTUAL_COOP_LINK,
+         CELL_NO_DATA = !CELL_NO_POTENTIAL_LINK & !CELL_2ND_STAGE_ONLY & !CELL_1ST_STAGE_ONLY & !CELL_BOTH_STAGES
+         # CELL_NO_ACTUAL_LINK_DATA = CELL_ONLY_VIRTUAL_LINK | (!CELL_ONLY_VIRTUAL_LINK & 
+         #                                                      CELL_ACTUAL_ONLYOTHER_LINK & 
+         #                                                      !CELL_VOLUME_OBSERVED)
+         )
+# check that these categories are mutually exclusive
+stopifnot(
+  cells %>% filter(1 == CELL_NO_DATA + CELL_NO_POTENTIAL_LINK + CELL_2ND_STAGE_ONLY + CELL_1ST_STAGE_ONLY + CELL_BOTH_STAGES) %>% 
+    nrow() == nrow(cells)
+)
 # cells %>% filter(CELL_1ST_STAGE_ONLY) %>% View
 
 links = 
@@ -157,7 +168,6 @@ links =
 
 
 # Productive & prospective cells
-
 cells = 
   cells %>% 
   mutate(
@@ -542,17 +552,23 @@ ggsave(
 # cell_ids_check = nocat$CELL_ID
 # links %>% filter(CELL_ID %in% cell_ids_check) %>% 
 #   pull(CELL_ACTUAL_ONLYOTHER_LINK) %>% summary()
+# check that these categories are mutually exclusive
+stopifnot(
+  cells %>% filter(1 == CELL_NO_POTENTIAL_LINK + CELL_NO_DATA + CELL_2ND_STAGE_ONLY + CELL_1ST_STAGE_ONLY + CELL_BOTH_STAGES) %>% 
+    nrow() == nrow(cells)
+)
 
 # export
 (datasummary(N + Percent()  ~ 
               (`No buying station within 72 km` = (CELL_NO_POTENTIAL_LINK==T)) + 
-              (`No observed link` = (CELL_NO_ACTUAL_LINK_DATA==T)) + 
-              (`Observed link data for 2nd stage only` = (CELL_2ND_STAGE_ONLY==T)) + 
-              (`Observed link data for both stages` = (CELL_VOLUME_OBSERVED==T)) + 
+              (`No data` = (CELL_NO_DATA==T)) + 
+              (`Data for 1st stage only` = (CELL_1ST_STAGE_ONLY==T)) + 
+              (`Data for 2nd stage only` = (CELL_2ND_STAGE_ONLY==T)) + 
+              (`Data for both stages` = (CELL_BOTH_STAGES==T)) + 
               1, 
               data = cells,
               fmt = 1,
-              align = "cccccc",
+              align = "ccccccc",
               output = here("outputs", "input_data_descriptives", paste0("cells_",MODEL_RESOLUTION_KM,"km_destat.png"))))
 # Cells with actual link data for both stages have JRC or SC data on actual link existence, size and type of buyer (cooperative or other), that is representative for the whole cell. 
 
@@ -1218,7 +1234,7 @@ stage1_expdes_repo
 
 # We use one specifically, identified by: 
 # ---------------------------------------------
-model_date = "20241204190335"
+model1_date = "20250114231822" # "20241204190335"
 # ---------------------------------------------
 
 # Finders of familiar outputs
@@ -1231,6 +1247,8 @@ model_date = "20241204190335"
 
 # familiar_data - a maxi list containing all info of a run. 
 # famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
+
+collection = readRDS(here(stage1_expdes_repo, "familiar_collections", "pooled_data.RDS"))
 
 # Model development results - to report model performance
 stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
@@ -1247,11 +1265,19 @@ stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
 model1_name = 
   stage1_ensemble_names %>% 
   grep(~.,  
-       pattern = model_date, 
+       pattern = model1_date, 
        value = TRUE) # take the first one in case there are several
                                           
 model1 = readRDS(here(stage1_model_path, model1_name))
 model1
+
+# These are the names of all individual trained ("built") models 
+stage1_model_names = list.files(stage1_model_path, pattern = "model")
+indiv_model1_names = 
+  stage1_model_names %>% 
+  grep(~.,  
+       pattern = model1_date, 
+       value = TRUE) # take the first one in case there are several
 
 ```
 
@@ -1268,9 +1294,9 @@ model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model
 
 ```{r}
 # Performance metrics are stored here
-perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
+model1_perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
 
-perf_metrics
+model1_perf_metrics
 
 # Normalement ces plots sont déjà exportés automatiquement par summon_familiar, mais apparemment pas pour toutes les métriques. 
 # This takes ~10min with a 200-models ensemble
@@ -1282,6 +1308,8 @@ plot_perf_model1 =
   data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
   estimation_type = "bci",
   metric = c("mse", "rse", "r2_score")) #"rmse",  "explained_variance", 
+
+plot_perf_model1[[1]][["layers"]][[1]][["data"]]$data_set <- as.character(plot_perf_model1[[1]][["layers"]][[1]][["data"]]$data_set)
 
 # Save plot
 plot_perf_model1
@@ -1452,16 +1480,10 @@ Here, we build the prediction setS for each stage.
 Based on AoA of 1st stage model. 
 Moreover, we report here on the Novelty of cells and links in (and out of) the prediction sets. 
 
-## Read developed models
-```{r}
-model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
-
-```
-
-
 ## AoA
 ```{r}
 # Requires the model to be trained with caret, with cross-validation and not bootstraps
+set.seed(8888)
 
 model1_caret_cv = 
   train(
@@ -1489,9 +1511,13 @@ cells$CELL_IS_IN_AOA %>% summary()
 ### Map 
 Map here the AoA together with all cell information statuses.  
 ```{r}
+# Check overlaps between AOA and other categories
 datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_NO_ACTUAL_LINK_DATA)
 datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_2ND_STAGE_ONLY)
-datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_VOLUME_OBSERVED)
+datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_1ST_STAGE_ONLY)
+datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_BOTH_STAGES)
+
+cells %>% filter(CELL_BOTH_STAGES)
 
 toplot = 
   cells %>% 
@@ -1499,17 +1525,19 @@ toplot =
   st_transform(civ_crs) %>% 
     mutate(
       `Cell information content` = case_when(
-        # order matters, AoA condition shoudl be first to overwrite "To predict" or "Data for..." statuses for instance (case_when gives value corresponding to the first match)
+        # order matters, AoA condition should be first to overwrite "No data" or "Data for..." statuses for instance (case_when gives value corresponding to the first match).  
         !CELL_IS_IN_AOA ~ "Outside AoA of 1st stage", 
         CELL_NO_POTENTIAL_LINK ~ "No cooperative within 72 km", 
-        CELL_NO_ACTUAL_LINK_DATA ~ "To predict",
-        CELL_VOLUME_OBSERVED ~ "Data for both stages",
+        CELL_NO_DATA ~ "No data",
+        CELL_BOTH_STAGES ~ "Data for both stages",
         CELL_2ND_STAGE_ONLY ~ "Data for 2nd stage only",
+        CELL_1ST_STAGE_ONLY ~ "Data for 1st stage only",
         ), 
       `Cell information content` = factor(`Cell information content`,
                                           levels = c("Data for both stages",
                                                      "Data for 2nd stage only", 
-                                                     "To predict", 
+                                                     "Data for 1st stage only",
+                                                     "No data", 
                                                      "Outside AoA of 1st stage", 
                                                      "No cooperative within 72 km"))
 ) 
@@ -1523,14 +1551,16 @@ cell_info_map =
     scale_colour_manual(
       values = c("Data for both stages" = "purple",
                  "Data for 2nd stage only" = "blue", 
-                 "To predict" = "yellow", 
+                 "Data for 1st stage only" = "darkgreen",
+                 "No data" = "yellow", 
                  "Outside AoA of 1st stage" = "darkgrey",
                  "No cooperative within 72 km" = "lightgrey")
     ) +
     scale_fill_manual(
       values = c("Data for both stages" = "purple",
                  "Data for 2nd stage only" = "blue", 
-                 "To predict" = "yellow", 
+                 "Data for 1st stage only" = "darkgreen",
+                 "No data" = "yellow", 
                  "Outside AoA of 1st stage" = "darkgrey",
                  "No cooperative within 72 km" = "lightgrey")
     ) +
@@ -1574,7 +1604,7 @@ links$LINK_mahalanobis_dist <- mahalanobis(links %>% select(all_of(stg2_allfeatu
 ```{r}
 # Novelty in development data 
 devdat_prediction_1 = read.csv2(here(stage1_results, "prediction", "prediction.csv"))
-devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
+# devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
 
 devdat_prediction_1$novelty %>% as.numeric() %>% summary()
 
@@ -1622,8 +1652,10 @@ links_topredict =
 ```
 
 
-## Predict 1st stage
+## 1st stage
+### Main prediction
 ```{r}
+# This is the point estimate from the ensemble of models 
 tic()
 cells_topredict$CELL_SHARE_COOP = predict(model1, newdata = cells_topredict)$predicted_outcome
 toc()
@@ -1631,47 +1663,138 @@ toc()
 
 cells_topredict$CELL_SHARE_COOP %>% summary()
 
-cells = 
-  cells %>% 
-  left_join(cells_topredict %>% select(CELL_ID, CELL_SHARE_COOP), 
+```
+### Bootstrapped predictions 
+Run a prediction for each model built by a bootstrap
+```{r}
+# this can be long, so run it only if output not available, or manually (if new model)
+if(!file.exists(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))){
+  m = 10
+  temp_stack_list = list()
+  cells_topredict_light = cells_topredict %>% select(CELL_ID)
+  
+  for(m in 1:length(indiv_model1_names)){#
+    mdl = readRDS(here(stage1_model_path, indiv_model1_names[m]))
+    
+    # cells_topredict_light[,paste0("CELL_SHARE_COOP_DRAWS",m)] = predict(mdl, newdata = cells_topredict)$predicted_outcome
+    cells_topredict_light$CELL_SHARE_COOP_DRAWS = predict(mdl, newdata = cells_topredict)$predicted_outcome
+    
+    cells_topredict_light$BOOTSTRAP_MODEL_IDX = as.integer(m)
+    
+    temp_stack_list[[m]] = cells_topredict_light
+  }
+  # From a list of 100 dataframes, make a dataframe with a column where each value is a list with 100 elements. 
+  temp_stack_df = bind_rows(temp_stack_list)
+  
+  cells_topredict_nest = 
+    temp_stack_df %>% 
+    nest(
+      CELL_SHARE_COOP_DRAWLIST = c(BOOTSTRAP_MODEL_IDX, CELL_SHARE_COOP_DRAWS),
+      .by = CELL_ID)
+  
+  saveRDS(cells_topredict_nest, here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))
+} else {
+  cells_topredict_nest = readRDS(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))
+}
+
+# Join to the rest of predict data 
+cells_topredict = 
+  cells_topredict %>% 
+  left_join(cells_topredict_nest %>% select(CELL_ID, CELL_SHARE_COOP_DRAWLIST), 
             by = "CELL_ID")
 
 ```
 
+
+
 ### Threshold
-1st stage threshold: whether the share of coop outlet is significantly different from zero (one-sided t-test) 
+1st stage threshold: whether the share of coop outlet is significantly different from zero
 ```{r}
+# Significantly, given the model error: 
+
+# Set the prediction to 0 when it does not differ from 0 by more than the model average error. 
+model1_rmse = model1_perf_metrics$value %>% as.numeric() %>% sqrt()
+
+cells_topredict =
+  cells_topredict %>% 
+  mutate(
+    CELL_SHARE_COOP_GTRMSE = if_else(CELL_SHARE_COOP < model1_rmse,
+                                     0,
+                                     CELL_SHARE_COOP)
+    )
+  
+# This is when we will have a disitrution spread by the model error. 
 # In each cell, conduct a one-sided t-test that the predicted share of coop outlet is positive. 
+  # rowwise() %>% 
+  # mutate(
+  #   # CELL_SHARE_COOP_SE = sd(CELL_SHARE_COOP_DRAWLIST[["CELL_SHARE_COOP_DRAWS"]]) / sqrt(nrow(CELL_SHARE_COOP_DRAWLIST)), 
+    # 
+    # CELL_SHARE_COOP_LB = CELL_SHARE_COOP - 1.96 * CELL_SHARE_COOP_SE,
+    
+    # CELL_SHARE_COOP = if_else(CELL_SHARE_COOP_TTEST[["p.value"]] > 0.05,  
+    #                                 0, 
+    #                                 CELL_SHARE_COOP),
 
-# Shall produce variable CELL_SHARE_COOP_SIGNI which is the same as CELL_SHARE_COOP, but 0 where not significantly different from zero. 
 
-cells =
-  cells %>% 
-  mutate(CELL_SHARE_COOP_SIGNI = if_else(CELL_SHARE_COOP < 0.1,  
-                                         0, 
-                                         CELL_SHARE_COOP))
+# cells_topredict$CELL_SHARE_COOP_DRAWLIST[[1456]]$CELL_SHARE_COOP_DRAWS %>% mean()
+# cells_topredict$CELL_SHARE_COOP[1456]
+# 
+# cells_topredict$CELL_SHARE_COOP_DRAWLIST[[1456]]$CELL_SHARE_COOP_DRAWS %>% sd()/10
+# cells_topredict$CELL_SHARE_COOP_SE[1456]
+# cells_topredict$CELL_SHARE_COOP_TTEST[[1456]]$estimate  
 
-cells$CELL_SHARE_COOP %>% summary()
-cells$CELL_SHARE_COOP_SIGNI %>% summary()
+cells_topredict$CELL_SHARE_COOP %>% summary()
+# cells_topredict$CELL_SHARE_COOP_SE %>% summary()
+# cells_topredict$CELL_SHARE_COOP_LB %>% summary()
+# cells_topredict$CELL_SHARE_COOP %>% summary()
+cells_topredict$CELL_SHARE_COOP_GTRMSE %>% summary()
 
 ```
+
+### Merge with all cells
+```{r}
+
+cells = 
+  cells %>% 
+  left_join(cells_topredict %>% select(CELL_ID, 
+                                       CELL_SHARE_COOP, 
+                                       CELL_SHARE_COOP_DRAWLIST, 
+                                       CELL_SHARE_COOP_GTRMSE), 
+            by = "CELL_ID")
+
+
+# (Notes about the handling of nested data)
+
+# no-match rows get an empty list (NULL, of length 0)
+cells %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
+# These empty rows are removed when unnesting, with keep_empty = FALSE (the default)
+cells_un = 
+  cells %>% 
+  unnest(cols = CELL_SHARE_COOP_DRAWLIST, 
+         keep_empty = F)
+
+nrow(cells_un) / nrow(cells_topredict_nest)
+
+```
+
 
 ### Determinist prediction
 This is just where we are sure that cocoa can be sold to a cooperative because there is no coop. 
 ```{r}
 cells =
   cells %>% 
-  mutate(CELL_SHARE_COOP_SIGNI = if_else(CELL_NO_POTENTIAL_LINK, 
+  mutate(CELL_SHARE_COOP = if_else(CELL_NO_POTENTIAL_LINK, 
                                           0, 
-                                          CELL_SHARE_COOP_SIGNI))
+                                          CELL_SHARE_COOP))
 
-cells$CELL_SHARE_COOP_SIGNI %>% summary()
+cells$CELL_SHARE_COOP %>% summary()
 
-stopifnot(sum(is.na(cells$CELL_SHARE_COOP_SIGNI)) == sum(aoa1$AOA==0))
+# The remaining NAs should be the cells outside of the AoA
+stopifnot(sum(is.na(cells$CELL_SHARE_COOP)) == sum(aoa1$AOA==0))
 ```
 
 
-## Predict 2nd stage
+## 2nd stage
 ```{r}
 # Predict the existence that a link exists
 tic()
@@ -1756,15 +1879,15 @@ links_beforepost = links
 links = 
   links %>% 
   left_join(
-    cells %>% select(CELL_SHARE_COOP_SIGNI, CELL_ID), # CELL_SHARE_COOP, not even sure it is necessary to join this. 
+    cells %>% select(CELL_SHARE_COOP, CELL_ID), # CELL_SHARE_COOP, not even sure it is necessary to join this. 
     by = "CELL_ID"
   ) 
 
 links = 
   links %>% 
   mutate(
-    LINK_UNCOND_PROBA = CELL_SHARE_COOP_SIGNI * LINK_PROBA, # include this just for exploration. 
-    LINK_UNCOND_PROBA_THRESH = CELL_SHARE_COOP_SIGNI * LINK_PROBA_THRESH
+    LINK_UNCOND_PROBA = CELL_SHARE_COOP * LINK_PROBA, # include this just for exploration. 
+    LINK_UNCOND_PROBA_THRESH = CELL_SHARE_COOP * LINK_PROBA_THRESH
   )
 
 ```
@@ -1897,6 +2020,9 @@ cells =
   cells %>% 
   inner_join(cell_nlinks, 
              by = "CELL_ID")
+
+cell_nlinks$CELL_N_LINKED_COOPS %>% summary()
+cells$CELL_N_LINKED_COOPS %>% summary()
 
 rm(cell_nlinks)
 
