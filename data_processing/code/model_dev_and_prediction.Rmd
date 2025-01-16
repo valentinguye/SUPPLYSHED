@@ -128,13 +128,13 @@ cells =
          CELL_PROP_1_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_1_NEAREST_COOP_STATUS_COOP-CA`, 
          CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA = `CELL_PROP_5_NEAREST_COOP_STATUS_COOP-CA`) %>% 
   # this is just for descriptives a priori
-  mutate(CELL_2ND_STAGE_ONLY = CELL_ANY_ACTUAL_COOP_LINK & !CELL_VOLUME_OBSERVED, 
-         CELL_1ST_STAGE_ONLY = !CELL_ANY_ACTUAL_COOP_LINK & CELL_VOLUME_OBSERVED, 
-         CELL_BOTH_STAGES = CELL_VOLUME_OBSERVED & CELL_ANY_ACTUAL_COOP_LINK,
+  mutate(CELL_1ST_STAGE_ONLY = !CELL_ANY_ACTUAL_COOP_LINK & CELL_IS_OBSERVED_COOPOUTLET, 
+         CELL_2ND_STAGE_ONLY = CELL_ANY_ACTUAL_COOP_LINK & !CELL_IS_OBSERVED_COOPOUTLET, 
+         CELL_BOTH_STAGES    = CELL_ANY_ACTUAL_COOP_LINK & CELL_IS_OBSERVED_COOPOUTLET,
          CELL_NO_DATA = !CELL_NO_POTENTIAL_LINK & !CELL_2ND_STAGE_ONLY & !CELL_1ST_STAGE_ONLY & !CELL_BOTH_STAGES
          # CELL_NO_ACTUAL_LINK_DATA = CELL_ONLY_VIRTUAL_LINK | (!CELL_ONLY_VIRTUAL_LINK & 
          #                                                      CELL_ACTUAL_ONLYOTHER_LINK & 
-         #                                                      !CELL_VOLUME_OBSERVED)
+         #                                                      !CELL_IS_OBSERVED_COOPOUTLET)
          )
 # check that these categories are mutually exclusive
 stopifnot(
@@ -269,7 +269,7 @@ Any processing on explanatory features' values should be made before this step s
 ```{r}
 cells = 
   cells %>% 
-  mutate(SPLIT = if_else(CELL_VOLUME_OBSERVED, "Development set", "No data")) 
+  mutate(SPLIT = if_else(CELL_IS_OBSERVED_COOPOUTLET, "Development set", "No data")) 
 
 stg1_development =
   cells %>% filter(SPLIT == "Development set") 
@@ -547,7 +547,7 @@ ggsave(
 
 # nocat = 
 #   cells %>%
-#   filter(!CELL_NO_POTENTIAL_LINK & !CELL_NO_ACTUAL_LINK_DATA & !CELL_2ND_STAGE_ONLY & !CELL_VOLUME_OBSERVED) %>% 
+#   filter(!CELL_NO_POTENTIAL_LINK & !CELL_NO_ACTUAL_LINK_DATA & !CELL_2ND_STAGE_ONLY & !CELL_IS_OBSERVED_COOPOUTLET) %>% 
 #   View()
 # cell_ids_check = nocat$CELL_ID
 # links %>% filter(CELL_ID %in% cell_ids_check) %>% 
@@ -702,7 +702,7 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 ### Design & Formula
 ```{r}
 # Experimental design 
-exp_design = "bt(fs+mb,100)"
+exp_design = "bt(fs+mb,5)"
 
 # Repository for familiar 1st stage 
 # summon_familiar writes all it does in a repo. It returns nothing here.  
@@ -869,7 +869,7 @@ anyNA(stg1_development)
 # let's go
 summon_familiar(
   
-  formula = stg1_formula_allfeatures,
+  # formula = stg1_formula_allfeatures,
   data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
   experiment_dir = stage1_expdes_repo,
   sample_id_column = "CELL_ID",
@@ -1234,7 +1234,9 @@ stage1_expdes_repo
 
 # We use one specifically, identified by: 
 # ---------------------------------------------
-model1_date = "20250114231822" # "20241204190335"
+model1_date = "20250116210833"
+  # the name for 100 "20250114231822" 
+  # the name for 40 "20241204190335"
 # ---------------------------------------------
 
 # Finders of familiar outputs
@@ -1512,7 +1514,7 @@ cells$CELL_IS_IN_AOA %>% summary()
 Map here the AoA together with all cell information statuses.  
 ```{r}
 # Check overlaps between AOA and other categories
-datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_NO_ACTUAL_LINK_DATA)
+datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_NO_DATA)
 datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_2ND_STAGE_ONLY)
 datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_1ST_STAGE_ONLY)
 datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_BOTH_STAGES)
@@ -1624,6 +1626,8 @@ cells$CELL_NOVELTY %>% summary()
 
 
 ## Prediction sets
+/!/ FROM THERE WE WORK ONLY ON CELLS IN THE PREDICTION SET 
+(we had kept the cells out of AOA and with no potential links until now for the purpose of doing the above map)
 ```{r}
 # Keep cells that are sufficiently close in terms of AoA, and, 
 #to reduce computation, that have no close (72km) coop, as for those we attribute null probas.  
@@ -1664,6 +1668,61 @@ toc()
 cells_topredict$CELL_SHARE_COOP %>% summary()
 
 ```
+
+#### TEMP TESTS
+Alternative predictions
+```{r}
+set.seed(8888)
+# Alternative predictions
+
+model1_caret_cv = 
+  train(
+    x = stg1_development %>% select(all_of(model1@required_features)), # %>% select(stg1_allfeatures),# 
+    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
+    method="rf", 
+    importance=TRUE, 
+    tuneLength=1,
+    trControl=trainControl(method="cv",number=5,savePredictions=T)
+  )
+
+cells_topredict$CELL_SHARE_COOP_CARET = predict(model1_caret_cv, newdata = cells_topredict)
+cells_topredict$CELL_SHARE_COOP_CARET %>% summary()
+
+stg1_mfit = ranger(data = stg1_development, 
+                   importance = 'permutation',
+                   # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
+                   formula = stg1_formula_allfeatures, 
+                   seed = 8888
+                   )
+print(stg1_mfit)
+cells_topredict$CELL_SHARE_COOP_RANGER = predict(stg1_mfit, data = cells_topredict)$predictions
+cells_topredict$CELL_SHARE_COOP_RANGER %>% summary()
+
+# Compare predictions and observation in development data 
+# cells_topredict %>% 
+#   filter(!is.na(CELL_PROP_VOLUME_COOPS)) %>% 
+#   mutate(CELL_PROP_VOLUME_COOPS)
+
+```
+
+
+```{r}
+cells_topredict = 
+  cells_topredict %>% 
+  mutate(CELL_SHARE_COOP_FAMIL = CELL_SHARE_COOP)
+
+cells_toplot = 
+  cells_topredict %>% 
+  mutate(
+   # Work on PERCENTAGE, not share, from here, for display. 
+    CELL_SHARE_COOP = 100*CELL_SHARE_COOP_CARET,
+    CELL_COCOA_SHARE = 100*CELL_COCOA_SHARE, 
+    # Round hectares
+    across(.cols = ends_with("_HA"), .fns = ~round(.x, 0))
+    )
+
+```
+
 ### Bootstrapped predictions 
 Run a prediction for each model built by a bootstrap
 ```{r}
@@ -1713,6 +1772,8 @@ cells_topredict =
 # Significantly, given the model error: 
 
 # Set the prediction to 0 when it does not differ from 0 by more than the model average error. 
+# Performance metrics are stored here
+model1_perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
 model1_rmse = model1_perf_metrics$value %>% as.numeric() %>% sqrt()
 
 cells_topredict =
@@ -1751,25 +1812,15 @@ cells_topredict$CELL_SHARE_COOP_GTRMSE %>% summary()
 
 ```
 
-### Merge with all cells
+
 ```{r}
-
-cells = 
-  cells %>% 
-  left_join(cells_topredict %>% select(CELL_ID, 
-                                       CELL_SHARE_COOP, 
-                                       CELL_SHARE_COOP_DRAWLIST, 
-                                       CELL_SHARE_COOP_GTRMSE), 
-            by = "CELL_ID")
-
-
 # (Notes about the handling of nested data)
 
 # no-match rows get an empty list (NULL, of length 0)
-cells %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
+cells_topredict %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
 # These empty rows are removed when unnesting, with keep_empty = FALSE (the default)
 cells_un = 
-  cells %>% 
+  cells_topredict %>% 
   unnest(cols = CELL_SHARE_COOP_DRAWLIST, 
          keep_empty = F)
 
@@ -1781,16 +1832,14 @@ nrow(cells_un) / nrow(cells_topredict_nest)
 ### Determinist prediction
 This is just where we are sure that cocoa can be sold to a cooperative because there is no coop. 
 ```{r}
-cells =
-  cells %>% 
-  mutate(CELL_SHARE_COOP = if_else(CELL_NO_POTENTIAL_LINK, 
-                                          0, 
-                                          CELL_SHARE_COOP))
+# cells_topredict =
+#   cells_topredict %>% 
+#   mutate(CELL_SHARE_COOP = if_else(CELL_NO_POTENTIAL_LINK, 
+#                                           0, 
+#                                           CELL_SHARE_COOP))
+# 
+# cells_topredict$CELL_SHARE_COOP %>% summary()
 
-cells$CELL_SHARE_COOP %>% summary()
-
-# The remaining NAs should be the cells outside of the AoA
-stopifnot(sum(is.na(cells$CELL_SHARE_COOP)) == sum(aoa1$AOA==0))
 ```
 
 
@@ -1849,7 +1898,7 @@ links =
 
 # After this, the number of links that are NA is 297074
 links$LINK_PROBA_THRESH %>% summary()
-# which is the same as the number of links in cells outside the AoA. 
+# which is the same as the number of links in cells_topredict outside the AoA. 
 n_links_outside_aoa = nrow(filter(links, !CELL_IS_IN_AOA)) 
 
 stopifnot(
@@ -1879,7 +1928,7 @@ links_beforepost = links
 links = 
   links %>% 
   left_join(
-    cells %>% select(CELL_SHARE_COOP, CELL_ID), # CELL_SHARE_COOP, not even sure it is necessary to join this. 
+    cells_topredict %>% select(CELL_SHARE_COOP, CELL_ID), 
     by = "CELL_ID"
   ) 
 
@@ -2016,13 +2065,13 @@ cell_nlinks =
   summarise(.by = "CELL_ID",
             CELL_N_LINKED_COOPS = sum(LINK_PROBA_THRESH_NORMED_CELLMAX > 0))
 
-cells = 
-  cells %>% 
-  inner_join(cell_nlinks, 
+cells_topredict = 
+  cells_topredict %>% 
+  left_join(cell_nlinks, 
              by = "CELL_ID")
 
 cell_nlinks$CELL_N_LINKED_COOPS %>% summary()
-cells$CELL_N_LINKED_COOPS %>% summary()
+cells_topredict$CELL_N_LINKED_COOPS %>% summary()
 
 rm(cell_nlinks)
 
@@ -2032,8 +2081,8 @@ rm(cell_nlinks)
 
 # EXPORT 
 ```{r}
-saveRDS(cells, 
-        here("temp_data", "model", "cells.Rdata"))
+saveRDS(cells_topredict, 
+        here("temp_data", "model", "cells_topredict.Rdata"))
 
 saveRDS(links, 
         here("temp_data", "model", "links.Rdata"))

@@ -124,18 +124,27 @@ tri_area = rast(here("input_data/terrain/cellarea/cellarea.txt"))
 bnetd = rast(here("input_data/GEE/BNETD_binary_1km.tif"))
 # bnetd %>% values() %>% summary()
 
-old_def = rast(here("input_data/GEE/old_cocoa_def_binary_1km.tif"))
-rec_def = rast(here("input_data/GEE/recent_cocoa_def_binary_1km.tif"))
+old_def = rast(here("input_data/GEE/old_def_binary_1km.tif"))
+rec_def = rast(here("input_data/GEE/recent_def_binary_1km.tif"))
+old_cocoa_def = rast(here("input_data/GEE/old_cocoa_def_binary_1km.tif"))
+rec_cocoa_def = rast(here("input_data/GEE/recent_cocoa_def_binary_1km.tif"))
 
-names(old_def) <- "oldCocoaDef"
-names(rec_def) <- "recentCocoaDef"
+names(old_def) <- "oldDef"
+names(rec_def) <- "recentDef"
+names(old_cocoa_def) <- "oldCocoaDef"
+names(rec_cocoa_def) <- "recentCocoaDef"
 
 # Stack them with bnetd (we could do it in GEE, but for now it's here)
-bnetd = c(bnetd, old_def, rec_def)
+bnetd = c(bnetd, old_def, rec_def, old_cocoa_def, rec_cocoa_def)
 # Check defo magnitude  
-old_cd = bnetd$oldCocoaDef %>% values() %>% sum(na.rm = T) 
-recent_cd = bnetd$recentCocoaDef %>% values() %>% sum(na.rm = T)
-old_cd+recent_cd
+old_cd_ha = bnetd$oldCocoaDef %>% values() %>% sum(na.rm = T) 
+recent_cd_ha = bnetd$recentCocoaDef %>% values() %>% sum(na.rm = T)
+old_cd_ha+recent_cd_ha
+
+old_d_ha = bnetd$oldDef %>% values() %>% sum(na.rm = T) 
+recent_d_ha = bnetd$recentDef %>% values() %>% sum(na.rm = T)
+old_d_ha+recent_d_ha
+
 
 # coopbs_tmplt = coopbsy[235:240,]
 # example = head(carg_links)
@@ -482,6 +491,8 @@ grid_st =
          CELL_OTHERAG_HA = otherAg,
          CELL_SETTLEMENT_HA = settlements,
          CELL_IMPOSSIBLE_HA = impossible,
+         CELL_OLD_D_HA = oldDef, 
+         CELL_REC_D_HA = recentDef,
          CELL_OLD_CD_HA = oldCocoaDef, 
          CELL_REC_CD_HA = recentCocoaDef,
          CELL_TRI_MM = tri) # tri is in millimeters in Nunn & Puga data. 
@@ -515,6 +526,8 @@ consol_IC2Bcoops_sf =
           CELL_OTHERAG_HA,
           CELL_SETTLEMENT_HA,
           CELL_IMPOSSIBLE_HA,
+          CELL_OLD_D_HA,
+          CELL_REC_D_HA,
           CELL_OLD_CD_HA,
           CELL_REC_CD_HA,
           CELL_TRI_MM)
@@ -1786,15 +1799,15 @@ cell_depvars =
             CELL_VOLUME_KG_OTHERS = if_else(all(is.na(LINK_VOLUME_KG)), NA, sum(LINK_VOLUME_KG*!BUYER_IS_COOP, na.rm = TRUE)) 
   ) %>% 
   mutate(
-    # Split indicator, between train/test and predict sets in 1st stage: 
-    CELL_VOLUME_OBSERVED = !is.na(CELL_VOLUME_KG),
-    
+    # THE MAIN VARIABLE - THE SHARE OF COOPERATIVE OUTLET 
     CELL_PROP_VOLUME_COOPS = case_when(
       CELL_VOLUME_KG != 0 & !is.na(CELL_VOLUME_KG) ~ CELL_VOLUME_KG_COOPS / CELL_VOLUME_KG, 
       TRUE ~ NA), 
     CELL_PROP_VOLUME_OTHERS = case_when(
       CELL_VOLUME_KG != 0 & !is.na(CELL_VOLUME_KG) ~ CELL_VOLUME_KG_OTHERS / CELL_VOLUME_KG, 
-      TRUE ~ NA)
+      TRUE ~ NA),
+    # Split indicator, between train/test and predict sets in 1st stage: 
+    CELL_IS_OBSERVED_COOPOUTLET = !is.na(CELL_PROP_VOLUME_COOPS)
     )
 # (multiplying by BUYER_IS_COOP in the sum of summarise is rowwise, i.e. identical to doing it in a prior mutate)
 
@@ -1886,6 +1899,8 @@ cell_cellvars =
             CELL_OTHERAG_HA = unique(CELL_OTHERAG_HA),
             CELL_SETTLEMENT_HA = unique(CELL_SETTLEMENT_HA),
             CELL_IMPOSSIBLE_HA = unique(CELL_IMPOSSIBLE_HA),
+            CELL_OLD_D_HA  = unique(CELL_OLD_D_HA),
+            CELL_REC_D_HA  = unique(CELL_REC_D_HA),
             CELL_OLD_CD_HA = unique(CELL_OLD_CD_HA),
             CELL_REC_CD_HA = unique(CELL_REC_CD_HA),
             CELL_TRI_MM = unique(CELL_TRI_MM), 

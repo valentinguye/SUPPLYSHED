@@ -76,9 +76,14 @@ departements =
 coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
 coopbs22 = coopbsy %>% filter(YEAR == 2022)
 
+coopbs22_sf = 
+  coopbs22 %>% 
+  filter(!is.na(LONGITUDE)) %>% 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
+
 links = readRDS(here("temp_data", "model", paste0("links.Rdata")))
 
-cells = readRDS(here("temp_data", "model", paste0("cells.Rdata"))) 
+cells = readRDS(here("temp_data", "model", paste0("cells_topredict.Rdata"))) 
 
 # Useful variables 
 cells = 
@@ -90,8 +95,9 @@ cells =
          - CELL_DENSEFOREST_HA
          - CELL_OTHERFORESTS_HA
          - CELL_IMPOSSIBLE_HA, 
-    CELL_ALL_CD_HA = CELL_OLD_CD_HA + CELL_REC_CD_HA,
-    CELL_1minusSHARE_COOP_SIGNI = 1 - CELL_SHARE_COOP_SIGNI) 
+    CELL_FOREST_HA = CELL_DENSEFOREST_HA + CELL_OTHERFORESTS_HA,
+    # CELL_ALL_CD_HA = CELL_OLD_CD_HA + CELL_REC_CD_HA,
+    CELL_1minusSHARE_COOP = 1 - CELL_SHARE_COOP) 
 
 ```
 
@@ -101,7 +107,7 @@ cells_toplot =
   cells %>% 
   mutate(
    # Work on PERCENTAGE, not share, from here, for display. 
-    CELL_SHARE_COOP_SIGNI = 100*CELL_SHARE_COOP_SIGNI,
+    CELL_SHARE_COOP = 100*CELL_SHARE_COOP,
     CELL_COCOA_SHARE = 100*CELL_COCOA_SHARE, 
     # Round hectares
     across(.cols = ends_with("_HA"), .fns = ~round(.x, 0))
@@ -121,7 +127,7 @@ This uses mostly first stage results.
 # The area of each LU category WITHIN the aggregate sourcing shed: 
 fn_aggregate_lu = function(out_or_in_share){
   cells %>%
-  summarise(.by = CELL_IS_IN_AOA, 
+  summarise(.by = CELL_IS_IN_AOA, # this is to summarise over all obs, because non-AOA cells have been remove in previous script already.
             `N CELLS` = sum({{out_or_in_share}}>0), # this will probably be removed eventually
             TOTAL          = round(sum({{out_or_in_share}}*1600) / 1000, 1),
             COCOA          = round(sum({{out_or_in_share}}*CELL_COCOA_HA) / 1000, 1),
@@ -133,12 +139,30 @@ fn_aggregate_lu = function(out_or_in_share){
   filter(CELL_IS_IN_AOA) %>% 
   select(-CELL_IS_IN_AOA)
 }
+
+fn_aggregate_lu_relative = function(out_or_in_share){
+  cells %>%
+  summarise(.by = CELL_IS_IN_AOA, 
+            `N CELLS` = "", # this will probably be removed eventually
+            TOTAL          = 100*round(sum({{out_or_in_share}}*1600) / (1600*nrow(cells)), 2),
+            COCOA          = 100*round(sum({{out_or_in_share}}*CELL_COCOA_HA) / sum(CELL_COCOA_HA), 2),
+            FOREST         = 100*round(sum({{out_or_in_share}}*(CELL_DENSEFOREST_HA+CELL_OTHERFORESTS_HA)) / sum((CELL_DENSEFOREST_HA+CELL_OTHERFORESTS_HA)), 1),
+            `DENSE FOREST` = 100*round(sum({{out_or_in_share}}*CELL_DENSEFOREST_HA) / sum(CELL_DENSEFOREST_HA), 2),
+            `OTHER FOREST` = 100*round(sum({{out_or_in_share}}*CELL_OTHERFORESTS_HA) / sum(CELL_OTHERFORESTS_HA), 2),
+            `AVAILABLE, NOT FORESTED LAND` = 100*round(sum({{out_or_in_share}}*CELL_NODEF_EXPANSION_HA) / sum(CELL_NODEF_EXPANSION_HA), 2)
+            ) %>% 
+  filter(CELL_IS_IN_AOA) %>% 
+  select(-CELL_IS_IN_AOA)
+}
+
 aggr_tbl = 
   rbind(
-    fn_aggregate_lu(CELL_SHARE_COOP_SIGNI) %>% 
-      mutate(` ` = "Within", .before = everything()),
-    fn_aggregate_lu(CELL_1minusSHARE_COOP_SIGNI) %>% 
-      mutate(` ` = "Outside", .before = everything())
+    fn_aggregate_lu(CELL_SHARE_COOP) %>% 
+      mutate(` ` = "Within (kha)", .before = everything()),
+    fn_aggregate_lu_relative(CELL_SHARE_COOP) %>% 
+      mutate(` ` = "Within (%)", .before = everything()),
+    fn_aggregate_lu(CELL_1minusSHARE_COOP) %>% 
+      mutate(` ` = "Outside (kha)", .before = everything())
   )
   
 aggr_tbl
@@ -161,55 +185,51 @@ Decide to have 3 or 4 bins in the end, based on final data.
 ```{r}
 cells_toplot$CELL_COCOA_SHARE %>% summary()
 cells_toplot$CELL_COCOA_HA %>% summary()
-cells_toplot$CELL_SHARE_COOP_SIGNI %>% summary()
-cells_toplot$CELL_SHARE_COOP_SIGNI %>% quantile(seq(0, 1, 0.1), na.rm = T)
+cells_toplot$CELL_SHARE_COOP %>% summary()
+cells_toplot$CELL_SHARE_COOP %>% quantile(seq(0, 1, 0.1), na.rm = T)
 
 cells_toplot = 
   cells_toplot %>% 
   st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
   st_transform(civ_crs) 
 
-aoa_cells_toplot = 
-  cells_toplot %>% 
-  filter(CELL_IS_IN_AOA)
-
-oaoa_cells_toplot = 
-  cells_toplot %>% 
-  filter(!CELL_IS_IN_AOA)
-
 # Max share of coop outlet, rounded up for clean display
-max_share_coop = round(max(aoa_cells_toplot$CELL_SHARE_COOP_SIGNI, na.rm = TRUE)+5,-1)
+max_share_coop = round(max(cells_toplot$CELL_SHARE_COOP, na.rm = TRUE)+5,-1)
 
 # Depending on final results, choose to show in 3 or 4 bins
-bin_names = c("0%", "0-30%", paste0("30-",max_share_coop,"%"))
+bin_names = c("0-15%", "15-45%", paste0("45-",max_share_coop,"%"))
 
 # Custom breaks bc we want the lowest bin to be 0 only. 
-aoa_cells_toplot$`Cooperative outlet (%)` = 
-  cut(aoa_cells_toplot$CELL_SHARE_COOP_SIGNI, 
+cells_toplot$`Cooperative outlet (%)` = 
+  cut(cells_toplot$CELL_SHARE_COOP, 
       right = FALSE, # implies [a, b[ intervals
       # by default, right = TRUE means that intervals defined by breaks are closed on the right and open on the left. 
       # We want the opposite, to include 0 on the left of the first interval.        
       include.lowest = TRUE,
-      breaks = c(0,1e-9,30,max_share_coop), 
+      breaks = c(0,15,45,max_share_coop), 
       labels = bin_names
       )
 
-aoa_cells_toplot$`Cooperative outlet (%)` %>% table()
+cells_toplot$`Cooperative outlet (%)` %>% table()
 
 # Make palette with same colors as in the bivariate map
 uni_in_bi_pal_outlet = 
-  bi_pal("GrPink2", dim = 3, preview = F)
+  bi_pal("BlueOr", dim = 3, preview = F)
 uni_in_bi_pal_outlet = uni_in_bi_pal_outlet[grepl("1-", names(uni_in_bi_pal_outlet))]
 names(uni_in_bi_pal_outlet) = bin_names
 uni_in_bi_pal_outlet
 
 map =
-  ggplot(aoa_cells_toplot) +
-  geom_sf(mapping = aes(fill = `Cooperative outlet (%)`, col = `Cooperative outlet (%)`), 
-          size = 1, shape = 22) + # 
+  ggplot(cells_toplot) +
+  geom_sf(mapping = aes(fill = `Cooperative outlet (%)`, col = `Cooperative outlet (%)`),
+          size = 1, shape = 22) + #
   scale_fill_manual(values = uni_in_bi_pal_outlet, breaks = bin_names, na.value = "transparent") +
   scale_colour_manual(values = uni_in_bi_pal_outlet, breaks = bin_names, na.value = "transparent") +
   
+   # geom_sf(mapping = aes(fill = CELL_SHARE_COOP, col = CELL_SHARE_COOP), 
+   #        size = 1, shape = 22) + # 
+  
+  geom_sf(data = coopbs22_sf, col = "black", size = 0.7) +
   geom_sf(data = departements, fill = "transparent", col = "black") +
   theme_bw() + 
   # theme(legend.title = "Predicted share of cooperative outlet") +
@@ -222,6 +242,7 @@ map =
   ) 
 
 map
+
 ggsave(
   plot = map,
   filename = paste0("cooperative_outlet.png"),
@@ -237,12 +258,16 @@ ggsave(
 Use biscale package. Different vignettes, including on available bivariate palettes here: 
 https://cran.r-project.org/web/packages/biscale/index.html
 
+Use palettes with blue: BlueGold, BlueYl (similar), BlueOr, DkViolet2
+
+#### Cocoa x share
+BlueYl
 ```{r}
-aoa_cells_toplot$CELL_COCOA_HA %>% summary()
+cells_toplot$CELL_COCOA_HA %>% summary()
 
 # This makes the bivariate bins
-aoa_cells_toplot = 
-  aoa_cells_toplot %>% 
+cells_toplot = 
+  cells_toplot %>% 
   bi_class(CELL_COCOA_HA,
             `Cooperative outlet (%)`, 
             dim = 3, 
@@ -251,7 +276,7 @@ aoa_cells_toplot =
 
 # This is just for display in the legend
 breaks = 
-  aoa_cells_toplot %>% 
+  cells_toplot %>% 
   bi_class_breaks(CELL_COCOA_HA,
                   `Cooperative outlet (%)`, 
                   dim = 3, 
@@ -261,53 +286,151 @@ breaks$bi_y = bin_names
 
 map =
   ggplot() +
-  geom_sf(data = aoa_cells_toplot, mapping = aes(fill = bi_class, col = bi_class), size = 1, shape = 22, # 22, 
+  geom_sf(data = cells_toplot, mapping = aes(fill = bi_class, col = bi_class), size = 1, shape = 22, # 22, 
           show.legend = FALSE) + # 
   geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
-  bi_scale_fill(pal = "GrPink2", dim = 3, na.value = "transparent") +
-  bi_scale_color(pal = "GrPink2", dim = 3, na.value = "transparent") +
+  geom_sf(data = coopbs22_sf, col = "black", size = 3) +
+  bi_scale_fill(pal = "BlueYl", dim = 3, na.value = "transparent") +
+  bi_scale_color(pal = "BlueYl", dim = 3, na.value = "transparent") +
   labs(
     title = "Cooperative outlet and cocoa extent",
     subtitle = ""
   ) +
   bi_theme()
 
-legend <- bi_legend(pal = "GrPink2",
+legend <- bi_legend(pal = "BlueYl",
                     dim = 3,
                     xlab = "Extent of cocoa farms (ha)",
                     ylab = "Cooperative outlet (%)",
                     size = 6, 
                     breaks = breaks)
 
-
-
-continous_aggregate_plot = 
+cocoa_bivplot = 
   ggdraw() +
   draw_plot(map, 0, 0, 1, 1) +
   draw_plot(legend, x = 0.7, y = 0.2, width = 0.3, height = 0.3)
 
-continous_aggregate_plot
+cocoa_bivplot
 ```
 
-
-Continuous productive
+#### Forest x share
+BlueOr
 ```{r}
-# # This is mainly for plotting purposes - not even actually, it's useless. 
-# table(cells$CELL_PRODUCTION_STATUS)
-# 
-# links = 
-#   links %>% 
-#   mutate(
-#     # Commented out since I don't know what this should be used for - to weights ! (not summing to 1)
-#     # across(.cols = contains("_PROBA_"), 
-#     #        .fns = ~ .x  * CELL_COCOA_SHARE, 
-#     #        .names = paste0("{.col}", "_COCOA")), 
-#     CELL_SHARE_COOP_SIGNI_COCOA = CELL_SHARE_COOP_SIGNI * CELL_COCOA_SHARE
-#   )
-# 
-# links %>% select(ends_with("_COCOA")) %>% names()
+cells_toplot$CELL_FOREST_HA %>% summary()
 
+# This makes the bivariate bins
+cells_toplot = 
+  cells_toplot %>% 
+  bi_class(CELL_FOREST_HA,
+            `Cooperative outlet (%)`, 
+            dim = 3, 
+            style = "quantile", 
+                  dig_lab = 9)
+
+# This is just for display in the legend
+breaks = 
+  cells_toplot %>% 
+  bi_class_breaks(CELL_FOREST_HA,
+                  `Cooperative outlet (%)`, 
+                  dim = 3, 
+                  style = "quantile", 
+                  dig_lab = 4) 
+breaks$bi_y = bin_names
+
+map =
+  ggplot() +
+  geom_sf(data = cells_toplot, mapping = aes(fill = bi_class, col = bi_class), size = 1, shape = 22, # 22, 
+          show.legend = FALSE) + # 
+  geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
+  bi_scale_fill(pal = "BlueOr", dim = 3, na.value = "transparent") +
+  bi_scale_color(pal = "BlueOr", dim = 3, na.value = "transparent") +
+  labs(
+    title = "Cooperative outlet and forest extent",
+    subtitle = ""
+  ) +
+  bi_theme()
+
+legend <- bi_legend(pal = "BlueOr",
+                    dim = 3,
+                    xlab = "Extent of forested land (ha)",
+                    ylab = "Cooperative outlet (%)",
+                    size = 6, 
+                    breaks = breaks)
+
+forest_bivplot = 
+  ggdraw() +
+  draw_plot(map, 0, 0, 1, 1) +
+  draw_plot(legend, x = 0.7, y = 0.2, width = 0.3, height = 0.3)
+
+forest_bivplot
 ```
+
+#### Potentially sustainable x share
+DkViolet2
+```{r}
+cells_toplot$CELL_NODEF_EXPANSION_HA %>% summary()
+
+# This makes the bivariate bins
+cells_toplot = 
+  cells_toplot %>% 
+  bi_class(CELL_NODEF_EXPANSION_HA,
+            `Cooperative outlet (%)`, 
+            dim = 3, 
+            style = "quantile", 
+                  dig_lab = 9)
+
+# This is just for display in the legend
+breaks = 
+  cells_toplot %>% 
+  bi_class_breaks(CELL_NODEF_EXPANSION_HA,
+                  `Cooperative outlet (%)`, 
+                  dim = 3, 
+                  style = "quantile", 
+                  dig_lab = 4) 
+breaks$bi_y = bin_names
+
+map =
+  ggplot() +
+  geom_sf(data = cells_toplot, mapping = aes(fill = bi_class, col = bi_class), size = 1, shape = 22, # 22, 
+          show.legend = FALSE) + # 
+  geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
+  bi_scale_fill(pal = "DkViolet2", dim = 3, na.value = "transparent") +
+  bi_scale_color(pal = "DkViolet2", dim = 3, na.value = "transparent") +
+  labs(
+    title = "Cooperative outlet and land for potentially sustainable cocoa expansion",
+    subtitle = ""
+  ) +
+  bi_theme()
+
+legend <- bi_legend(pal = "DkViolet2",
+                    dim = 3,
+                    xlab = "Extent of available land (ha)",
+                    ylab = "Cooperative outlet (%)",
+                    size = 6, 
+                    breaks = breaks)
+
+avb_bivplot = 
+  ggdraw() +
+  draw_plot(map, 0, 0, 1, 1) +
+  draw_plot(legend, x = 0.7, y = 0.2, width = 0.3, height = 0.3)
+
+avb_bivplot
+```
+
+#### Past CD x share
+Bluegill
+
+#### Multi-panel plot
+```{r}
+ggarrange(
+  cocoa_bivplot, 
+  forest_bivplot,
+  avb_bivplot,
+  
+)
+```
+
+
 
 
 ### Discrete map 
@@ -319,19 +442,19 @@ Continuous productive
 links = 
   links %>% 
   mutate(
-    CELL_SOURCING_SHED_ONLY = CELL_SHARE_COOP_SIGNI > 0, 
+    CELL_SOURCING_SHED_ONLY = CELL_SHARE_COOP > 0, 
      # This is where no cocoa is estimated to be sold to coops, but independent of that, some links with coops are predicted to exist (they pass the threshold). 
-    CELL_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP_SIGNI == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0, 
+    CELL_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0, 
     
     # Productive sourcing sheds: actual, influential and outside 
-    CELL_PRODUCTIVE_SOURCING_SHED_ONLY = CELL_SHARE_COOP_SIGNI > 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE", 
-    CELL_PRODUCTIVE_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP_SIGNI == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE",
-    CELL_PRODUCTIVE_OUTSIDE = CELL_SHARE_COOP_SIGNI == 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE", 
+    CELL_PRODUCTIVE_SOURCING_SHED_ONLY = CELL_SHARE_COOP > 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE", 
+    CELL_PRODUCTIVE_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE",
+    CELL_PRODUCTIVE_OUTSIDE = CELL_SHARE_COOP == 0 & CELL_PRODUCTION_STATUS == "PRODUCTIVE", 
     
     # Prospective sourcing sheds: actual, influential and outside 
-    CELL_PROSPECTIVE_SOURCING_SHED_ONLY = CELL_SHARE_COOP_SIGNI > 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
-    CELL_PROSPECTIVE_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP_SIGNI == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
-    CELL_PROSPECTIVE_OUTSIDE = CELL_SHARE_COOP_SIGNI == 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
+    CELL_PROSPECTIVE_SOURCING_SHED_ONLY = CELL_SHARE_COOP > 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
+    CELL_PROSPECTIVE_INFLUENCE_SHED_ONLY = CELL_SHARE_COOP == 0 & LINK_PROBA_THRESH_NORMED_CELLMAX > 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
+    CELL_PROSPECTIVE_OUTSIDE = CELL_SHARE_COOP == 0 & CELL_PRODUCTION_STATUS == "PROSPECTIVE", 
 
     
     `Sourcing shed type` = case_when(
