@@ -180,13 +180,13 @@ save_kable(out_tbl, here("outputs", "aggregate_sheds", "LU_in_out.png"))
 ```
 
 
-### Univariate map 
+### Univariate map
 Decide to have 3 or 4 bins in the end, based on final data. 
 ```{r}
-cells_toplot$CELL_COCOA_SHARE %>% summary()
-cells_toplot$CELL_COCOA_HA %>% summary()
-cells_toplot$CELL_SHARE_COOP %>% summary()
-cells_toplot$CELL_SHARE_COOP %>% quantile(seq(0, 1, 0.1), na.rm = T)
+# cells_toplot$CELL_COCOA_SHARE %>% summary()
+# cells_toplot$CELL_COCOA_HA %>% summary()
+# cells_toplot$CELL_SHARE_COOP %>% summary()
+# cells_toplot$CELL_SHARE_COOP %>% quantile(seq(0, 1, 0.1), na.rm = T)
 
 cells_toplot = 
   cells_toplot %>% 
@@ -243,13 +243,13 @@ map =
 
 map
 
-ggsave(
-  plot = map,
-  filename = paste0("cooperative_outlet.png"),
-  path = here("outputs", "aggregate_sheds"), 
-  width = 25, 
-  height = 20,
-  units = "cm")
+# ggsave(
+#   plot = map,
+#   filename = paste0("cooperative_outlet.png"),
+#   path = here("outputs", "aggregate_sheds"), 
+#   width = 25, 
+#   height = 20,
+#   units = "cm")
 ```
 
 
@@ -502,3 +502,66 @@ Use same coding as above, but with different bins and palettes
 
 
 ## Heuristics
+
+# Additional stuff 
+## Distance map
+
+```{r}
+cells_toplot = 
+  cells_toplot %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(civ_crs) 
+
+cells_toplot$CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS %>% summary()
+# Max share of coop outlet, rounded up for clean display
+max_dist = round(max(cells_toplot$CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, na.rm = TRUE)+5,-1)
+
+# Depending on final results, choose to show in 3 or 4 bins
+bin_names = c("0-15km", "15-45km", paste0("45-",max_dist,"km"))
+
+# Custom breaks bc we want the lowest bin to be 0 only. 
+cells_toplot$`Avg. distance 5 nearest coops (m)` = 
+  cut(cells_toplot$CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
+      right = FALSE, # implies [a, b[ intervals
+      # by default, right = TRUE means that intervals defined by breaks are closed on the right and open on the left. 
+      # We want the opposite, to include 0 on the left of the first interval.        
+      include.lowest = TRUE,
+      breaks = c(0,15000,45000,max_dist), 
+      labels = bin_names
+      )
+
+cells_toplot$`Avg. distance 5 nearest coops (m)` %>% table()
+
+# Make palette with same colors as in the bivariate map
+uni_in_bi_pal_outlet = 
+  bi_pal("PurpleOr", dim = 3, preview = F)
+uni_in_bi_pal_outlet = uni_in_bi_pal_outlet[grepl("1-", names(uni_in_bi_pal_outlet))]
+names(uni_in_bi_pal_outlet) = bin_names
+uni_in_bi_pal_outlet
+
+map =
+  ggplot(cells_toplot) +
+  geom_sf(mapping = aes(fill = `Avg. distance 5 nearest coops (m)`, col = `Avg. distance 5 nearest coops (m)`),
+          size = 1, shape = 22) + #
+  scale_fill_manual(values = uni_in_bi_pal_outlet, breaks = bin_names, na.value = "transparent") +
+  scale_colour_manual(values = uni_in_bi_pal_outlet, breaks = bin_names, na.value = "transparent") +
+  
+   # geom_sf(mapping = aes(fill = CELL_SHARE_COOP, col = CELL_SHARE_COOP), 
+   #        size = 1, shape = 22) + # 
+  
+  geom_sf(data = coopbs22_sf, col = "black", size = 0.7) +
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  # theme(legend.title = "Predicted share of cooperative outlet") +
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "Distance to cooperatives",
+    subtitle = ""
+  ) 
+
+map
+
+```
+
