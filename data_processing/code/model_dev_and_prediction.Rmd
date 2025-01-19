@@ -200,6 +200,15 @@ cells_actual$CELL_COCOA_HA %>%quantile(probs = seq(0.01,0.1,0.01))
 # 5% of the cells with actual links is a good threshold, because the cocoa area quantile corresponds to 5% of a cell area
 # (i.e., 80ha, since one cell is 1600ha)
 
+cells = 
+  cells %>% 
+  mutate(tmp_value = TRUE, 
+         CELL_DISTRICT_NAME_ORG = CELL_DISTRICT_NAME) %>% # to be able to keep it, bc these non-ohe vars can be useful for summaries
+  pivot_wider(names_from = CELL_DISTRICT_NAME, 
+              names_prefix = "CELL_DISTRICT_",
+              values_from = tmp_value,  
+              values_fill = FALSE) 
+
 
 ```
 
@@ -235,7 +244,7 @@ links =
 cells = 
   cells %>% 
   # Remove the few cells that still fall in no district 
-  filter(!is.na(CELL_DISTRICT_NAME)) 
+  filter(!is.na(CELL_DISTRICT_NAME_ORG)) 
 
 links = 
   links %>% 
@@ -352,72 +361,77 @@ paste0("There are ",
 summary_data <- data.frame(
 Metric = c("Source", 
             "Year", 
-            "Spatial information", 
-            "Volume information", 
+            "Spatial information",
             "Villages", 
             "Farmers", 
             "Farmer-Buyer Links", 
                  "With cooperatives", 
                  "With other buyers", 
+            "Volume information", 
             "Buyers", 
                  "Cooperatives", 
                  "Other buyers"
-              ),
+           ),
   JRC = c(
-          "JRC", "2019", "Farm point", "Yes",
+          "JRC", "2019", "Farm point", 
           length(unique(jrcdata$PRO_VILLAGE_NAME)), 
           length(unique(jrcdata$PRO_ID)), 
           nrow(jrcdata), 
           nrow(filter(jrcdata, !is.na(COOP_BS_ID))), 
-          nrow(filter(jrcdata, !BUYER_IS_COOP)), 
+          nrow(filter(jrcdata, !BUYER_IS_COOP)),
+          "Yes",
           length(unique(jrcdata$BUYER_ACTUAL_LINK_ID)),
           length(unique(pull(filter(jrcdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(jrcdata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           ),
   SC = c(
-          "Sustain-Cocoa project", "2022", "Village point", "Yes",
+          "Sustain-Cocoa project", "2022", "Village point", 
           length(unique(scdata$PRO_VILLAGE_NAME)), 
-          length(unique(scdata$PRO_ID)), 
+          length(unique(scdata$PRO_ID)),
           nrow(scdata), 
           nrow(filter(scdata, !is.na(COOP_BS_ID))), 
-          nrow(filter(scdata, !BUYER_IS_COOP)), 
-          length(unique(scdata$BUYER_ACTUAL_LINK_ID)), 
-          length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
-          "Unknown"
+          nrow(filter(scdata, !BUYER_IS_COOP)),
+          "Yes", 
+          length(unique(scdata$BUYER_ACTUAL_LINK_ID)),
+          length(unique(scdata$BUYER_ACTUAL_LINK_ID)), # repeat the count in links. This other way to count does not count coops that are not in IC2B: length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
+          "NA"
           ),
   KIT = c(
-          "Bymolt et al. 2018", "2017", "Village point", "Yes",
+          "Bymolt et al. 2018", "2017", "Village point",
           length(unique(kitdata$PRO_VILLAGE_NAME)), 
           length(unique(kitdata$PRO_ID)), 
           nrow(kitdata), 
           nrow(filter(kitdata, BUYER_IS_COOP)), 
           nrow(filter(kitdata, !BUYER_IS_COOP)), 
-          "Unknown", 
-          "Unknown",
-          "Unknown"
+          "Yes",
+          "NA", 
+          "NA",
+          "NA"
             ),
   CARGILL = c(
-          "Online repository", "2019", "Farm polygon", "No",
-          "Unknown", 
+          "Online repository", "2019", "Farm polygon", 
+          "NA", # don't know the number of villages
           length(unique(cargilldata$PRO_ID)), 
-          nrow(cargilldata), 
           nrow(filter(cargilldata, !is.na(COOP_BS_ID))), 
-          nrow(filter(cargilldata, !BUYER_IS_COOP)), 
-          length(unique(cargilldata$BUYER_ACTUAL_LINK_ID)), 
+          length(unique(cargilldata$BUYER_ACTUAL_LINK_ID)),
+          nrow(filter(cargilldata, !BUYER_IS_COOP)),
+          "No",
+          length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           )
 ) 
 colnames(summary_data) = c(" ", "JRC Data", "SC Data", "KIT Data", "Cargill Data")
 
+summary_data
 
 # Create table with kableExtra and add indentation
 table <- summary_data %>%
   kbl() %>%
   kable_styling(bootstrap_options = c("striped", "hover", "responsive")) %>%
   
+  row_spec(7, extra_css = "padding-left: 20px;") %>%
   row_spec(8, extra_css = "padding-left: 20px;") %>%
-  row_spec(9, extra_css = "padding-left: 20px;") %>%
   row_spec(11, extra_css = "padding-left: 20px;") %>%
   row_spec(12, extra_css = "padding-left: 20px;")
 
@@ -711,6 +725,25 @@ exp_design = "fs+mb" #bt(fs+mb,100)
 stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
 dir.create(stage1_expdes_repo)
 
+# PREDICTORS
+
+# Identify predictors with no variance to exclude them
+# E.g.: 
+stg1_development$CELL_PROP_COOP_SSI_ECOM %>% summary()
+
+stg1_development_nocharcol = 
+  stg1_development %>% 
+  select_if(~!is.character(.)) %>% 
+  select(-CELL_DATA_SOURCE)
+ 
+stg1_features_toexclude = 
+names(stg1_development_nocharcol)[map_lgl(stg1_development_nocharcol, 
+                                function(x){
+                                  var(x, na.rm = TRUE) == 0 |
+                                  all(is.na(x))
+                                })]
+# stg1_development %>% select(all_of(stg1_features_toexclude)) %>% View()
+
 # Formula, for all models: 
 anyNA(stg1_development)
 # names(cells)
@@ -727,9 +760,11 @@ stg1_allfeatures =
     (starts_with("CELL_AVG_") & !ends_with("_HA")) | 
     contains("SETTLEMENT")                         |
     starts_with("CELL_PROP_")                      | 
+    # starts_with("CELL_DISTRICT_")                  |
     starts_with("CELL_COUNT_"),
     # some corrections/additions
     -CELL_PROP_VOLUME_COOPS, -CELL_PROP_VOLUME_OTHERS,
+    # - CELL_DISTRICT_NAME_ORG, -CELL_DISTRICT_GEOCODE,
     
     CELL_TRI_MM, CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_MIN_DISTANCE_METERS, CELL_MIN_TRAVEL_METERS
   ) %>%
@@ -737,6 +772,12 @@ stg1_allfeatures =
 
 # Include coop-level features summarised at the 1 nearest, the 5 nearest and the whole-coop levels. This increases the simple fit performance from an OOB R2 of .17 (with only summaries at 5 nearest coop-level) to .24  names()  
   
+#Exclude features with no variance
+stg1_allfeatures %>% length()
+stg1_allfeatures = 
+  stg1_allfeatures[!stg1_allfeatures %in% stg1_features_toexclude]
+stg1_allfeatures %>% length()
+
 # Restricted list of more exogenous features regarding the further applications of the model. 
 # This excludes SSI and certification related variables, as well as the number of known buyers. 
 stg1_exofeatures = 
@@ -758,7 +799,7 @@ The first stage has `r length(stg1_allfeatures)` potential features, `r length(s
 This is simple because it does not do feature selection nor optimize hyper-parameters.
 ```{r}
 stg1_mfit = ranger(data = stg1_development, 
-                   splitrule="beta",
+                   # splitrule="beta",
                    importance = 'permutation',
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
                    formula = stg1_formula_allfeatures, 
@@ -780,6 +821,9 @@ print(stg1_mfit)
 ### CARET
 ```{r}
 # MAIN MODEL NOW 
+# Tourne en 16h, mais je pense que ça tournait pas pendant le gros de la nuit, 
+# donc plutôt une grosse heure? 
+
 cl <- makePSOCKcluster(detectCores() - 1)
 registerDoParallel(cl)
 getDoParWorkers()
@@ -791,12 +835,12 @@ model1_rfe <-
         trControl = trainControl(method="boot632", number = 100),
         method = "ranger", 
         importance="permutation", 
-        tuneLength=5,
-        sizes = c(5, 10, 50, 90), # tell caret how many different feature subset sizes to try
+        tuneLength=15,
+        sizes = c(5, 10, 20, 30, 40, 50, 60, 70), # tell caret how many different feature subset sizes to try. DOes not need to include the total, which is tried out automatically. 
         rfeControl = rfeControl(method = "repeatedcv",
                               			repeats = 5, 
                               			number = 5,
-                              			functions = caretFuncs))
+                              			functions = caretFuncs)) #"The latter is useful if the model has tuning parameters that must be determined at each iteration."
 
 model1_rfe   # Have a look at the output
 model1_rfe$optVariables   # What features got picked?
@@ -808,12 +852,25 @@ registerDoSEQ()
 model1_rfe$fit
 
 saveRDS(model1_rfe, 
-        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_5tuneL_sizes5-10-50-90_repeatedcv5x5"))
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))
 
 ```
 
 Tests
 ```{r}
+# RFE above: 
+# These are not the same, for some reason
+impvar1 = varImp(model1_rfe) %>% row.names() 
+t_impvar1 = varImp(model1_rfe) %>% filter(Overall>0) %>% row.names() 
+
+impvar2 = varImp(model1_rfe$fit)$importance %>% row.names()
+t_impvar2 = varImp(model1_rfe$fit)$importance %>% filter(!duplicated(Overall) & !duplicated(Overall, fromLast = T) ) %>% row.names()
+
+all.equal(impvar1, impvar2)
+all.equal(t_impvar1, t_impvar2)
+
+# But use model1_rfe$fit as the reference. 
+
 # 400 boostraps prend quand même ~1h+ ! 
 # library(doParallel)
 cl <- makePSOCKcluster(detectCores() - 1)
@@ -1294,7 +1351,7 @@ model2
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 # Read caret model 
-model1_caret_rf100 = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_rf_100boot632_5tuneL"))
+model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_5tuneL_sizes5-10-50-90_repeatedcv5x5"))
 
 # All 1st stage models have been written by familiar in 
 stage1_expdes_repo
@@ -1562,24 +1619,23 @@ Moreover, we report here on the Novelty of cells and links in (and out of) the p
 ```{r}
 # Requires the model to be trained with caret, with cross-validation and not bootstraps
 set.seed(8888)
+all_or_used_features = model1_rfe$optVariables # model1@required_features #stg1_allfeatures #
 
-all_or_used_features = model1@required_features #stg1_allfeatures # 
-
-model1_caret_cv = 
-  train(
-    x = stg1_development %>% select(all_of(all_or_used_features)), 
-    y = stg1_development$CELL_PROP_VOLUME_COOPS, 
-    method="rf", 
-    importance=TRUE, 
-    tuneLength=1,
-    trControl=trainControl(method="cv",number=5,savePredictions=T)
-  )
-
-model1_caret_cv$results
+# This is if we model 1st stage with a package/function that does not work with AOA 
+# model1_caret_cv = 
+#   train(
+#     x = stg1_development %>% select(all_of(all_or_used_features)), 
+#     y = stg1_development$CELL_PROP_VOLUME_COOPS, 
+#     method="rf", 
+#     importance=TRUE, 
+#     tuneLength=1,
+#     trControl=trainControl(method="cv",number=5,savePredictions=T)
+#   )
+# model1_caret_cv$results
 
 aoa1 = 
   aoa(newdata = cells %>% select(all_of(all_or_used_features)),
-      model = model1_caret_cv)
+      model = model1_rfe$fit$finalModel)
 
 cells$CELL_IS_IN_AOA = if_else(aoa1$AOA == 1, TRUE, FALSE)
 
