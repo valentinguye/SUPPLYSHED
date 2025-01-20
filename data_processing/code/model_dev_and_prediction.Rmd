@@ -1351,7 +1351,7 @@ model2
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 # Read caret model 
-model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_5tuneL_sizes5-10-50-90_repeatedcv5x5"))
+model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))
 
 # All 1st stage models have been written by familiar in 
 stage1_expdes_repo
@@ -1449,6 +1449,8 @@ ggsave(
 
 ## 2nd stage
 ```{r}
+model2_caret_xgb$pred %>% View()
+
 # Access resampling results
 resamples <- model2_caret_xgb$resample
 
@@ -1619,7 +1621,8 @@ Moreover, we report here on the Novelty of cells and links in (and out of) the p
 ```{r}
 # Requires the model to be trained with caret, with cross-validation and not bootstraps
 set.seed(8888)
-all_or_used_features = model1_rfe$optVariables # model1@required_features #stg1_allfeatures #
+all_or_used_features = varImp(model1_rfe$fit)$importance %>% row.names()
+  # model1_rfe$optVariables # model1@required_features #stg1_allfeatures #
 
 # This is if we model 1st stage with a package/function that does not work with AOA 
 # model1_caret_cv = 
@@ -1635,7 +1638,7 @@ all_or_used_features = model1_rfe$optVariables # model1@required_features #stg1_
 
 aoa1 = 
   aoa(newdata = cells %>% select(all_of(all_or_used_features)),
-      model = model1_rfe$fit$finalModel)
+      model = model1_rfe$fit)
 
 cells$CELL_IS_IN_AOA = if_else(aoa1$AOA == 1, TRUE, FALSE)
 
@@ -1795,7 +1798,7 @@ links_topredict =
 ```{r}
 # This is the point estimate from the ensemble of models 
 tic()
-cells_topredict$CELL_SHARE_COOP = predict(model1, newdata = cells_topredict)$predicted_outcome
+cells_topredict$CELL_SHARE_COOP = predict(model1_rfe$fit, newdata = cells_topredict)# add $predicted_outcome if model1 is a familiar model
 toc()
 # From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
 
@@ -1811,7 +1814,7 @@ set.seed(8888)
 
 model1_caret_cv = 
   train(
-    x = stg1_development %>% select(all_of(model1@required_features)), # %>% select(stg1_allfeatures),# 
+    x = stg1_development %>% select(all_of(all_or_used_features)), 
     y = stg1_development$CELL_PROP_VOLUME_COOPS, 
     method="rf", 
     importance=TRUE, 
@@ -1820,29 +1823,33 @@ model1_caret_cv =
   )
 model1_caret_cv
 
-cells_topredict$CELL_SHARE_COOP_CARET = predict(model1_caret_cv, newdata = cells_topredict)
+cells_topredict$CELL_SHARE_COOP_SIMPLECV = predict(model1_caret_cv, newdata = cells_topredict)
 
-model1_caret_boot632 = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_rf_100boot632_5tuneL"))
+# model1_caret_boot632 = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_rf_100boot632_5tuneL"))
 
-cells_topredict$CELL_SHARE_COOP_CARET_finalModel = predict(model1_caret_boot632$finalModel, newdata = cells_topredict %>% select(stg1_allfeatures))
+cells_topredict$CELL_SHARE_COOP_RFE_finalModel = 
+  predict(model1_rfe$fit$finalModel, data = cells_topredict %>% select(all_or_used_features))$predictions
 
-cells_topredict$CELL_SHARE_COOP_CARET_boot632 = predict(model1_caret_boot632, newdata = cells_topredict)
-cells_topredict$CELL_SHARE_COOP_CARET_boot632_2 = predict(model1_caret_boot632, newdata = cells_topredict %>% select(stg1_allfeatures))
+cells_topredict$CELL_SHARE_COOP_RFE = 
+  predict(model1_rfe$fit, newdata = cells_topredict %>% select(all_or_used_features))
 
-cells_topredict$CELL_SHARE_COOP_CARET_rfe = predict(model1_rfe$fit, newdata = cells_topredict)
+# cells_topredict$CELL_SHARE_COOP_CARET_boot632 = predict(model1_caret_boot632, newdata = cells_topredict)
+# cells_topredict$CELL_SHARE_COOP_CARET_boot632_2 = predict(model1_caret_boot632, newdata = cells_topredict %>% select(stg1_allfeatures))
+
+
 # EXACTEMENT LES MM PREDICTIONS AVEC FINALMODEL OU L'OBJET BOOTSTRAP
-cells_topredict$CELL_SHARE_COOP_CARET %>% summary()
-cells_topredict$CELL_SHARE_COOP_CARET_finalModel %>% summary()
-cells_topredict$CELL_SHARE_COOP_CARET_boot632 %>% summary()
-cells_topredict$CELL_SHARE_COOP_CARET_boot632_2 %>% summary()
+cells_topredict$CELL_SHARE_COOP_RFE_finalModel %>% summary()
+cells_topredict$CELL_SHARE_COOP_RFE %>% summary()
 cells_topredict$CELL_SHARE_COOP_CARET_rfe %>% summary()
+# cells_topredict$CELL_SHARE_COOP_CARET_boot632 %>% summary()
+# cells_topredict$CELL_SHARE_COOP_CARET_boot632_2 %>% summary()
 
-cor.test(cells_topredict$CELL_SHARE_COOP_CARET,
-         cells_topredict$CELL_SHARE_COOP_CARET_finalModel)
-cor.test(cells_topredict$CELL_SHARE_COOP_CARET_finalModel,
-         cells_topredict$CELL_SHARE_COOP_CARET_boot632)
-cor.test(cells_topredict$CELL_SHARE_COOP_CARET_boot632,
-         cells_topredict$CELL_SHARE_COOP_CARET_rfe)
+cor.test(cells_topredict$CELL_SHARE_COOP_RFE_finalModel,
+         cells_topredict$CELL_SHARE_COOP_RFE)
+# cor.test(cells_topredict$CELL_SHARE_COOP_CARET_finalModel,
+#          cells_topredict$CELL_SHARE_COOP_CARET_boot632)
+# cor.test(cells_topredict$CELL_SHARE_COOP_CARET_boot632,
+#          cells_topredict$CELL_SHARE_COOP_CARET_rfe)
 
 stg1_mfit = ranger(data = stg1_development, 
                    importance = 'permutation',
@@ -1853,6 +1860,9 @@ stg1_mfit = ranger(data = stg1_development,
 print(stg1_mfit)
 cells_topredict$CELL_SHARE_COOP_RANGER = predict(stg1_mfit, data = cells_topredict)$predictions
 cells_topredict$CELL_SHARE_COOP_RANGER %>% summary()
+
+cor.test(cells_topredict$CELL_SHARE_COOP_RANGER,
+         cells_topredict$CELL_SHARE_COOP_RFE)
 
 # Compare predictions and observation in development data 
 # cells_topredict %>% 
