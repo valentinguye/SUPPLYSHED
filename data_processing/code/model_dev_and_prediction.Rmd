@@ -259,7 +259,9 @@ links =
   filter(!LINK_IS_ACTUAL_OTHER) %>% 
   # Remove empty links that only represent cells from where no coop is reachable. 
   # We are not interested in describing, learning from, or predicting in these cells. We will recollect them post-estimation
-  filter(!CELL_NO_POTENTIAL_LINK)
+  filter(!CELL_NO_POTENTIAL_LINK) # %>% 
+  # remove  
+  # summarise(.by = LINK_POTENTIAL_COOP_BS_ID, CELL_ID)
 
 stopifnot(links %>% 
             filter(!LINK_IS_VIRTUAL) %>% nrow() == sum(links$LINK_IS_ACTUAL_COOP))
@@ -512,15 +514,21 @@ coops_toplot = coops_toplot %>% arrange(desc(Source))
 map_links = 
   ggplot() +
     geom_sf(data = df, aes(col = Source), size = 5) + #, shape = 15
-    geom_sf(data = coops_toplot, aes(col = Source, size = `Cooperative with observed link`)) +
+    geom_sf(data = coops_toplot, aes(col = Source, 
+                                     size  = `Cooperative with observed link`,
+                                     shape = `Cooperative with observed link`)) +
     
     scale_colour_manual(
         values = c("skyblue", "purple", "darkgreen"), 
         na.value = "black") +
 
     scale_size_manual(
-      values = c("Yes" = 1, 
-                 "No" = 0.1)
+      values = c("Yes" = 2, 
+                 "No" = 0.8)
+    ) +
+    scale_shape_manual(
+      values = c("Yes" = 16, 
+                 "No" = 3)
     ) +
   geom_sf(data = departements, fill = "transparent", col = "black") +
   
@@ -1449,7 +1457,7 @@ ggsave(
 
 ## 2nd stage
 ```{r}
-model2_caret_xgb$pred %>% View()
+model2_caret_xgb
 
 # Access resampling results
 resamples <- model2_caret_xgb$resample
@@ -1763,6 +1771,8 @@ cells$CELL_NOVELTY %>% summary()
 
 
 ## Prediction sets
+
+### Cells
 /!/ FROM THERE WE WORK ONLY ON CELLS IN THE PREDICTION SET 
 (we had kept the cells out of AOA and with no potential links until now for the purpose of doing the above map)
 ```{r}
@@ -1772,11 +1782,16 @@ cells_topredict =
   cells %>% 
   filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
 
+```
+
+### Links
+```{r}
+
+# Predict link existence only for cells in the AOA   
 links = 
   links %>%
   left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
             by = "CELL_ID")
-
 
 # Should it be the under-sampled data rather here? NO, I don't think so. We DO want to make predictions for all virtual links! 
 links_topredict =
@@ -1784,7 +1799,39 @@ links_topredict =
   filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
 
 
+# Aggregate links connecting a cell to a coop, to have one row per cell-coop pair. 
+# Multiple links exist because there may be links from different producers of a cell 
+# and/or to different buying stations of a coop.  
+
+# The variables to aggregate are distance vars, which differ across both producers and BS, 
+# and other BS-specific attributes 
+links %>% select(starts_with("COOP_BS_")) %>% names()
+links %>% select(starts_with("LINK_")) %>% names()
+
+links_topredict = 
+  links_topredict %>% 
+  summarise(.by = c(CELL_ID, LINK_POTENTIAL_COOP_ID), 
+          LINK_TRAVEL_MINUTES  = mean(LINK_TRAVEL_MINUTES, na.rm = TRUE),  
+          LINK_TRAVEL_METERS   = mean(LINK_TRAVEL_METERS, na.rm = TRUE),
+          LINK_DISTANCE_METERS = mean(LINK_DISTANCE_METERS, na.rm = TRUE),
+          across(.cols = starts_with("COOP_BS_"), .fns = ~mean(.x, na.rm = TRUE))
+          ) 
+# Even if the names of the summarised variables are not rigorously correct, do not change them, 
+# for the formula and model to still pick them. 
+
+links_topredict %>% select(starts_with("COOP_BS_")) %>% names()
+links_topredict %>% select(starts_with("LINK_")) %>% names()
+
+
+# links_topredict %>% 
+#   distinct(CELL_ID, 
+#            LINK_POTENTIAL_COOP_BS_ID, 
+#            PRO_ID,
+#            BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
+#   nrow() == nrow(links)
+
 ```
+
 
 ## Development/prediction balance tests
  
@@ -2231,14 +2278,11 @@ links %>%
 ```
 
 
-
-
-
 ## Normalisation (coop perspective)
 We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
 either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
 ```{r}
-# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted cocoa area in all sourcing sheds
+# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted LU area in all sourcing sheds
 
 
 ```

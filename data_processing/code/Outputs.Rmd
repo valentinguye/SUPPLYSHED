@@ -559,6 +559,24 @@ Use same coding as above, but with different bins and palettes
 
 # Individual sourcing sheds
 
+## Normalisation (coop perspective)
+We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
+either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
+```{r}
+# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted LU area in all sourcing sheds
+
+linked_coops = 
+  links %>% 
+  summarise(.by = LINK_POTENTIAL_COOP_ID, 
+            COOP_COCOA_HA = CELL_COCOA_HA * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED
+            
+            
+            
+            )
+```
+
+
+
 ## Hotspots
 
 

@@ -858,7 +858,7 @@ potential_all =
     CELL_ACTUAL_ONLYCOOP_LINK  = any(LINK_IS_ACTUAL_COOP)  & !any(LINK_IS_ACTUAL_OTHER),
     CELL_ACTUAL_ONLYOTHER_LINK = any(LINK_IS_ACTUAL_OTHER) & !any(LINK_IS_ACTUAL_COOP),
     CELL_ACTUAL_BOTH_LINK = any(LINK_IS_ACTUAL_OTHER) & any(LINK_IS_ACTUAL_COOP),
-    CELL_ACTUAL_LINK = any(LINK_IS_ACTUAL_OTHER) | any(LINK_IS_ACTUAL_COOP)
+    CELL_ACTUAL_LINK      = any(LINK_IS_ACTUAL_OTHER) | any(LINK_IS_ACTUAL_COOP)
   ) %>% 
   ungroup() %>% 
   select(CELL_ID, starts_with("CELL_"), starts_with("LINK_"), starts_with("COOP_"), 
@@ -1541,17 +1541,19 @@ rm(subsample_share, sc_coop_links, sc_coop_links_tokeep,
 
 ## Virtual links ------------------
 
-### Remove Cargill false negatives -------------------
+### Remove Cargill and JRC false negatives -------------------
+# We consider virtual links in JRC cells can be false negatives because there is 
+# a bias in that they surveyed the closer intermediaries with higher likelihood.  
 
 potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
   mutate(
-    CELL_HAS_FALSENEG = any(grepl("CARGILL_", PRO_ID)) & !(any(grepl("JRC_|SUSTAINCOCOA_", PRO_ID)))) %>% 
+    CELL_HAS_FALSENEG = any(grepl("CARGILL_|JRC_", PRO_ID)) & !(any(grepl("SUSTAINCOCOA_|KIT_", PRO_ID)))) %>% 
   ungroup() %>% 
   mutate(LINK_POSSIBLE_FALSENEG = CELL_HAS_FALSENEG & LINK_IS_VIRTUAL)
 
-if(potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(PRO_ID) %>% grepl(pattern = "JRC|SUSTAIN") %>% any()
+if(potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(PRO_ID) %>% grepl(pattern = "SUSTAINCOCOA|KIT_") %>% any()
 ){stop()}
 
 # keep working on the same object actually, because when aggregating to cells for 1st stage, 
@@ -1602,13 +1604,13 @@ potential_all %>%
 
 # Discard virtual links in cells with less than 4 farmers 
 # (but not in cells with 0 JRC farmers, these are all the others, 
-#  nor in cells where there could be a sustaincocoa village)
+#  nor in cells where there could be a sustaincocoa or a KIT village)
 potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
   mutate(
     LINK_JRC_POSSIBLE_FALSENEG = 
-      CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_", PRO_ID))), 
+      CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_|KIT_", PRO_ID))), 
   ) %>% 
   ungroup() %>% 
   # update the existing variable LINK_POSSIBLE_FALSENEG
@@ -1618,6 +1620,8 @@ potential_all =
       TRUE ~ LINK_POSSIBLE_FALSENEG
     )
   )
+
+# potential_all %>% filter(LINK_JRC_POSSIBLE_FALSENEG & !LINK_POSSIBLE_FALSENEG)
 
 potential_all %>% filter(LINK_POSSIBLE_FALSENEG) %>% View()
 potential_all %>% filter(CELL_ID == 385) %>% View()
@@ -1746,7 +1750,6 @@ rm(potential_all_save, potential)
 
 # 1ST STAGE DATA --------------
 potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
-
 
 ## Apply sub-sampling -------------
 # We apply only 1st stage sub-sampling. 
