@@ -1602,6 +1602,9 @@ potential_all %>%
             N_CELLS = length(unique(CELL_ID))) %>% 
   arrange(CELL_N_JRC_FARMERS)
 
+
+# The below does not change anything now that virtual links are removed for JRC cells above. 
+potential_all$LINK_POSSIBLE_FALSENEG %>% sum()
 # Discard virtual links in cells with less than 4 farmers 
 # (but not in cells with 0 JRC farmers, these are all the others, 
 #  nor in cells where there could be a sustaincocoa or a KIT village)
@@ -1620,6 +1623,7 @@ potential_all =
       TRUE ~ LINK_POSSIBLE_FALSENEG
     )
   )
+potential_all$LINK_POSSIBLE_FALSENEG %>% sum()
 
 # potential_all %>% filter(LINK_JRC_POSSIBLE_FALSENEG & !LINK_POSSIBLE_FALSENEG)
 

@@ -177,9 +177,9 @@ cells =
                                           "PROSPECTIVE", 
                                           "PRODUCTIVE"),
    # also compute the share of area under cocoa use, to use below
-   CELL_COCOA_SHARE = CELL_COCOA_HA / 1600, 
+   CELL_COCOA_SHARE = CELL_COCOA_HA / cell_area_ha, 
    # and of impossible land
-   CELL_IMPOSSIBLE_SHARE = CELL_IMPOSSIBLE_HA / 1600 
+   CELL_IMPOSSIBLE_SHARE = CELL_IMPOSSIBLE_HA / cell_area_ha 
  )
 table(cells$CELL_PRODUCTION_STATUS)
 
@@ -1112,7 +1112,7 @@ stg2_allfeatures =
     COOP_N_KNOWN_BS, 
     # starts_with("COOP_DISTRICT_"), -COOP_DISTRICT_NAME,
     starts_with("COOP_STATUS_"), 
-    COOP_BS_10KM_TRI,
+    COOP_BS_10KM_TRI, COOP_BS_10KM_SETTLEMENT_HA, 
     
     # More endogenous: 
     COOP_N_KNOWN_BUYERS, 
@@ -1794,7 +1794,7 @@ links =
             by = "CELL_ID")
 
 # Should it be the under-sampled data rather here? NO, I don't think so. We DO want to make predictions for all virtual links! 
-links_topredict =
+links_inaoa =
   links %>% 
   filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
 
@@ -1809,20 +1809,51 @@ links %>% select(starts_with("COOP_BS_")) %>% names()
 links %>% select(starts_with("LINK_")) %>% names()
 
 links_topredict = 
-  links_topredict %>% 
-  summarise(.by = c(CELL_ID, LINK_POTENTIAL_COOP_ID), 
-          LINK_TRAVEL_MINUTES  = mean(LINK_TRAVEL_MINUTES, na.rm = TRUE),  
-          LINK_TRAVEL_METERS   = mean(LINK_TRAVEL_METERS, na.rm = TRUE),
-          LINK_DISTANCE_METERS = mean(LINK_DISTANCE_METERS, na.rm = TRUE),
-          across(.cols = starts_with("COOP_BS_"), .fns = ~mean(.x, na.rm = TRUE))
-          ) 
-# Even if the names of the summarised variables are not rigorously correct, do not change them, 
-# for the formula and model to still pick them. 
+  links_inaoa %>% 
+  group_by(CELL_ID, LINK_POTENTIAL_COOP_ID) %>% 
+  mutate(
+    # Even if the names of the summarised variables are not rigorously correct, do not change them, 
+    # for the formula and model to still pick them. 
+    across(.cols = starts_with("COOP_BS_"), .fns = ~mean(.x, na.rm = TRUE)),
+    LINK_TRAVEL_MINUTES  = mean(LINK_TRAVEL_MINUTES, na.rm = TRUE),  
+    LINK_TRAVEL_METERS   = mean(LINK_TRAVEL_METERS, na.rm = TRUE),
+    LINK_DISTANCE_METERS = mean(LINK_DISTANCE_METERS, na.rm = TRUE)
+  ) %>% 
+  ungroup() %>% 
+  # The other variables should not vary within a cell-coop combination, and we can thus take the first occurring value. 
+  distinct(CELL_ID, LINK_POTENTIAL_COOP_ID, .keep_all = TRUE)
 
 links_topredict %>% select(starts_with("COOP_BS_")) %>% names()
 links_topredict %>% select(starts_with("LINK_")) %>% names()
 
-
+links_topredict_save = links_topredict
+# links_summarised = 
+#   links_inaoa %>% 
+#   summarise(.by = c(CELL_ID, LINK_POTENTIAL_COOP_ID), 
+#           # Don't select all COOP_BS_ variables to save some computation for now. 
+#           across(.cols = c(COOP_BS_10KM_TRI, COOP_BS_10KM_SETTLEMENT_HA), .fns = ~mean(.x, na.rm = TRUE)),
+#           LINK_TRAVEL_MINUTES  = mean(LINK_TRAVEL_MINUTES, na.rm = TRUE),  
+#           LINK_TRAVEL_METERS   = mean(LINK_TRAVEL_METERS, na.rm = TRUE),
+#           LINK_DISTANCE_METERS = mean(LINK_DISTANCE_METERS, na.rm = TRUE)
+#           ) 
+# nrow(links_summarised)
+# links_unique = 
+#   links_inaoa %>% 
+#   # select(starts_with("LINK_"), all_of(model2_caret_xgb$finalModel$feature_names)) %>% 
+#   select(!any_of(names(links_summarised))) %>% names()
+#   distinct(CELL_ID, LINK_POTENTIAL_COOP_ID, .keep_all = TRUE)
+# 
+# rm(links_inaoa)
+# 
+# stopifnot(nrow(links_summarised) == nrow(links_unique))
+# 
+# links_topredict = 
+#   inner_join(
+#     links_summarised, 
+#     links_unique,
+#     .by = c("CELL_ID", "LINK_POTENTIAL_COOP_ID"))
+#   
+# stopifnot(nrow(links_topredict) == nrow(links_unique))
 # links_topredict %>% 
 #   distinct(CELL_ID, 
 #            LINK_POTENTIAL_COOP_BS_ID, 
@@ -1832,12 +1863,6 @@ links_topredict %>% select(starts_with("LINK_")) %>% names()
 
 ```
 
-
-## Development/prediction balance tests
- 
-```{r}
-
-```
 
 
 ## 1st stage
@@ -1917,8 +1942,8 @@ cor.test(cells_topredict$CELL_SHARE_COOP_RANGER,
 #   mutate(CELL_PROP_VOLUME_COOPS)
 
 ```
-#### Compare familiar to other packages 
-in terms of predictions 
+
+Compare familiar to other packages in terms of predictions 
 ```{r}
 cells_topredict = 
   cells_topredict %>% 
@@ -2062,7 +2087,7 @@ nrow(cells_un) / nrow(cells_topredict_nest)
 ```
 
 
-### Determinist prediction
+Determinist prediction - deprecated since now the prediction set does not have these cells. 
 This is just where we are sure that cocoa can be sold to a cooperative because there is no coop. 
 ```{r}
 # cells_topredict =
@@ -2077,6 +2102,7 @@ This is just where we are sure that cocoa can be sold to a cooperative because t
 
 
 ## 2nd stage
+### Main prediction
 ```{r}
 # Predict the existence that a link exists
 tic()
@@ -2088,11 +2114,6 @@ toc()
 # From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
 
 links_topredict$LINK_PROBA %>% summary()
-
-links = 
-  links %>% 
-  left_join(links_topredict %>% select(LINK_ID, LINK_PROBA), 
-            by = "LINK_ID")
 
 ```
 
@@ -2112,188 +2133,181 @@ optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.
   head(1) %>% 
   pull(prob_threshold))
 
-links = 
-  links %>% 
+links_topredict = 
+  links_topredict %>% 
   mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 
                                      0, 
                                      LINK_PROBA)) # returns NA for NA probas (!AoA)
 ```
 
-
-### Determinist prediction
-This is just where we are sure that no link can exist because there is no coop. 
+### Heuristics
 ```{r}
-links =
-  links %>% 
-  mutate(LINK_PROBA_THRESH = if_else(CELL_NO_POTENTIAL_LINK, 
-                              0, 
-                              LINK_PROBA_THRESH)) # it could also be 1 here, since we normalise then. But keep some variation between links with a positive proba. 
+links_topredict = 
+  links_topredict %>% 
+  mutate(
+    LINK_PROBA_H10KM = if_else(
+      LINK_DISTANCE_METERS <= 10*1e3, 1, 0),
+    LINK_PROBA_H30KM = if_else(
+      LINK_DISTANCE_METERS <= 30*1e3, 1, 0),
+    LINK_PROBA_H60KM = if_else(
+      LINK_DISTANCE_METERS <= 60*1e3, 1, 0), 
+    LINK_PROBA_HDISTR = if_else(
+      CELL_DISTRICT_NAME == COOP_DISTRICT_NAME, 1, 0)
+  )
 
-# After this, the number of links that are NA is 297074
-links$LINK_PROBA_THRESH %>% summary()
-# which is the same as the number of links in cells_topredict outside the AoA. 
-n_links_outside_aoa = nrow(filter(links, !CELL_IS_IN_AOA)) 
-
-stopifnot(
-  links %>% filter(is.na(LINK_PROBA_THRESH)) %>% nrow() ==  n_links_outside_aoa
-)
-
-
-links$LINK_PROBA %>% quantile(seq(0.99, 1, 0.001), na.rm = T)
-links$LINK_PROBA_THRESH %>% quantile(seq(0.999, 1, 0.0001), na.rm = T)
+links_topredict$LINK_PROBA_H10KM %>% summary()
+links_topredict$LINK_PROBA_H30KM %>% summary()
+links_topredict$LINK_PROBA_H60KM %>% summary()
+links_topredict$LINK_PROBA_HDISTR %>% summary()
 
 ```
 
 
+Determinist prediction - deprecated since now the prediction set does not have these cells. 
+This is just where we are sure that no link can exist because there is no coop. 
+```{r}
+# links_topredict =
+#   links_topredict %>% 
+#   mutate(LINK_PROBA_THRESH = if_else(CELL_NO_POTENTIAL_LINK, 
+#                               0, 
+#                               LINK_PROBA_THRESH)) # it could also be 1 here, since we normalise then. But keep some variation between links_topredict with a positive proba. 
+# 
+# # After this, the number of links_topredict that are NA is 297074
+# links_topredict$LINK_PROBA_THRESH %>% summary()
+# # which is the same as the number of links_topredict in cells_topredict outside the AoA. 
+# n_links_outside_aoa = nrow(filter(links_topredict, !CELL_IS_IN_AOA)) 
+# 
+# stopifnot(
+#   links_topredict %>% filter(is.na(LINK_PROBA_THRESH)) %>% nrow() ==  n_links_outside_aoa
+# )
+# 
+# 
+# links_topredict$LINK_PROBA %>% quantile(seq(0.99, 1, 0.001), na.rm = T)
+# links_topredict$LINK_PROBA_THRESH %>% quantile(seq(0.999, 1, 0.0001), na.rm = T)
+
+```
+
+
+```{r}
+saveRDS(links_topredict, 
+        here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
+
+links_topredict = readRDS(here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
+```
 
 
 
 # POST-PROCESSING 
-
-## Unconditional probabilities
-Here we multiply probabilities predicted in each stage by each other and/or by the share of cocoa presence. 
 This is all at the Links level. 
-There are several combinations, yielding different interpretations: 
+
+Unconditional probabilities
+It is not necessary to work on unconditional probabilities.
+It is strictly equivalent to uncondition before or after normalising, since unconditioning is multiplying by a cell-level quantity. 
+Hence, we join the cell's share of coop outlet, but we don't factor it yet. 
 
 ```{r}
-links_beforepost = links
-
-links = 
-  links %>% 
+links_topredict = 
+  links_topredict %>% 
   left_join(
     cells_topredict %>% select(CELL_SHARE_COOP, CELL_ID), 
     by = "CELL_ID"
   ) 
 
-links = 
-  links %>% 
-  mutate(
-    LINK_UNCOND_PROBA = CELL_SHARE_COOP * LINK_PROBA, # include this just for exploration. 
-    LINK_UNCOND_PROBA_THRESH = CELL_SHARE_COOP * LINK_PROBA_THRESH
-  )
+# links_topredict = 
+#   links_topredict %>% 
+#   mutate(
+#     LINK_UNCOND_PROBA = CELL_SHARE_COOP * LINK_PROBA, # include this just for exploration. 
+#     LINK_UNCOND_PROBA_THRESH = CELL_SHARE_COOP * LINK_PROBA_THRESH
+#   )
 
 ```
 
 
 
-## Normalisation (cell perspective)
-We do it after unconditioning, to normalise unconditional probabilities too. 
-```{r}
-    # Work non-thresholded proba for now, but we will surely not keep them. 
+## Normalisation - cell perspective
+Normalise heuristic probabilities as well. 
 
-links = 
-  links %>% 
+```{r}
+links_topredict = 
+  links_topredict %>% 
   group_by(CELL_ID) %>% 
   mutate(
     CELL_NORMSUM_THRESH = sum(LINK_PROBA_THRESH), 
-    CELL_UNCOND_NORMSUM_THRESH = sum(LINK_UNCOND_PROBA_THRESH)
+    CELL_NORMSUM_H10KM  = sum(LINK_PROBA_H10KM), 
+    CELL_NORMSUM_H30KM  = sum(LINK_PROBA_H30KM), 
+    CELL_NORMSUM_H60KM  = sum(LINK_PROBA_H60KM), 
+    CELL_NORMSUM_HDISTR = sum(LINK_PROBA_HDISTR), 
+    CELL_N_POTENTIAL_LINKS = length(na.omit(unique(LINK_POTENTIAL_COOP_ID))), 
   ) %>% 
   ungroup() %>% 
   mutate(
-    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas = 0.
-    # When it's NA, it means we are in a cell outside the AoA, so leave it NA
+    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas ALL AS LIKELY
+    # i.e. 1/number of potential links
+    # When it's NA, it means we are in a cell outside the AoA, so leave it NA (not necessary anymore, but would need to add this line:       is.na(CELL_NORMSUM_THRESH) ~ NA,
     LINK_PROBA_THRESH_NORMED = case_when(
       CELL_NORMSUM_THRESH > 0 ~ LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
-      is.na(CELL_NORMSUM_THRESH) ~ NA,
-      TRUE ~ 0
+      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
       ), 
-    LINK_UNCOND_PROBA_THRESH_NORMED = case_when(
-      CELL_UNCOND_NORMSUM_THRESH > 0 ~ LINK_UNCOND_PROBA_THRESH / CELL_UNCOND_NORMSUM_THRESH, 
-      is.na(CELL_UNCOND_NORMSUM_THRESH) ~ NA,
-      TRUE ~ 0
+    LINK_PROBA_H10KM_NORMED = case_when(
+      CELL_NORMSUM_H10KM > 0 ~ LINK_PROBA_H10KM / CELL_NORMSUM_H10KM, 
+      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      ), 
+    LINK_PROBA_H30KM_NORMED = case_when(
+      CELL_NORMSUM_H30KM > 0 ~ LINK_PROBA_H30KM / CELL_NORMSUM_H30KM, 
+      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      ), 
+    LINK_PROBA_H60KM_NORMED = case_when(
+      CELL_NORMSUM_H60KM > 0 ~ LINK_PROBA_H60KM / CELL_NORMSUM_H60KM, 
+      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      ), 
+    LINK_PROBA_HDISTR_NORMED = case_when(
+      CELL_NORMSUM_HDISTR > 0 ~ LINK_PROBA_HDISTR / CELL_NORMSUM_HDISTR, 
+      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
       )
   )
 
+# links_topredict %>% 
+#   filter(round(CELL_UNCOND_NORMSUM_THRESH,10) != round(CELL_SHARE_COOP * CELL_NORMSUM_THRESH, 10)) %>% nrow()
+
 stopifnot(
-links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% pull(CELL_IS_IN_AOA) %>% any() == FALSE
+links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% pull(CELL_IS_IN_AOA) %>% any() == FALSE
+)
+stopifnot(
+links_topredict %>% filter(is.na(LINK_PROBA_H60KM_NORMED)) %>% pull(CELL_IS_IN_AOA) %>% any() == FALSE
 )
 
-links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() 
-links %>% filter(is.na(LINK_UNCOND_PROBA_THRESH_NORMED)) %>% nrow() 
+links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() 
 
-summary(links$CELL_NORMSUM_THRESH)
-summary(links$CELL_UNCOND_NORMSUM_THRESH)
+summary(links_topredict$CELL_NORMSUM_THRESH)
 # It is not anormal that these sums are higher than 1, that's precisely why we normalise actually. 
 
-# links %>% filter(CELL_NORMSUM_THRESH > 1) %>% View()
+# links_topredict %>% filter(CELL_NORMSUM_THRESH > 1) %>% View()
 
 
 stopifnot(
-  links$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) + 
-    length(unique(pull(filter(links, CELL_NORMSUM_THRESH == 0), CELL_ID))) == 
+  links_topredict$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) 
+  # + length(unique(pull(filter(links_topredict, CELL_NORMSUM_THRESH == 0), CELL_ID))) # that was for when we (wrongly) set conditional probas to 0 where normsum = 0
+  == 
     length(unique(links_topredict$CELL_ID)) |
     
-  links$LINK_UNCOND_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) + 
-    length(unique(pull(filter(links, CELL_UNCOND_NORMSUM_THRESH == 0), CELL_ID))) == 
-    length(unique(links_topredict$CELL_ID)) 
+  links_topredict$LINK_PROBA_H60KM_NORMED %>% sum(na.rm = T) %>% round(5) +
+    length(unique(links_topredict$CELL_ID)) |
+
+  links_topredict$LINK_PROBA_HDISTR_NORMED %>% sum(na.rm = T) %>% round(5) +
+    length(unique(links_topredict$CELL_ID))
 )
 
 ```
 
-
-
-
-## Links most likely
-This is an important step, where we define, for every cell, to which coop it most likely supplies (conditional on supplying any coop in the first place). 
-
-This is not yet non-overlapping polygons though, as we still have many equi-probabilities... 
-
-```{r}
-# Find the max conditional, normalised proba in every cell. 
-# Using the unconditional probas would yield exactly the same result, as it just differs by a cell-level quantity, 
-# EXCEPT in cells that don't pass the 1st stage threshold. There, unconditional probas would all be null, but conditional probas aren't. So using conditional probas allows to also determine which coop is most likely supplied in cells not selling to coops at all. 
-
-links = 
-  links %>% 
-  group_by(CELL_ID) %>% 
-  mutate(
-    LINK_PROBA_THRESH_NORMED_CELLMAX = max(LINK_PROBA_THRESH_NORMED), 
-  ) %>% 
-  ungroup() %>% 
-  mutate(LINK_IS_MOST_LIKELY = case_when(
-    LINK_PROBA_THRESH_NORMED_CELLMAX == 0 | # where all probas are null
-      # or where their maximum is strictly higher than the link's proba, the link is not most likely
-    LINK_PROBA_THRESH_NORMED_CELLMAX > LINK_PROBA_THRESH_NORMED ~ FALSE, 
-    is.na(LINK_PROBA_THRESH_NORMED_CELLMAX) ~ NA,
-    TRUE ~ TRUE
-    )
-  ) %>% 
-  group_by(CELL_ID) %>% 
-  mutate(CELL_N_MOST_LIKELY_LINKS = sum(LINK_IS_MOST_LIKELY, na.rm = T)) %>% 
-  ungroup() 
-
-# Equi-probabilities are allowed. We have them for many of the observed links, which 
-# predicted probability to exist is 1, and thus normalised probability is 1/n with n is the number of observed links in cell. 
-# Plus a few truly predicted probas. 
-links %>%   
-  filter(CELL_N_MOST_LIKELY_LINKS > 1) %>% 
-  arrange(CELL_ID) %>% 
-  View()
-  
-links %>%   
-  filter(CELL_N_MOST_LIKELY_LINKS > 1) %>% 
-  filter(!is.na(PRO_ID)) %>% 
-  nrow()
-
-```
-
-
-## Normalisation (coop perspective)
-We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
-either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
-```{r}
-# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted LU area in all sourcing sheds
-
-
-```
-
-
-## Number of linked coops 
+### Number of linked coops 
+IS THIS THE RIGHT WAY TO COMPUTE IT? I AM NOT SURE 
 ```{r}
 cell_nlinks = 
-  links %>% 
+  links_topredict %>% 
   summarise(.by = "CELL_ID",
-            CELL_N_LINKED_COOPS = sum(LINK_PROBA_THRESH_NORMED_CELLMAX > 0))
+            # CELL_N_LINKED_COOPS = sum(LINK_PROBA_THRESH_NORMED_CELLMAX > 0), 
+            CELL_N_LINKED_COOPS_ALT = sum(LINK_PROBA_THRESH_NORMED > 0)
+            )
 
 cells_topredict = 
   cells_topredict %>% 
@@ -2308,14 +2322,22 @@ rm(cell_nlinks)
 ```
 
 
+## Normalisation - coop perspective
+We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
+either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
+```{r}
+# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted LU area in all sourcing sheds
+
+
+```
 
 # EXPORT 
 ```{r}
 saveRDS(cells_topredict, 
         here("temp_data", "model", "cells_topredict.Rdata"))
 
-saveRDS(links, 
-        here("temp_data", "model", "links.Rdata"))
+saveRDS(links_topredict, 
+        here("temp_data", "model", "links_topredict.Rdata"))
 ```
 
 

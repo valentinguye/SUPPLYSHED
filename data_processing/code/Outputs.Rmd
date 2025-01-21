@@ -40,6 +40,7 @@ library(modelsummary) # necessary to load it after DescTools
 library(biscale)
 library(cowplot)
 library(viridis)
+library(bubbles)
 
 set.seed(8888)
 
@@ -74,14 +75,19 @@ departements =
   st_transform(departements, crs = civ_crs)
 
 coopbsy = read.csv(file = here("temp_data/private_IC2B/IC2B_v2_coop_bs_year.csv"))
-coopbs22 = coopbsy %>% filter(YEAR == 2022)
+
+coopbs22 = coopbsy %>% filter(YEAR == 2022) %>% 
+  # do that to match the output of the model 
+  mutate(COOP_ID = paste0("COOP-",COOP_ID)) 
 
 coopbs22_sf = 
   coopbs22 %>% 
   filter(!is.na(LONGITUDE)) %>% 
   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
 
-links = readRDS(here("temp_data", "model", paste0("links.Rdata")))
+coopbs22_sf$COOP_ID %>% unique()%>% length() 
+
+links = readRDS(here("temp_data", "model", paste0("links_topredict.Rdata")))
 
 cells = readRDS(here("temp_data", "model", paste0("cells_topredict.Rdata"))) 
 
@@ -90,7 +96,7 @@ cells =
   cells %>% 
   mutate(
     CELL_NODEF_EXPANSION_HA = 
-           1600
+           cell_area_ha
          - CELL_COCOA_HA
          - CELL_DENSEFOREST_HA
          - CELL_OTHERFORESTS_HA
@@ -123,9 +129,19 @@ cells_toplot = cells_toplot %>% left_join(cells %>% select(CELL_ID, CELL_ALL_CD_
 
 
 ```
+# Descriptive statistics
+## Development/prediction balance tests
+ 
+```{r}
+
+```
+
+# B. Explanation
+All things variable importance and explanation here. 
 
 
-# Aggregate sourcing sheds 
+
+# C. Aggregate sourcing sheds 
 This uses mostly first stage results. 
 
 ## Outside vs. Within
@@ -138,7 +154,7 @@ fn_aggregate_lu = function(out_or_in_share){
   cells %>%
   summarise(.by = CELL_IS_IN_AOA, # this is to summarise over all obs, because non-AOA cells have been remove in previous script already.
             `N CELLS` = sum({{out_or_in_share}}>0), # this will probably be removed eventually
-            TOTAL          = round(sum({{out_or_in_share}}*1600) / 1000, 1),
+            TOTAL          = round(sum({{out_or_in_share}}*cell_area_ha) / 1000, 1),
             COCOA          = round(sum({{out_or_in_share}}*CELL_COCOA_HA) / 1000, 1),
             FOREST         = round(sum({{out_or_in_share}}*CELL_FOREST_HA) / 1000, 1),
             `DENSE FOREST` = round(sum({{out_or_in_share}}*CELL_DENSEFOREST_HA) / 1000, 1),
@@ -154,7 +170,7 @@ fn_aggregate_lu_relative = function(out_or_in_share){
   cells %>%
   summarise(.by = CELL_IS_IN_AOA, 
             `N CELLS` = "", # this will probably be removed eventually
-            TOTAL          = 100*round(sum({{out_or_in_share}}*1600) / (1600*nrow(cells)), 2),
+            TOTAL          = 100*round(sum({{out_or_in_share}}*cell_area_ha) / (cell_area_ha*nrow(cells)), 2),
             COCOA          = 100*round(sum({{out_or_in_share}}*CELL_COCOA_HA) / sum(CELL_COCOA_HA), 2),
             FOREST         = 100*round(sum({{out_or_in_share}}*CELL_FOREST_HA) / sum(CELL_FOREST_HA), 1),
             `DENSE FOREST` = 100*round(sum({{out_or_in_share}}*CELL_DENSEFOREST_HA) / sum(CELL_DENSEFOREST_HA), 2),
@@ -557,25 +573,464 @@ pastcd_bivplot
 Use same coding as above, but with different bins and palettes  
 
 
-# Individual sourcing sheds
+# D. Individual sourcing sheds
 
-## Normalisation (coop perspective)
-We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
-either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
+## Distribute cell attributes on coops
+This uses normalised probabilities from the perspective of the *cell*. 
+The idea is to export a coop-level data set with the weighted LU area in all sourcing sheds. 
+Repeat for heuristic probabilities as well. 
+
 ```{r}
-# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted LU area in all sourcing sheds
 
 linked_coops = 
   links %>% 
-  summarise(.by = LINK_POTENTIAL_COOP_ID, 
-            COOP_COCOA_HA = CELL_COCOA_HA * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED
+  # add the LU vars produced ex post, on top of this script
+  left_join(cells %>% select(CELL_ID, CELL_FOREST_HA, CELL_ALL_CD_HA, CELL_NODEF_EXPANSION_HA), 
+            by = "CELL_ID") %>% 
+  summarise(.by = "LINK_POTENTIAL_COOP_ID", 
+            COOP_AREA_HA =            sum(cell_area_ha            * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_COCOA_HA =           sum(CELL_COCOA_HA           * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_FOREST_HA =          sum(CELL_FOREST_HA          * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_DENSEFOREST_HA =     sum(CELL_DENSEFOREST_HA     * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_OTHERFORESTS_HA =    sum(CELL_OTHERFORESTS_HA    * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_ALL_CD_HA =          sum(CELL_ALL_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_OLD_CD_HA =          sum(CELL_OLD_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_REC_CD_HA =          sum(CELL_REC_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
+            COOP_NODEF_EXPANSION_HA = sum(CELL_NODEF_EXPANSION_HA * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED),
             
+            COOP_CONDI_AREA_HA =            sum(cell_area_ha            * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_COCOA_HA =           sum(CELL_COCOA_HA           * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_FOREST_HA =          sum(CELL_FOREST_HA          * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_DENSEFOREST_HA =     sum(CELL_DENSEFOREST_HA     * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_OTHERFORESTS_HA =    sum(CELL_OTHERFORESTS_HA    * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_ALL_CD_HA =          sum(CELL_ALL_CD_HA          * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_OLD_CD_HA =          sum(CELL_OLD_CD_HA          * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_REC_CD_HA =          sum(CELL_REC_CD_HA          * LINK_PROBA_THRESH_NORMED),
+            COOP_CONDI_NODEF_EXPANSION_HA = sum(CELL_NODEF_EXPANSION_HA * LINK_PROBA_THRESH_NORMED),
             
-            
+            COOP_AREA_H10KM_HA =            sum(cell_area_ha            * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_COCOA_H10KM_HA =           sum(CELL_COCOA_HA           * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_FOREST_H10KM_HA =          sum(CELL_FOREST_HA          * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_DENSEFOREST_H10KM_HA =     sum(CELL_DENSEFOREST_HA     * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_OTHERFORESTS_H10KM_HA =    sum(CELL_OTHERFORESTS_HA    * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_ALL_CD_H10KM_HA =          sum(CELL_ALL_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_OLD_CD_H10KM_HA =          sum(CELL_OLD_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_REC_CD_H10KM_HA =          sum(CELL_REC_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+            COOP_NODEF_EXPANSION_H10KM_HA = sum(CELL_NODEF_EXPANSION_HA * CELL_SHARE_COOP * LINK_PROBA_H10KM_NORMED),
+
+            COOP_AREA_H30KM_HA =            sum(cell_area_ha            * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_COCOA_H30KM_HA =           sum(CELL_COCOA_HA           * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_FOREST_H30KM_HA =          sum(CELL_FOREST_HA          * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_DENSEFOREST_H30KM_HA =     sum(CELL_DENSEFOREST_HA     * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_OTHERFORESTS_H30KM_HA =    sum(CELL_OTHERFORESTS_HA    * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_ALL_CD_H30KM_HA =          sum(CELL_ALL_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_OLD_CD_H30KM_HA =          sum(CELL_OLD_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_REC_CD_H30KM_HA =          sum(CELL_REC_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+            COOP_NODEF_EXPANSION_H30KM_HA = sum(CELL_NODEF_EXPANSION_HA * CELL_SHARE_COOP * LINK_PROBA_H30KM_NORMED),
+
+            COOP_AREA_H60KM_HA =            sum(cell_area_ha            * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_COCOA_H60KM_HA =           sum(CELL_COCOA_HA           * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_FOREST_H60KM_HA =          sum(CELL_FOREST_HA          * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_DENSEFOREST_H60KM_HA =     sum(CELL_DENSEFOREST_HA     * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_OTHERFORESTS_H60KM_HA =    sum(CELL_OTHERFORESTS_HA    * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_ALL_CD_H60KM_HA =          sum(CELL_ALL_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_OLD_CD_H60KM_HA =          sum(CELL_OLD_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+            COOP_REC_CD_H60KM_HA =          sum(CELL_REC_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED), 
+            COOP_NODEF_EXPANSION_H60KM_HA = sum(CELL_NODEF_EXPANSION_HA * CELL_SHARE_COOP * LINK_PROBA_H60KM_NORMED),
+
+            COOP_AREA_HDISTR_HA =            sum(cell_area_ha            * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_COCOA_HDISTR_HA =           sum(CELL_COCOA_HA           * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_FOREST_HDISTR_HA =          sum(CELL_FOREST_HA          * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_DENSEFOREST_HDISTR_HA =     sum(CELL_DENSEFOREST_HA     * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_OTHERFORESTS_HDISTR_HA =    sum(CELL_OTHERFORESTS_HA    * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_ALL_CD_HDISTR_HA =          sum(CELL_ALL_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_OLD_CD_HDISTR_HA =          sum(CELL_OLD_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_REC_CD_HDISTR_HA =          sum(CELL_REC_CD_HA          * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED),
+            COOP_NODEF_EXPANSION_HDISTR_HA = sum(CELL_NODEF_EXPANSION_HA * CELL_SHARE_COOP * LINK_PROBA_HDISTR_NORMED)
+
             )
+
+cells = 
+  cells %>% 
+  mutate(CELL_COCOA_CSS_HA  = CELL_COCOA_HA *CELL_SHARE_COOP,
+         CELL_FOREST_CSS_HA = CELL_FOREST_HA*CELL_SHARE_COOP, 
+         CELL_ALL_CD_CSS_HA = CELL_ALL_CD_HA*CELL_SHARE_COOP, 
+         CELL_NODEF_EXPANSION_CSS_HA = CELL_NODEF_EXPANSION_HA*CELL_SHARE_COOP)
+
+(cocoa_aggr_pcss = cells$CELL_COCOA_CSS_HA %>% sum())
+(all_cd_aggr_pcss = cells$CELL_ALL_CD_CSS_HA %>% sum())
+(nodef_aggr_pcss = cells$CELL_NODEF_EXPANSION_CSS_HA %>% sum())
+(forest_aggr_pcss = cells$CELL_FOREST_CSS_HA %>% sum())
+
+linked_coops$COOP_FOREST_HA %>% sum()
+linked_coops$COOP_FOREST_H10KM_HA %>% sum()
+linked_coops$COOP_FOREST_HDISTR_HA %>% sum()
+
+linked_coops$COOP_CONDI_FOREST_HA %>% sum()
+
+
+
+```
+
+## Hotspots
+
+### Distribution
+```{r}
+linked_coops$COOP_ALL_CD_HA %>% summary()
+
+linked_coops = 
+  linked_coops %>% 
+  mutate(
+    COOP_PROP_OF_COCOA_HA = 100 * COOP_COCOA_HA / cocoa_aggr_pcss, 
+    COOP_PROP_OF_FOREST_HA = 100 * COOP_FOREST_HA / forest_aggr_pcss, 
+
+    COOP_PROP_OF_ALL_CD_HA = 100 * COOP_ALL_CD_HA / cocoa_aggr_pcss, 
+    COOP_ALL_ANNUAL_CD_HA = COOP_ALL_CD_HA / 16
+    )
+
+linked_coops$COOP_PROP_OF_COCOA_HA %>% summary()
+linked_coops$COOP_PROP_OF_FOREST_HA %>% summary()
+linked_coops$COOP_PROP_OF_ALL_CD_HA %>% summary()
+
+quantile(linked_coops$COOP_ALL_CD_HA, seq(0,1,0.1))
+quantile(linked_coops$COOP_PROP_OF_ALL_CD_HA, seq(0,1,0.1))
+
+# Calculate the cumulative sum of COOP_ALL_CD_HA
+linked_coops <- linked_coops %>%
+  arrange(desc(COOP_ALL_CD_HA))
+linked_coops <- linked_coops %>%
+  mutate(COOP_ALL_CD_HA_cumulative_sum = cumsum(COOP_ALL_CD_HA))
+
+# Calculate the cumulative sum of COOP_ALL_CD_H10KM_HA
+linked_coops <- linked_coops %>%
+  arrange(desc(COOP_ALL_CD_H10KM_HA))
+linked_coops <- linked_coops %>%
+  mutate(COOP_ALL_CD_H10KM_HA_cumulative_sum = cumsum(COOP_ALL_CD_H10KM_HA))
+
+# Calculate the cumulative sum of COOP_ALL_CD_HDISTR_HA
+linked_coops <- linked_coops %>%
+  arrange(desc(COOP_ALL_CD_HDISTR_HA))
+linked_coops <- linked_coops %>%
+  mutate(COOP_ALL_CD_HDISTR_HA_cumulative_sum = cumsum(COOP_ALL_CD_HDISTR_HA))
+
+# Calculate the total sum 
+total_sum <- sum(linked_coops$COOP_ALL_CD_HA)
+total_sum_h10km <- sum(linked_coops$COOP_ALL_CD_H10KM_HA)
+total_sum_hdistr <- sum(linked_coops$COOP_ALL_CD_HDISTR_HA)
+
+# Calculate the cumulative percentage of COOP_ALL_CD_HA
+linked_coops <- linked_coops %>%
+  mutate(
+    COOP_ALL_CD_RANK_cumulative_percentage        = 100*COOP_ALL_CD_HA_cumulative_sum / total_sum, 
+    COOP_ALL_CD_RANK = case_when(
+       COOP_ALL_CD_RANK_cumulative_percentage < 20 ~ "Bottom 20%",
+       COOP_ALL_CD_RANK_cumulative_percentage >= 20 & COOP_ALL_CD_RANK_cumulative_percentage < 80 ~ "20-80%", 
+       COOP_ALL_CD_RANK_cumulative_percentage >= 80 ~ "Top 20%"
+       ),
+    
+    COOP_ALL_CD_H10KM_RANK_cumulative_percentage  = 100*COOP_ALL_CD_H10KM_HA_cumulative_sum / total_sum_h10km,
+    COOP_ALL_CD_H10KM_RANK = case_when(
+       COOP_ALL_CD_H10KM_RANK_cumulative_percentage < 20 ~ "Bottom 20%",
+       COOP_ALL_CD_H10KM_RANK_cumulative_percentage >= 20 & COOP_ALL_CD_H10KM_RANK_cumulative_percentage < 80 ~ "20-80%", 
+       COOP_ALL_CD_H10KM_RANK_cumulative_percentage >= 80 ~ "Top 20%"
+       ),
+    
+    COOP_ALL_CD_HDISTR_RANK_cumulative_percentage = 100*COOP_ALL_CD_HDISTR_HA_cumulative_sum / total_sum_hdistr, 
+    COOP_ALL_CD_HDISTR_RANK = case_when(
+       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage < 20 ~ "Bottom 20%",
+       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage >= 20 & COOP_ALL_CD_HDISTR_RANK_cumulative_percentage < 80 ~ "20-80%", 
+       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage >= 80 ~ "Top 20%"
+       )
+         )
+linked_coops$COOP_ALL_CD_RANK %>% table()
+linked_coops$COOP_ALL_CD_H10KM_RANK %>% table()
+linked_coops$COOP_ALL_CD_HDISTR_RANK %>% table()
+
+# Determine the number of observations in each decile
+deciles <- seq(10, 100, by = 10)
+
+# model
+decile_counts <- sapply(deciles, function(d) {
+  sum(linked_coops$COOP_ALL_CD_RANK_cumulative_percentage <= d)
+})
+decile_results <- data.frame(
+  Decile = deciles,
+  Count = decile_counts
+)
+
+# 10km
+decile_counts_h10km <- sapply(deciles, function(d) {
+  sum(linked_coops$COOP_ALL_CD_H10KM_RANK_cumulative_percentage <= d)
+})
+decile_results_h10km <- data.frame(
+  Decile = deciles,
+  Count = decile_counts_h10km
+)
+# district
+decile_counts_hdistr <- sapply(deciles, function(d) {
+  sum(linked_coops$COOP_ALL_CD_HDISTR_RANK_cumulative_percentage <= d)
+})
+decile_results_hdistr <- data.frame(
+  Decile = deciles,
+  Count = decile_counts_hdistr
+)
+
+decile_results
+decile_results_h10km
+decile_results_hdistr
+# Create the ECDF plot
+# ggplot(linked_coops, aes(x = COOP_ALL_CD_HA)) +
+#   stat_ecdf(geom = "step", color = "blue") +
+#   labs(title = "ECDF Plot of cocoa deforestation in individual PCSS",
+#        x = "cocoa deforestation",
+#        y = "Cumulative Probability") +
+#   theme_minimal()
+
+# Create the violin plot
+# ggplot(linked_coops, aes(x = factor(1), y = COOP_ALL_CD_HA)) +
+#   geom_violin(fill = "blue", alpha = 0.6) +
+#   labs(title = "Violin Plot of of cocoa deforestation in individual PCSS",
+#        x = "cocoa deforestation",
+#        y = "Density") +
+#   theme_minimal()
+
+# bubbles(value = linked_coops$COOP_PROP_OF_ALL_CD_HA, 
+#         label = as.character(round(linked_coops$COOP_ALL_ANNUAL_CD_HA, 0)))
+
+coop22_sf = 
+  coopbs22_sf %>% 
+  # keep only one BS point for plotting this
+  distinct(COOP_ID, .keep_all = TRUE) %>% 
+  left_join(linked_coops, 
+            by = join_by(COOP_ID == LINK_POTENTIAL_COOP_ID)) %>% 
+  arrange(desc(COOP_ALL_CD_HA))
+
+# 20% of the cocoa deforestation attributable to cooperatives is in the supply sheds of less than 1% of cooperatives.
+100*decile_results[2,"Count"]/nrow(coop22_sf)
+
+map_hotspot_coops_all_cd = 
+ ggplot(coop22_sf) +
+  geom_sf(mapping = aes(size = COOP_ALL_CD_RANK, fill = COOP_ALL_CD_HA),
+         shape = 21) + #, col = COOP_ALL_CD_HA
+  
+  scale_size_manual(name = "Relative to all cooperatives",
+                    # labels=unit_format(unit = "%", sep = "")
+                    values = c("Top 20%" = 0.1,"20-80%" = 1,"Bottom 20%" = 4)
+                    ) +
+  # scale_colour_viridis_c(na.value = "transparent", name = "Absolute",
+  #                        labels=unit_format(unit = "ha", sep = "")) +
+  scale_fill_viridis_c(na.value = "transparent", name = "Absolute",
+                       labels=unit_format(unit = "ha", sep = "")) +
+  
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  # theme(legend.title = "Predicted share of cooperative outlet") +
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "Hotspot cocoa deforestation in individual PCSS",
+    subtitle = ""
+  ) + 
+   guides(size=guide_legend(title="Relative to all cooperatives"))
+
+ggsave(
+  plot = map_hotspot_coops_all_cd,
+  filename = paste0("map_hotspot_coops_all_cd.png"),
+  path = here("outputs", "individual_sheds"),
+  width = 25,
+  height = 20,
+  units = "cm")
+
+
+
+map_hotspot_coops_all_cd_distr = 
+ ggplot(coop22_sf) +
+  geom_sf(mapping = aes(size = COOP_ALL_CD_HDISTR_RANK, fill = COOP_ALL_CD_HDISTR_HA),
+         shape = 21) + #, col = COOP_ALL_CD_HA
+  
+  scale_size_manual(name = "Relative to all cooperatives",
+                    # labels=unit_format(unit = "%", sep = "")
+                    values = c("Top 20%" = 0.1,"20-80%" = 1,"Bottom 20%" = 4)
+                    ) +
+  # scale_colour_viridis_c(na.value = "transparent", name = "Absolute",
+  #                        labels=unit_format(unit = "ha", sep = "")) +
+  scale_fill_viridis_c(na.value = "transparent", name = "Absolute",
+                       labels=unit_format(unit = "ha", sep = "")) +
+  
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  # theme(legend.title = "Predicted share of cooperative outlet") +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "Hotspot cocoa deforestation in department supply sheds",
+    subtitle = ""
+  ) + 
+   guides(size=guide_legend(title="Relative to all cooperatives"))
+
+ggsave(
+  plot = map_hotspot_coops_all_cd_distr,
+  filename = paste0("map_hotspot_coops_all_cd_distr.png"),
+  path = here("outputs", "individual_sheds"),
+  width = 25,
+  height = 20,
+  units = "cm")
+
 ```
 
 
+
+
+
+### Maps
+In addition, for display purposes, add approximate supply shed polygons
+
+We define for every cell to which coop it most likely supplies (conditional on supplying any coop in the first place). 
+I.e. we identify the most likely links for every cell. 
+This is not completely sharp polygons though (i.e. there are still overlaps), as we still have many equi-probabilities... 
+
+Then, unionize the cell by coop id and merge with linked_coop
+
+```{r}
+# Find the max conditional, normalised proba in every cell. 
+# Using the unconditional probas would yield exactly the same result, as it just differs by a cell-level quantity, 
+# EXCEPT in cells that don't pass the 1st stage threshold. There, unconditional probas would all be null, but conditional probas aren't. So using *conditional* probas allows to also determine which coop is most likely supplied in cells not selling to coops at all. 
+
+links = 
+  links %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    LINK_PROBA_THRESH_NORMED_CELLMAX = max(LINK_PROBA_THRESH_NORMED), 
+  ) %>% 
+  ungroup() %>% 
+  mutate(LINK_IS_MOST_LIKELY = case_when(
+    LINK_PROBA_THRESH_NORMED_CELLMAX == 0 | # where all probas are null
+      # or where their maximum is strictly higher than the link's proba, the link is NOT most likely
+    LINK_PROBA_THRESH_NORMED_CELLMAX > LINK_PROBA_THRESH_NORMED ~ FALSE, 
+    is.na(LINK_PROBA_THRESH_NORMED_CELLMAX) ~ NA,
+    TRUE ~ TRUE
+    )
+  ) %>% 
+  group_by(CELL_ID) %>% 
+  mutate(CELL_N_MOST_LIKELY_LINKS = sum(LINK_IS_MOST_LIKELY, na.rm = T)) %>% 
+  ungroup() 
+
+# Equi-probabilities are allowed. 
+# We have them for a few truly predicted probas. 
+links %>%   
+  filter(CELL_N_MOST_LIKELY_LINKS > 1) %>% 
+  arrange(CELL_ID) %>% 
+  View()
+
+# Before, we had them for many of the observed links, which predicted probability to exist is 1, and thus normalised probability is 1/n with n is the number of observed links in cell.
+# But now these links are merged into one single cell-coop link in the predict set links.  
+links %>%   
+  filter(CELL_N_MOST_LIKELY_LINKS > 1) %>% 
+  filter(!is.na(PRO_ID)) %>% 
+  nrow()
+
+links %>%   
+  filter(CELL_N_MOST_LIKELY_LINKS == 1) %>% nrow()
+
+links$LINK_IS_MOST_LIKELY %>% summary()
+# 2280 cells have a most likely link. This means that in all the other cells, the probabilities to sell to the different coops are all null. 
+links %>% filter(LINK_IS_MOST_LIKELY) %>% pull(CELL_ID) %>% unique() %>% length()
+
+# This connects to 275 cooperatives only! 
+# It means that a few coops are always the most likely to have a link. 
+# IT DOES NOT MEAN THAT THESE ARE THE ONLY COOPS PREDICTED TO HAVE A LINK! 
+links %>% filter(LINK_IS_MOST_LIKELY) %>% pull(LINK_POTENTIAL_COOP_ID) %>% unique() %>% length()
+
+# and it's not because we don't have enough information on the 4100 more coops!  
+links$LINK_POTENTIAL_COOP_ID %>% unique() %>% length()
+links %>% select(all_of(stg2_allfeatures)) %>%  anyNA()
+```
+
+
+
+
+Make polygons
+```{r}
+cell_coop_sheds = 
+  links %>% 
+  filter(LINK_IS_MOST_LIKELY) %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(crs = civ_crs) %>% 
+  st_buffer(dist = 1e3*MODEL_RESOLUTION_KM/2)
+stmp = cell_coop_sheds[1,]
+
+# make them square
+st_geometry(cell_coop_sheds) <- 
+  sapply(st_geometry(cell_coop_sheds), FUN = function(x){st_as_sfc(st_bbox(x))}) %>% st_sfc(crs = civ_crs)
+
+# ggplot() + 
+#   geom_sf(data = cell_coop_sheds[1,], fill = "black", col = "black", size = 2) + 
+#   geom_sf(data = stmp, col = "red", fill = "red", size = 2)
+
+# Merge cells by coop id to make supply shed of coop 
+cell_coop_sheds = 
+  cell_coop_sheds %>% 
+  summarise(.by = LINK_POTENTIAL_COOP_ID, 
+            geometry = st_union(geometry)
+            ) %>% 
+  rename(COOP_ID = LINK_POTENTIAL_COOP_ID) #%>% 
+  # left_join(linked_coops, 
+  #           by = "LINK_POTENTIAL_COOP_ID")
+
+ggplot() + 
+  geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
+  geom_sf(data = cell_coop_sheds, aes(fill = COOP_ID), size = 2) + 
+  guides(fill="none")
+
+
+# Make polygons based on heuristics
+coopbs_in_model = 
+  coopbs22 %>% 
+  filter(COOP_ID %in% cell_coop_sheds$COOP_ID) %>% 
+  filter(!is.na(LONGITUDE)) %>% # this removes some buying stations that don't have coordinates, but no coop fully. 
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326) %>% 
+  st_transform(crs = civ_crs) %>% 
+  select(COOP_ID, geometry) # %>% 
+  # left_join(cell_coop_sheds %>% st_drop_geometry(), 
+  #           by = join_by(COOP_ID == LINK_POTENTIAL_COOP_ID))
+
+coop_sheds_h10km = 
+     coopbs_in_model %>% 
+     st_buffer(dist = 10*1e3)
+ 
+coop_sheds_h30km = 
+   coopbs_in_model %>% 
+   st_buffer(dist = 30*1e3)
+
+coop_sheds_h60km = 
+   coopbs_in_model %>% 
+   st_buffer(dist = 60*1e3)
+ 
+# names(cell_coop_sheds) = tolower(names(cell_coop_sheds))
+# names(cell_coop_sheds) = tolower(names(cell_coop_sheds))
+# dir.create(here("temp_data", "individual_coop_supply_sheds", "cell_coop_sheds"), recursive = TRUE) 
+# st_write(cell_coop_sheds, here("temp_data", "individual_coop_supply_sheds",
+#                                 "cell_coop_sheds",
+#                                 "cell_coop_sheds.shp"))
+# 
+# dir.create(here("temp_data", "individual_coop_supply_sheds", "coop_sheds_h10km"), recursive = TRUE) 
+# st_write(coop_sheds_h10km, here("temp_data", "individual_coop_supply_sheds",
+#                                 "coop_sheds_h10km", 
+#                                 "coop_sheds_h10km.shp"), 
+#          append = FALSE)
+# 
+# dir.create(here("temp_data", "individual_coop_supply_sheds", "coop_sheds_h30km"), recursive = TRUE) 
+# write_sf(coop_sheds_h30km, here("temp_data", "individual_coop_supply_sheds",
+#                                 "coop_sheds_h30km", 
+#                                 "coop_sheds_h30km.shp"))
+# 
+# dir.create(here("temp_data", "individual_coop_supply_sheds", "coop_sheds_h60km"), recursive = TRUE) 
+# write_sf(coop_sheds_h60km, here("temp_data", "individual_coop_supply_sheds",
+#                                 "coop_sheds_h60km", 
+#                                 "coop_sheds_h60km.shp"))
+
+```
 
 ## Hotspots
 
