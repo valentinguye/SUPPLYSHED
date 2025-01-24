@@ -40,7 +40,7 @@ library(modelsummary) # necessary to load it after DescTools
 library(biscale)
 library(cowplot)
 library(viridis)
-library(bubbles)
+
 
 set.seed(8888)
 
@@ -411,7 +411,7 @@ forest_bivplot =
 forest_bivplot
 ```
 
-#### Potentially sustainable x share
+#### Not forested land x share
 DkViolet2
 ```{r}
 cells_toplot$CELL_NODEF_EXPANSION_KHA %>% summary()
@@ -453,7 +453,7 @@ map =
 legend <- bi_legend(pal = "DkCyan2",
                     dim = 3,
                     flip_axes = TRUE,
-                    xlab = "Available land (kha)",
+                    xlab = "'Available' land (kha)",
                     ylab = "Cooperative outlet (%)",
                     size = 10, 
                     breaks = breaks, 
@@ -477,8 +477,8 @@ multipanel_bivplot =
     ncol = 3, nrow = 1, 
     common.legend = FALSE, 
     labels = c("COCOA EXTENT", "FOREST EXTENT", 
-               "POTENTIAL LAND FOR SUSTAINABLE COCOA"), 
-    hjust = c(-0.5, -0.5, 0), 
+               "NO-COCOA, NO-FOREST LAND"), 
+    hjust = c(-0.5, -0.5, -0.2), 
     font.label = list(size = 16, color = "black", face = "bold", family = NULL)
     # align = "h"
   ) %>% 
@@ -723,23 +723,23 @@ linked_coops <- linked_coops %>%
   mutate(
     COOP_ALL_CD_RANK_cumulative_percentage        = 100*COOP_ALL_CD_HA_cumulative_sum / total_sum, 
     COOP_ALL_CD_RANK = case_when(
-       COOP_ALL_CD_RANK_cumulative_percentage < 20 ~ "Bottom 20%",
+       COOP_ALL_CD_RANK_cumulative_percentage < 20 ~ "Top 20%",
        COOP_ALL_CD_RANK_cumulative_percentage >= 20 & COOP_ALL_CD_RANK_cumulative_percentage < 80 ~ "20-80%", 
-       COOP_ALL_CD_RANK_cumulative_percentage >= 80 ~ "Top 20%"
+       COOP_ALL_CD_RANK_cumulative_percentage >= 80 ~ "Bottom 20%"
        ),
     
     COOP_ALL_CD_H10KM_RANK_cumulative_percentage  = 100*COOP_ALL_CD_H10KM_HA_cumulative_sum / total_sum_h10km,
     COOP_ALL_CD_H10KM_RANK = case_when(
-       COOP_ALL_CD_H10KM_RANK_cumulative_percentage < 20 ~ "Bottom 20%",
+       COOP_ALL_CD_H10KM_RANK_cumulative_percentage < 20 ~ "Top 20%",
        COOP_ALL_CD_H10KM_RANK_cumulative_percentage >= 20 & COOP_ALL_CD_H10KM_RANK_cumulative_percentage < 80 ~ "20-80%", 
-       COOP_ALL_CD_H10KM_RANK_cumulative_percentage >= 80 ~ "Top 20%"
+       COOP_ALL_CD_H10KM_RANK_cumulative_percentage >= 80 ~ "Bottom 20%"
        ),
     
     COOP_ALL_CD_HDISTR_RANK_cumulative_percentage = 100*COOP_ALL_CD_HDISTR_HA_cumulative_sum / total_sum_hdistr, 
     COOP_ALL_CD_HDISTR_RANK = case_when(
-       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage < 20 ~ "Bottom 20%",
+       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage < 20 ~ "Top 20%",
        COOP_ALL_CD_HDISTR_RANK_cumulative_percentage >= 20 & COOP_ALL_CD_HDISTR_RANK_cumulative_percentage < 80 ~ "20-80%", 
-       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage >= 80 ~ "Top 20%"
+       COOP_ALL_CD_HDISTR_RANK_cumulative_percentage >= 80 ~ "Bottom 20%"
        )
          )
 linked_coops$COOP_ALL_CD_RANK %>% table()
@@ -808,6 +808,13 @@ coop22_sf =
 # 20% of the cocoa deforestation attributable to cooperatives is in the supply sheds of less than 1% of cooperatives.
 100*decile_results[2,"Count"]/nrow(coop22_sf)
 
+coop22_sf = 
+  coop22_sf %>% 
+  mutate(
+    COOP_ALL_CD_RANK = factor(COOP_ALL_CD_RANK, levels = c("Bottom 20%","20-80%","Top 20%")),
+    COOP_ALL_CD_H10KM_RANK = factor(COOP_ALL_CD_H10KM_RANK, levels = c("Bottom 20%","20-80%","Top 20%")),
+    COOP_ALL_CD_HDISTR_RANK = factor(COOP_ALL_CD_HDISTR_RANK, levels = c("Bottom 20%","20-80%","Top 20%")))
+
 map_hotspot_coops_all_cd = 
  ggplot(coop22_sf) +
   geom_sf(mapping = aes(size = COOP_ALL_CD_RANK, fill = COOP_ALL_CD_HA),
@@ -815,7 +822,7 @@ map_hotspot_coops_all_cd =
   
   scale_size_manual(name = "Relative to all cooperatives",
                     # labels=unit_format(unit = "%", sep = "")
-                    values = c("Top 20%" = 0.1,"20-80%" = 1,"Bottom 20%" = 4)
+                    values = c("Bottom 20%" = 0.1,"20-80%" = 1,"Top 20%" = 4)
                     ) +
   # scale_colour_viridis_c(na.value = "transparent", name = "Absolute",
   #                        labels=unit_format(unit = "ha", sep = "")) +
@@ -851,7 +858,7 @@ map_hotspot_coops_all_cd_distr =
   
   scale_size_manual(name = "Relative to all cooperatives",
                     # labels=unit_format(unit = "%", sep = "")
-                    values = c("Top 20%" = 0.1,"20-80%" = 1,"Bottom 20%" = 4)
+                    values = c("Bottom 20%" = 0.1,"20-80%" = 1,"Top 20%" = 4)
                     ) +
   # scale_colour_viridis_c(na.value = "transparent", name = "Absolute",
   #                        labels=unit_format(unit = "ha", sep = "")) +
@@ -872,6 +879,41 @@ map_hotspot_coops_all_cd_distr =
 ggsave(
   plot = map_hotspot_coops_all_cd_distr,
   filename = paste0("map_hotspot_coops_all_cd_distr.png"),
+  path = here("outputs", "individual_sheds"),
+  width = 25,
+  height = 20,
+  units = "cm")
+
+
+
+map_hotspot_coops_all_cd_10km = 
+ ggplot(coop22_sf) +
+  geom_sf(mapping = aes(size = COOP_ALL_CD_H10KM_RANK, fill = COOP_ALL_CD_H10KM_HA),
+         shape = 21) + #, col = COOP_ALL_CD_HA
+  
+  scale_size_manual(name = "Relative to all cooperatives",
+                    # labels=unit_format(unit = "%", sep = "")
+                    values = c("Bottom 20%" = 0.1,"20-80%" = 1,"Top 20%" = 4)
+                    ) +
+  # scale_colour_viridis_c(na.value = "transparent", name = "Absolute",
+  #                        labels=unit_format(unit = "ha", sep = "")) +
+  scale_fill_viridis_c(na.value = "transparent", name = "Absolute",
+                       labels=unit_format(unit = "ha", sep = "")) +
+  
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  # theme(legend.title = "Predicted share of cooperative outlet") +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "Hotspot cocoa deforestation in 10km supply sheds",
+    subtitle = ""
+  ) + 
+   guides(size=guide_legend(title="Relative to all cooperatives"))
+
+ggsave(
+  plot = map_hotspot_coops_all_cd_10km,
+  filename = paste0("map_hotspot_coops_all_cd_10km.png"),
   path = here("outputs", "individual_sheds"),
   width = 25,
   height = 20,

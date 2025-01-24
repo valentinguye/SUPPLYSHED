@@ -808,6 +808,9 @@ This is simple because it does not do feature selection nor optimize hyper-param
 ```{r}
 stg1_mfit = ranger(data = stg1_development, 
                    # splitrule="beta",
+                   num.trees = 500,
+                   # mtry = 77,
+                   # min.node.size= 10,
                    importance = 'permutation',
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
                    formula = stg1_formula_allfeatures, 
@@ -816,6 +819,8 @@ stg1_mfit = ranger(data = stg1_development,
 print(stg1_mfit)
 
 stg1_mfit = ranger(data = stg1_development, 
+                   splitrule="beta",
+                   # mtry = 20,
                    importance = 'permutation',
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
                    formula = stg1_mformula_exofeatures, 
@@ -840,10 +845,14 @@ tic()
 model1_rfe <- 
   rfe(form = stg1_formula_allfeatures, 
         data = stg1_development,
-        trControl = trainControl(method="boot632", number = 100),
+        trControl = trainControl(method="LOOCV"),
         method = "ranger", 
         importance="permutation", 
         tuneLength=15,
+        # tuneGrid = data.frame(splitrule = "poisson",
+        #                   min.node.size = 5,
+        #                  mtry = c(8, 20, 40, 60, 77)
+        #                  ),
         sizes = c(5, 10, 20, 30, 40, 50, 60, 70), # tell caret how many different feature subset sizes to try. DOes not need to include the total, which is tried out automatically. 
         rfeControl = rfeControl(method = "repeatedcv",
                               			repeats = 5, 
@@ -860,11 +869,11 @@ registerDoSEQ()
 model1_rfe$fit
 
 saveRDS(model1_rfe, 
-        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5"))
 
 ```
 
-Tests
+#### Tests RFE
 ```{r}
 # RFE above: 
 # These are not the same, for some reason
@@ -932,22 +941,287 @@ saveRDS(model1_caret_xgb,
         file = here("temp_data", "model", "caret", "stage_1", "allfeatures_xgbtree_4boot632_5tuneL"))
 ```
 
-Performance
+#### Test Performance
+From readings, (documentation, Stackoverflow etc.) and tests below, it appears that: 
+Metrics obtained from $finalModel objects are always a different because they are provided by the native package (ranger here), and notably for R2 because the formula to calculate it is special in caret. 
+
+Metrics obtained from averages across resamples are exactly the same for boot and cv, different (lower in this case at least) for boot632, and not available for oob. 
+
+In any case, getTrainPerf always gives the same metrics as $results (for the best tuned model).  
 ```{r}
+set.seed(8888)
+boot10 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="boot", number = 10),
+        method = "ranger", 
+        importance="permutation", 
+        # tuneLength=5, 
+        tuneGrid = data.frame(splitrule = "poisson",
+                                min.node.size = 5,
+                               mtry = c(8, 20, 40, 60, 77)
+                               )
+        )
+
+to_eval = boot10
+# In this case, all three caret methods give exactly the same values. 
+# the finalModel performs better. 
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+boot63210 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="boot632", number = 10),
+        method = "ranger", 
+        importance="permutation", 
+        tuneLength=15)
+
+to_eval = boot63210
+# In this case, all three caret methods DO NOT give the same values. 
+# The mean is much different than results/getTrainPerf
+# the finalModel performs better than the mean, but not than results/getTrainPerf
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+to_eval = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))$fit
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+
+boot6321 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="boot632", number = 1),
+        method = "ranger", 
+        importance="permutation", 
+        tuneLength=5)
+
+to_eval = boot6321
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+
+bootoptimism10 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="optimism_boot", number = 10),
+        method = "ranger", 
+        importance="permutation", 
+        tuneLength=5)
+
+to_eval = bootoptimism10
+# In this case, all three caret methods DO NOT give the same values. 
+# The mean is much different than results/getTrainPerf
+# the finalModel performs better than the mean, but not than results/getTrainPerf
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+bootall10 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="boot_all", number = 10),
+        method = "ranger", 
+        importance="permutation", 
+        tuneLength=5)
+
+to_eval = bootall10
+# In this case, all three caret methods DO NOT give the same values. 
+# The mean is much different than results/getTrainPerf
+# the finalModel performs better than the mean, but not than results/getTrainPerf
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+
+oob <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="oob"),
+        method = "ranger", 
+        importance="permutation", 
+          # tuneLength=5
+        tuneGrid = data.frame(splitrule = "beta",
+                                min.node.size = 5,
+                               mtry = c(2, 10, 20, 40, 60, 77)
+                               )
+  )
+
+to_eval = oob
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+# CROSS VALIDATION
+cv5 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="cv", number = 5),
+        method = "ranger", 
+        importance="permutation", 
+        tuneLength=5)
+
+to_eval = cv5
+# In this case, all three caret methods give exactly the same values. 
+# the finalModel performs better. 
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+cv5_10 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="repeatedcv", number = 5, repeats = 10),
+        method = "ranger", 
+        importance="permutation", 
+        tuneLength=5)
+
+to_eval = cv5_10
+# In this case, all three caret methods give exactly the same values. 
+# the finalModel performs better. 
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+rf_boot632 <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="boot632", number = 10),
+        method = "rf", 
+        # importance="permutation", 
+        tuneLength=5)
+rf_boot632
+to_eval = rf_boot632
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$mse %>% mean() %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$rsq %>% mean()
+
+rf_boot <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="boot", number = 10),
+        method = "rf", 
+        # importance="permutation", 
+        tuneLength=5)
+
+to_eval = rf_boot
+# In this case, all three caret methods give exactly the same values. 
+# the finalModel performs better. 
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$mse %>% mean() %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$rsq %>% mean()
+
+# LOOCV 
+# This is quite longer, so parallelize.  
+cl <- makePSOCKcluster(detectCores() - 1)
+registerDoParallel(cl)
+getDoParWorkers()
+tic()
+lvoo <-
+  train(form = stg1_formula_allfeatures,
+        data = stg1_development,
+        trControl = trainControl(method="LOOCV"),
+        method = "ranger",
+        importance="permutation",
+        tuneLength=5
+        # tuneGrid = data.frame(splitrule = "beta",
+        #                         min.node.size = 5,
+        #                        mtry = c(8, 20, 40, 60, 77)
+        #                        )
+        )
+toc()
+stopCluster(cl)
+registerDoSEQ()
+
+to_eval = lvoo
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$mse %>% mean() %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$rsq %>% mean()
+
+
+# Plot pred object
+
 # That's the average across all the 500 trees
 model1_caret$finalModel$mse %>% mean()
 # But the ensemble's mse is averaged with weights equal to each tree's performance (or something)
 model1_caret$finalModel
-
-# And this is for all the 400 repetitions of the ensemble 
-# It is quite worse and I am not sure why.
-resamples <- model1_caret$resample
-mean(resamples$RMSE^2)
-
-sd(resamples$RMSE)
-
-mean(resamples$Rsquared)
-sd(resamples$Rsquared)
 
 # For XGB
 resample1_xgb = model1_caret_xgb$resample 
@@ -972,7 +1246,10 @@ summary(resamps)
 
 ```
 
-### familiar
+
+
+
+### FAMILIAR
 Doing feature ranking and hyper-parameter optimization
 This is the model development. 
 
@@ -1426,7 +1703,26 @@ model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model
 # PERFORMANCE
 
 ## 1st stage 
+CARET
+```{r}
+# Make RSE manually 
+mean_stg1_outcome = stg1_development$CELL_PROP_VOLUME_COOPS %>% mean()
 
+stg1_development = 
+  stg1_development %>% 
+  mutate(NAIVE_MODEL_SQUARED_ERROR = (CELL_PROP_VOLUME_COOPS - mean_stg1_outcome)^2)
+
+stg1_mean_squared_naive_error = stg1_development$NAIVE_MODEL_SQUARED_ERROR %>% mean()
+
+model1_rmse = model1_rfe$fit$results %>% filter(mtry == 26, splitrule == "extratrees") %>% pull(RMSE) 
+
+model1_mse = model1_rmse^2
+
+model1_rse = model1_mse / stg1_mean_squared_naive_error
+
+```
+
+FAMILIAR
 ```{r}
 # Performance metrics are stored here
 model1_perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
@@ -1459,6 +1755,12 @@ ggsave(
 ```{r}
 model2_caret_xgb
 
+model2_perf = 
+model2_caret_xgb$results %>% 
+  filter(
+  nrounds == 150 & max_depth == 3 & eta == 0.4 & gamma == 0 & colsample_bytree == 0.6 & min_child_weight == 1 & subsample == 0.75
+)
+
 # Access resampling results
 resamples <- model2_caret_xgb$resample
 
@@ -1487,15 +1789,28 @@ Explanation is produced by feature, and can be interpreted in target scale.
 
 ### 1st stage 
 
-#### Descriptive stats 
-Features in the development set 
+#### Feature importance
+
+CARET
+```{r}
+featimp = varImp(model1_rfe$fit)$importance %>% as.data.frame() %>% arrange(desc(Overall))
+
+featimp = varImp(model1_rfe) %>% as.data.frame() %>% arrange(desc(Overall))
+
+```
+
 ```{r}
 # Report separately for most exogenous features and more endogenous ones 
-stg1_development_exo_features =
-  stg1_development %>% 
-  select(Sample = SPLIT, 
-         `Coop outlet share` = CELL_PROP_VOLUME_COOPS, 
-         `Cocoa output from cell (kg)` = CELL_VOLUME_KG,
+featimp_w =
+  featimp %>% 
+  mutate(PREDICTOR = row.names(featimp)) %>% 
+  pivot_wider(names_from = PREDICTOR, 
+              values_from = Overall) 
+
+# %>% 
+  select(#Sample = SPLIT, 
+         #`Coop outlet share` = CELL_PROP_VOLUME_COOPS, 
+         #`Cocoa output from cell (kg)` = CELL_VOLUME_KG,
          
          `Shortest Eucl. distance to a coop (m)` = CELL_MIN_DISTANCE_METERS, 
          `Shortest road distance to a coop (m)` = CELL_MIN_TRAVEL_METERS, 
@@ -1524,8 +1839,8 @@ stg1_development_exo_features =
          `Avg. settlements extent around 5 nearest coops` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
          ) 
 
-datasummary_skim(data = stg1_development_exo_features,
-                output = here("outputs", "input_data_descriptives", paste0("cells_stg1dev_",MODEL_RESOLUTION_KM,"km_exo_features.png")))
+# datasummary_skim(data = stg1_development_exo_features,
+#                 output = here("outputs", "input_data_descriptives", paste0("cells_stg1dev_",MODEL_RESOLUTION_KM,"km_exo_features.png")))
 
 
 # For more endogeneous features
@@ -1534,7 +1849,10 @@ datasummary_skim(data = stg1_development_exo_features,
 ```
 
 
-#### Feature importance
+
+
+
+FAMILIAR
 ```{r}
 vimp = readRDS(here(stage1_expdes_repo, "variable_importance", "20250117074207_fs_random_forest_ranger_permutation.RDS"))
 
@@ -1565,6 +1883,7 @@ vimp_top10 =
 ```
 
 #### Explanation
+
 Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots.
 All this is sketchy, and interpretations are challenging !!! 
 
@@ -1605,7 +1924,7 @@ Feature importance
 ```{r}
 varImp(model2_caret_xgb)
 
-model2_caret_xgb$finalModel$importance
+
 
 
 model2_caret_xgb$finalModel$importance %>% as.data.frame() %>% arrange(desc(`%IncMSE`))
@@ -1983,6 +2302,10 @@ cells_toplot =
 
 ### Bootstrapped predictions 
 Run a prediction for each model built by a bootstrap
+
+- Time&memory benchmark for 1st stage: 13k cells x 100 bootstraps = 1.3M dataset. Prediction with one model = 156s., i.e. ~5h for 100 models.  Même pas en fait, car apparemment c'est vachement plus rapide avec un seul modèle (il doit utiliser tous les modèles quand il prédit avec l'ensemble, logique.)
+- Time&memory benchmark for 2nd stage: repeat the above on slices of the predict set, otherwise the stack will be very large (4M * n boostraps = 1.6bn obs for 400 boostraps). We could set up a foreach loop to run on slices in parallel.    
+
 ```{r}
 # this can be long, so run it only if output not available, or manually (if new model)
 if(!file.exists(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))){
