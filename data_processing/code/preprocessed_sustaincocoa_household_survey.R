@@ -679,9 +679,9 @@ hhs_links_all %>%
   split(.$BUYER_IS_COOP) %>% map(summary)
 
 sc_coop_vol_tonne = 
-round(sum(filter(hhs_links_all, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+round(sum(filter(hhs_links_all, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/1000, 3)
 sc_other_vol_tonne = 
-  round(sum(filter(hhs_links_all, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+  round(sum(filter(hhs_links_all, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/1000, 3)
 
 (sc_coop_vol_tonne / (sc_coop_vol_tonne + sc_other_vol_tonne))
 

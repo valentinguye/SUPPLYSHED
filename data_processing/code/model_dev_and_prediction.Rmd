@@ -359,17 +359,30 @@ paste0("There are ",
 )
 
 
+(jrc_coop_vol_kg =  sum(filter(jrcdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) )
+sum(filter(jrcdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)
+(jrc_total_vol_kg = sum(filter(jrcdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)+sum(filter(jrcdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T))
+
+(sc_coop_vol_kg =  sum(filter(scdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) )
+sum(filter(scdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)
+(sc_total_vol_kg = sum(filter(scdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)+sum(filter(scdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T))
+
+(kit_coop_vol_kg =  sum(filter(kitdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) )
+sum(filter(kitdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)
+(kit_total_vol_kg = sum(filter(kitdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)+sum(filter(kitdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T))
+  
 # Create summary data frames
 summary_data <- data.frame(
 Metric = c("Source", 
             "Year", 
             "Spatial information",
             "Villages", 
-            "Farmers", 
+            "Cocoa farmers", 
             "Farmer-Buyer Links", 
                  "With cooperatives", 
                  "With other buyers", 
-            "Volume information", 
+            "Share of cooperative outlet in volumes sold", 
+            "Average farmer-cooperative Eucl. distance (km)",
             "Buyers", 
                  "Cooperatives", 
                  "Other buyers"
@@ -381,7 +394,8 @@ Metric = c("Source",
           nrow(jrcdata), 
           nrow(filter(jrcdata, !is.na(COOP_BS_ID))), 
           nrow(filter(jrcdata, !BUYER_IS_COOP)),
-          "Yes",
+          paste0(round(100*jrc_coop_vol_kg / jrc_total_vol_kg, 1),"%"),
+          round(mean(filter(jrcdata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           length(unique(jrcdata$BUYER_ACTUAL_LINK_ID)),
           length(unique(pull(filter(jrcdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(jrcdata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
@@ -393,7 +407,8 @@ Metric = c("Source",
           nrow(scdata), 
           nrow(filter(scdata, !is.na(COOP_BS_ID))), 
           nrow(filter(scdata, !BUYER_IS_COOP)),
-          "Yes", 
+          paste0(round(100*sc_coop_vol_kg / sc_total_vol_kg, 1),"%"),
+          round(mean(filter(scdata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           length(unique(scdata$BUYER_ACTUAL_LINK_ID)),
           length(unique(scdata$BUYER_ACTUAL_LINK_ID)), # repeat the count in links. This other way to count does not count coops that are not in IC2B: length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           "NA"
@@ -405,7 +420,8 @@ Metric = c("Source",
           nrow(kitdata), 
           nrow(filter(kitdata, BUYER_IS_COOP)), 
           nrow(filter(kitdata, !BUYER_IS_COOP)), 
-          "Yes",
+          paste0(round(100*kit_coop_vol_kg / kit_total_vol_kg, 1),"%"),
+          "NA",
           "NA", 
           "NA",
           "NA"
@@ -417,7 +433,8 @@ Metric = c("Source",
           nrow(filter(cargilldata, !is.na(COOP_BS_ID))), 
           length(unique(cargilldata$BUYER_ACTUAL_LINK_ID)),
           nrow(filter(cargilldata, !BUYER_IS_COOP)),
-          "No",
+          "NA",
+          round(mean(filter(cargilldata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
@@ -430,16 +447,17 @@ summary_data
 # Create table with kableExtra and add indentation
 table <- summary_data %>%
   kbl() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "responsive")) %>%
+  kable_classic(full_width = F, html_font = "Arial") %>% 
   
-  row_spec(7, extra_css = "padding-left: 20px;") %>%
-  row_spec(8, extra_css = "padding-left: 20px;") %>%
-  row_spec(11, extra_css = "padding-left: 20px;") %>%
-  row_spec(12, extra_css = "padding-left: 20px;")
+  row_spec(7, extra_css = "padding-left: 10px;") %>%
+  row_spec(8, extra_css = "padding-left: 10px;") %>%
+  row_spec(11, extra_css = "padding-left: 10px;") %>%
+  row_spec(12, extra_css = "padding-left: 10px;")
 
 table
+# has to be saved manually now, because save_kable saving work
 
-save_kable(table, here("outputs", "input_data_descriptives", "Observed_links_table.png"))
+# save_kable(table, here("outputs", "input_data_descriptives", "Observed_links_table.png"))
 
 ```
 
@@ -803,7 +821,7 @@ stg1_mformula_exofeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste
 
 The first stage has `r length(stg1_allfeatures)` potential features, `r length(stg1_exofeatures)` of which are exogenous to further applications. 
 
-### Simple fit 
+### Simple fits 
 This is simple because it does not do feature selection nor optimize hyper-parameters.
 ```{r}
 stg1_mfit = ranger(data = stg1_development, 
@@ -828,14 +846,22 @@ stg1_mfit = ranger(data = stg1_development,
                    )
 print(stg1_mfit)
 
+
+lm = train(form = stg1_formula_allfeatures, 
+          data = stg1_development,
+          trControl = trainControl(method="boot", number = 10),
+          method = "leapBackward", # "", # "", 
+          tuneLength=5
+          )
+
 ```
 
 
 ### CARET
 ```{r}
 # MAIN MODEL NOW 
-# Tourne en 16h, mais je pense que ça tournait pas pendant le gros de la nuit, 
-# donc plutôt une grosse heure? 
+# 32h quand même, pour allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5
+# on peut faire moins de tuning la prochaine fois, et aussi sauver les resamples pour pouvoir étudier leur variabilité. 
 
 cl <- makePSOCKcluster(detectCores() - 1)
 registerDoParallel(cl)
@@ -1459,6 +1485,19 @@ customSummary <- function(data, lev = NULL, model = NULL) {
   return(out)
 }
 
+# grid of Hyper-Parameters to search in, fixing some to the most conservative values
+stg2_HPgrid =  expand.grid(
+  eta = 0.01,
+  gamma = 10,
+  colsample_bytree = c(1, 0.5, 1),
+  min_child_weight = c(0.1, 0.5, 1),
+  subsample = 0.5,
+  max_depth = c(1, 5, 10),
+  nrounds = (1:10)*50
+)
+
+tic()
+
 set.seed(8888)
 seeds <- vector(mode = "list", length = 6)
 for(i in 1:6) seeds[[i]] <- sample.int(1000, 36)
@@ -1470,7 +1509,8 @@ model2_caret_xgb =
     y = stg2_development$LINK_IS_ACTUAL_COOP_class, 
     method="xgbTree", 
     metric = "ROC",
-    tuneLength=3,
+    # tuneLength=5, 
+    tuneGrid = stg2_HPgrid,
     # More about this function here: https://topepo.github.io/caret/model-training-and-tuning.html#control
     trControl=trainControl(method="cv",number=5,
                            savePredictions=T, # TRUE is equivalent to "all" and is necessary to use thresholder() later on. 
@@ -1479,8 +1519,10 @@ model2_caret_xgb =
                            summaryFunction = customSummary, 
                            classProbs = TRUE,  # necessary to obtain ROC
                            seeds = seeds
-                           ) 
+                           ), 
+    verbose = FALSE
   )
+toc()
 
 model2_caret_xgb
 
@@ -1636,7 +1678,7 @@ model2
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 # Read caret model 
-model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))
+model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5"))
 
 # All 1st stage models have been written by familiar in 
 stage1_expdes_repo
@@ -1755,11 +1797,7 @@ ggsave(
 ```{r}
 model2_caret_xgb
 
-model2_perf = 
-model2_caret_xgb$results %>% 
-  filter(
-  nrounds == 150 & max_depth == 3 & eta == 0.4 & gamma == 0 & colsample_bytree == 0.6 & min_child_weight == 1 & subsample == 0.75
-)
+model2_perf = getTrainPerf(model2_caret_xgb)
 
 # Access resampling results
 resamples <- model2_caret_xgb$resample
@@ -2189,7 +2227,8 @@ links_topredict_save = links_topredict
 ```{r}
 # This is the point estimate from the ensemble of models 
 tic()
-cells_topredict$CELL_SHARE_COOP = predict(model1_rfe$fit, newdata = cells_topredict)# add $predicted_outcome if model1 is a familiar model
+cells_topredict$CELL_SHARE_COOP = predict(model1_rfe$fit$finalModel, data = cells_topredict)$predictions
+# add $predicted_outcome if model1 is a familiar model
 toc()
 # From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
 
@@ -2291,7 +2330,7 @@ cells_toplot =
   cells_topredict %>% 
   mutate(
    # Work on PERCENTAGE, not share, from here, for display. 
-    CELL_SHARE_COOP = 100*CELL_SHARE_COOP_CARET_rfe,
+    CELL_SHARE_COOP = 100*CELL_SHARE_COOP,
     CELL_COCOA_SHARE = 100*CELL_COCOA_SHARE, 
     # Round hectares
     across(.cols = ends_with("_HA"), .fns = ~round(.x, 0))
@@ -2515,7 +2554,7 @@ This is just where we are sure that no link can exist because there is no coop.
 saveRDS(links_topredict, 
         here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
 
-links_topredict = readRDS(here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
+# links_topredict = readRDS(here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
 ```
 
 

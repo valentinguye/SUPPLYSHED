@@ -83,6 +83,14 @@ kit %>%
   split(.$BUYER_IS_COOP) %>% map(summary)
 
 
+kit_coop_vol_tonne = 
+  round(sum(filter(kit, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/1000, 3)
+kit_other_vol_tonne = 
+  round(sum(filter(kit, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/1000, 3)
+
+(kit_coop_vol_tonne / (kit_coop_vol_tonne + kit_other_vol_tonne))
+
+
 # Spatial coordinates -----------
 kit$longitude %>% summary()
 kit$latitude %>% summary()

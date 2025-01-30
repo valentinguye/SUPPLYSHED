@@ -1160,9 +1160,9 @@ jrc_geo %>%
   split(.$BUYER_IS_COOP) %>% map(summary)
 
 jrc_coop_vol_tonne = 
-  round(sum(filter(jrc_geo, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+  round(sum(filter(jrc_geo, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/1000, 3)
 jrc_other_vol_tonne = 
-  round(sum(filter(jrc_geo, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/3, 3)
+  round(sum(filter(jrc_geo, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)/1000, 3)
 
 (jrc_coop_vol_tonne / (jrc_coop_vol_tonne + jrc_other_vol_tonne))
 
