@@ -213,11 +213,7 @@ cells =
 ```
 
 
-
-
-## Development data
-
-### Remove some cells and links
+## Remove some cells and links
 ```{r}
 # BASED ON LU 
 
@@ -235,7 +231,6 @@ cells =
 links = 
   links %>% 
   filter(!(CELL_COCOA_SHARE < 0.01 & CELL_IMPOSSIBLE_SHARE > 0.8))
-
 
 # FEW EXTRA-TERRITORIAL LEFT
 # Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
@@ -268,15 +263,8 @@ stopifnot(links %>%
 
 ```
 
-### Under-sample virtual links
-```{r}
-links_us = 
-  links %>% 
-  filter(!LINK_POSSIBLE_FALSENEG) %>% 
-  filter(LINK_TO_KEEP_TO_US_VIRTUAL) # this is only TRUE currently. 
-```
 
-### Extract development sets
+## Subset development data
 Any processing on explanatory features' values should be made before this step so it is done once for all the data
 ```{r}
 cells = 
@@ -284,14 +272,18 @@ cells =
   mutate(SPLIT = if_else(CELL_IS_OBSERVED_COOPOUTLET, "Development set", "No data")) 
 
 stg1_development =
-  cells %>% filter(SPLIT == "Development set") 
+  cells %>% 
+  filter(SPLIT == "Development set") 
 
-links_us = 
-  links_us %>% 
-  mutate(SPLIT = if_else(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK, "Development set", "No data")) 
+links = 
+  links %>% 
+  mutate(SPLIT = if_else(CELL_ACTUAL_LINK & 
+                         !CELL_ACTUAL_ONLYOTHER_LINK & 
+                         !LINK_POSSIBLE_FALSENEG, # removes links with uncertain outcome status
+                         "Development set", "No data")) 
 
 stg2_development =
-  links_us %>%
+  links %>% 
   filter(SPLIT == "Development set") 
 
 cells_stg2_development =
@@ -463,13 +455,14 @@ table
 
 
 ### Map 
+Appendix Figure A1
 ```{r}
 consol = 
   consol %>% 
   mutate(Source = case_when(grepl("JRC", PRO_ID) ~ "JRC", 
                             grepl("SUSTAINCOCOA", PRO_ID) ~ "SC", 
                             grepl("CARGILL", PRO_ID) ~ "CARGILL", 
-                            TRUE ~ "OTHER"))
+                            TRUE ~ "None"))
 
 consol_farm_sf = 
   consol %>% 
@@ -479,25 +472,24 @@ consol_coop_sf =
   consol %>% 
   filter(!is.na(BUYER_LONGITUDE) & BUYER_IS_COOP) %>% # This excludes other buyers
   distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
-  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) 
+  st_as_sf(coords = c("BUYER_LONGITUDE", "BUYER_LATITUDE"), crs = 4326, remove = FALSE) %>% 
+  mutate(`Cooperative with observed link` = "Yes") %>% 
+  select(Source, `Cooperative with observed link`, geometry)
 
 unlinked_coopbs_sf = 
   coopbs22 %>% 
   filter(!is.na(LONGITUDE) & !COOP_BS_ID %in% consol_coop_sf$COOP_BS_ID) %>% # This excludes coops already in observed links data
   distinct(COOP_BS_ID, .keep_all = TRUE) %>% 
-  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
-
+  st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326) %>% 
+  mutate(
+    Source = NA,
+    `Cooperative with observed link` = "No"
+    ) %>% 
+  select(Source, `Cooperative with observed link`, geometry)
+  
 coops_toplot = 
-  rbind(
-    consol_coop_sf %>% 
-      mutate(`Cooperative with observed link` = "Yes") %>% 
-      select(Source, `Cooperative with observed link`, geometry),
-    unlinked_coopbs_sf %>% 
-      mutate(
-        Source = NA,
-        `Cooperative with observed link` = "No") %>% 
-      select(Source, `Cooperative with observed link`, geometry)
-  ) %>% 
+  rbind(consol_coop_sf,
+        unlinked_coopbs_sf) %>% 
   mutate(`Cooperative with observed link` = factor(`Cooperative with observed link`, 
                                                    levels = c("Yes", "No")))
 
@@ -532,7 +524,10 @@ coops_toplot = coops_toplot %>% arrange(desc(Source))
 map_links = 
   ggplot() +
     geom_sf(data = df, aes(col = Source), size = 5) + #, shape = 15
-    geom_sf(data = coops_toplot, aes(col = Source, 
+    geom_sf(data = consol_coop_sf, aes(col = Source, 
+                                     size  = `Cooperative with observed link`,
+                                     shape = `Cooperative with observed link`)) +
+    geom_sf(data = unlinked_coopbs_sf, col = "black", alpha = 0.5, aes(
                                      size  = `Cooperative with observed link`,
                                      shape = `Cooperative with observed link`)) +
     
@@ -618,42 +613,36 @@ stopifnot(
 stg1_development %>% nrow()
 
 ```
-
 The map on the information content of the Cells data is produced after model development, in order to add the AoA status.
+
+### Summary stats 
+
 
 The descriptive statistics on the cell-level features are computed in the Explanation section, 
 together with other analyses on predictors, and after the making of the formula including all or most 
 exogenous only predictors.   
 
-Cell data balance tests
-```{r}
-# (datasummary_balance(~SPLIT, 
-#                       data = cells_features_tobalance, 
-#                       stars = TRUE,
-#                       # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet", 
-#                       notes = "'BS' stands for cooperative buying stations.", 
-#                      output = here("outputs", "input_data_descriptives", "cells_balance.png")))        
-```
+
 
 ### LU 
 ```{r}
-(cells_stg2_development$CELL_COCOA_HA/cell_area_ha) %>% summary()
-  
-stg1_development %>% 
-  select(Sample = SPLIT, 
-          `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
-          `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
-          `Cocoa extent (ha)` = CELL_COCOA_HA,
-          `Coffee extent (ha)` = CELL_COFFEE_HA,
-          `Rubber extent (ha)` = CELL_RUBBER_HA,
-          `Palm extent (ha)` = CELL_PALM_HA,
-          `Coconut extent (ha)` = CELL_COCONUT_HA,
-          `Cashew extent (ha)` = CELL_CASHEW_HA,
-          `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
-          `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
-          `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA
-  ) %>% 
-  datasummary_skim(output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
+# (cells_stg2_development$CELL_COCOA_HA/cell_area_ha) %>% summary()
+#   
+# stg1_development %>% 
+#   select(Sample = SPLIT, 
+#           `Dense forest extent (ha)` = CELL_DENSEFOREST_HA,
+#           `other forests extent (ha)` = CELL_OTHERFORESTS_HA,
+#           `Cocoa extent (ha)` = CELL_COCOA_HA,
+#           `Coffee extent (ha)` = CELL_COFFEE_HA,
+#           `Rubber extent (ha)` = CELL_RUBBER_HA,
+#           `Palm extent (ha)` = CELL_PALM_HA,
+#           `Coconut extent (ha)` = CELL_COCONUT_HA,
+#           `Cashew extent (ha)` = CELL_CASHEW_HA,
+#           `Other agricultural extent (ha)` = CELL_OTHERAG_HA,
+#           `Settlements extent (ha)` = CELL_SETTLEMENT_HA,
+#           `Water, rock or infrastructure extent (ha)` = CELL_IMPOSSIBLE_HA
+#   ) %>% 
+#   datasummary_skim(output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
 
 ```
 
@@ -695,6 +684,25 @@ totbl =
 totbl
 
 ```
+
+### Imbalance
+```{r}
+# Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
+# "the number of pairs that do not have a link to the number of pairs that do have a link."
+# but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives.
+(N_cells = stg2_development$CELL_ID %>% unique() %>% length())
+(M_coops = coopbs$COOP_BS_ID %>% unique() %>% length())
+(E_links = stg2_development$LINK_IS_ACTUAL_COOP %>% sum())
+
+(initial_imbalance = (N_cells*M_coops - E_links)/E_links)
+
+# And the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links).
+# i.e. the ratio of virtual to actual links
+(N_actual = stg2_development %>% filter(LINK_IS_ACTUAL_COOP) %>% nrow())
+(N_virtual = stg2_development %>% filter(!LINK_IS_ACTUAL_COOP) %>% nrow())
+(current_imbalance = N_virtual / N_actual)
+```
+
 
 
 ### Balance tests in Links features
@@ -827,10 +835,9 @@ This is simple because it does not do feature selection nor optimize hyper-param
 stg1_mfit = ranger(data = stg1_development, 
                    # splitrule="beta",
                    num.trees = 500,
-                   # mtry = 77,
+                   # mtry = 30,
                    # min.node.size= 10,
-                   importance = 'permutation',
-                   # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
+                   # case.weights = stg1_development$CELL_REPRESENTATIVITY_WEIGHT,
                    formula = stg1_formula_allfeatures, 
                    seed = 8888
                    )
@@ -839,20 +846,12 @@ print(stg1_mfit)
 stg1_mfit = ranger(data = stg1_development, 
                    splitrule="beta",
                    # mtry = 20,
-                   importance = 'permutation',
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
                    formula = stg1_mformula_exofeatures, 
                    seed = 8888
                    )
 print(stg1_mfit)
 
-
-lm = train(form = stg1_formula_allfeatures, 
-          data = stg1_development,
-          trControl = trainControl(method="boot", number = 10),
-          method = "leapBackward", # "", # "", 
-          tuneLength=5
-          )
 
 ```
 
@@ -874,16 +873,17 @@ model1_rfe <-
         trControl = trainControl(method="LOOCV"),
         method = "ranger", 
         importance="permutation", 
-        tuneLength=15,
+        tuneLength=10,
         # tuneGrid = data.frame(splitrule = "poisson",
         #                   min.node.size = 5,
         #                  mtry = c(8, 20, 40, 60, 77)
         #                  ),
-        sizes = c(5, 10, 20, 30, 40, 50, 60, 70), # tell caret how many different feature subset sizes to try. DOes not need to include the total, which is tried out automatically. 
-        rfeControl = rfeControl(method = "repeatedcv",
-                              			repeats = 5, 
-                              			number = 5,
-                              			functions = caretFuncs)) #"The latter is useful if the model has tuning parameters that must be determined at each iteration."
+        sizes = c(5, 15, 30, 45, 60), # tell caret how many different feature subset sizes to try. DOes not need to include the total, which is tried out automatically. 
+        rfeControl = rfeControl(method = "cv",
+                          			# repeats = 5, 
+                          			number = 5,
+                                returnResamp = "all",
+                          			functions = caretFuncs)) #"The latter is useful if the model has tuning parameters that must be determined at each iteration."
 
 model1_rfe   # Have a look at the output
 model1_rfe$optVariables   # What features got picked?
@@ -895,7 +895,7 @@ registerDoSEQ()
 model1_rfe$fit
 
 saveRDS(model1_rfe, 
-        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5"))
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_10tuneL_sizesevery15_cv5"))
 
 ```
 
@@ -1493,9 +1493,10 @@ stg2_HPgrid =  expand.grid(
   min_child_weight = c(0.1, 0.5, 1),
   subsample = 0.5,
   max_depth = c(1, 5, 10),
-  nrounds = (1:10)*50
+  nrounds = (1:3)*50
 )
 
+# *WITHOUT* INSIDE UNDER-SAMPLING OF NONEXISTENT LINKS TO SAME FREQUENCY AS EXISTENT ONES
 tic()
 
 set.seed(8888)
@@ -1517,7 +1518,8 @@ model2_caret_xgb =
                            #returnResamp = TRUE,
                            verboseIter = TRUE,
                            summaryFunction = customSummary, 
-                           classProbs = TRUE,  # necessary to obtain ROC
+                           classProbs = TRUE,  # necessary to obtain ROC, 
+                           # sampling = "down",
                            seeds = seeds
                            ), 
     verbose = FALSE
@@ -1525,6 +1527,37 @@ model2_caret_xgb =
 toc()
 
 model2_caret_xgb
+
+# *WITH* INSIDE UNDER-SAMPLING OF NONEXISTENT LINKS TO SAME FREQUENCY AS EXISTENT ONES
+# (sampling argument in trainControl)
+tic()
+
+set.seed(8888)
+seeds <- vector(mode = "list", length = 6)
+for(i in 1:6) seeds[[i]] <- sample.int(1000, 36)
+seeds[[6]] = sample.int(1000, 1)
+
+model2_caret_xgb_down = 
+  train(
+    x = stg2_development %>% select(all_of(stg2_allfeatures)),
+    y = stg2_development$LINK_IS_ACTUAL_COOP_class, 
+    method="xgbTree", 
+    metric = "ROC",
+    # tuneLength=5, 
+    tuneGrid = stg2_HPgrid,
+    # More about this function here: https://topepo.github.io/caret/model-training-and-tuning.html#control
+    trControl=trainControl(method="cv",number=5,
+                           savePredictions=T, # TRUE is equivalent to "all" and is necessary to use thresholder() later on. 
+                           #returnResamp = TRUE,
+                           verboseIter = TRUE,
+                           summaryFunction = customSummary, 
+                           classProbs = TRUE,  # necessary to obtain ROC, 
+                           sampling = "down",
+                           seeds = seeds
+                           ), 
+    verbose = FALSE
+  )
+toc()
 
 saveRDS(model2_caret_xgb, 
         here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
@@ -2692,6 +2725,30 @@ either conditional or unconditional probabilities to be linked with the coop, fo
 
 
 ```
+
+# OUTPUT DESCRIPTIVES 
+Do here (for now) the des stats that need objects not available before the Model development part of this script.  
+
+### Balance tests
+Balance tests between development and prediction data 
+```{r}
+cells_features_tobalance = 
+  rbind(
+    stg1_development %>% select(CELL_ID, stg1_allfeatures), 
+    cells_topredict  %>% select(CELL_ID, stg1_allfeatures) %>% filter(!CELL_ID %in% stg1_development$CELL_ID), 
+  )
+stopifnot(cells_features_tobalance %>% filter(SPLIT == "Development set") %>% norw() == nrow(stg1_development))
+
+(datasummary_balance(~SPLIT,
+                     data = cells_features_tobalance,
+                     stars = TRUE,
+                     # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet",
+                     notes = "'BS' stands for cooperative buying stations.",
+                     output = here("outputs", "input_data_descriptives", "cells_balance.png")))
+
+```
+
+
 
 # EXPORT 
 ```{r}

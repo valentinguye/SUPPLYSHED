@@ -1471,80 +1471,93 @@ stopifnot(
 
 # setdiff(potential_all$LINK_POTENTIAL_COOP_BS_ID, coopb$COOP_BS_ID)
 
-# SUB-SAMPLING ----------
-set.seed(8888)
+# FILTERING ----------
 
 ## SC coop links ------------------------
 
-# As checked below if run without sub-sampling, and in SC pre-processing script, 
-# the cell's share of cooperative outlet is over-represented in the data. 
-# This is due to sampling biases towards farmers linked with cooperatives in SC data. 
-# These sampling biases can be at village and at household levels. 
-# We correct by sub-sampling at household link level. 
+# The average share of coop outlet in nationally representative data (JRC and KIT currently)
+repr_coop_vol_kg = consol %>% filter(!grepl("SUSTAINCOCOA", PRO_ID) & BUYER_IS_COOP) %>% pull(LINK_VOLUME_KG) %>% sum(na.rm = T)
+repr_other_vol_kg = consol %>% filter(!grepl("SUSTAINCOCOA", PRO_ID) & !BUYER_IS_COOP) %>% pull(LINK_VOLUME_KG) %>% sum(na.rm = T)
+(repr_avg_share_coop_outlet = repr_coop_vol_kg / (repr_other_vol_kg+repr_coop_vol_kg))
 
-# So concretely, we want to remove some actual links between SC farmers and coops. 
-# but impose that one actual link remains with every coop (with !COOP_SELECTOR), for convenience in the 
-# 1st stage data making section (otherwise it can happen that all links with the nearest coop are removed by sub-sampling which creates NAs).
-# (that's not for 2nd stage, because sub-sampling is not even applied to data for 2nd stage).     
-sc_coop_links = 
-  potential_all %>% 
-  filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP & !COOP_SELECTOR) %>% 
-  pull(LINK_ID) 
+all_coop_vol_kg = consol %>% filter(BUYER_IS_COOP) %>% pull(LINK_VOLUME_KG) %>% sum(na.rm = T)
+all_other_vol_kg = consol %>% filter(!BUYER_IS_COOP) %>% pull(LINK_VOLUME_KG) %>% sum(na.rm = T)
+(all_avg_share_coop_outlet = all_coop_vol_kg / (all_other_vol_kg+all_coop_vol_kg))
 
-sc_coop_share = 
-  sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) /
-  (sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) +
-     sum(filter(sc_links, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) ) 
+# # NOT DONE ANY MORE, see manuscript. 
+# # As checked below if run without sub-sampling, and in SC pre-processing script, 
+# # the cell's share of cooperative outlet is over-represented in the data. 
+# # This is due to sampling biases towards farmers linked with cooperatives in SC data. 
+# # These sampling biases can be at village and at household levels. 
+# # We correct by sub-sampling at household link level. 
+# # set.seed(8888)
+# # So concretely, we want to remove some actual links between SC farmers and coops. 
+# # but impose that one actual link remains with every coop (with !COOP_SELECTOR), for convenience in the 
+# # 1st stage data making section (otherwise it can happen that all links with the nearest coop are removed by sub-sampling which creates NAs).
+# # (that's not for 2nd stage, because sub-sampling is not even applied to data for 2nd stage).     
+# sc_coop_links = 
+#   potential_all %>% 
+#   filter(grepl("SUSTAINCOCOA_", PRO_ID) & BUYER_IS_COOP & !COOP_SELECTOR) %>% 
+#   pull(LINK_ID) 
+# 
+# sc_coop_share = 
+#   sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) /
+#   (sum(filter(sc_links, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) +
+#      sum(filter(sc_links, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) ) 
+# 
+# sc_coop_share_inrows = 
+#   nrow(filter(sc_links, BUYER_IS_COOP)) / nrow(sc_links) 
+# 
+# seipcs_direct_share = 0.45
+# # this ratio is equal to 1 if coop sourcing = 50%
+# target_coop_to_other_ratio = seipcs_direct_share / (1-seipcs_direct_share) # based on SEI-PCS v1.0 (2019) which equates direct sourcing (45%) to coop sourcing.  
+# # but we use the share directly
+# target_share = seipcs_direct_share
+# 
+# # The sub-sample share is the share of obs. in a category we want to sample - i.e. to *KEEP* - to have a more balanced sample.  
+# # Here: the pct of sc-coop links  
+# # the lower the 'true' (target) coop sourcing share relative to the share in SC, the lower the sub-sample share, 
+# # i.e. the fewer sc-coop links we want to sample.   
+# (subsample_share = (target_share / sc_coop_share_inrows) * ((1 - sc_coop_share_inrows) / (1 - target_share)))
+# # Derived from Equation: SHARE_ss * N_sc / T'_sc = SHARE_target 
+# # where N_sc is the # of sc-coop links;
+# # T_sc and T'_sc are the total # of sc links resp. before and after sub-sampling; 
+# # with T'_sc = T_sc - N_sc(1-S_ss) (the correction implies the factor in the 2nd parenthesis)
+# # and N_sc / T_sc = SHARE_sc = sc_coop_share_inrows
+# # so the Equation means: 
+# # apply the sub-sample share S_ss to N_sc, such that, reported to the total after sub-sampling, we obtain the target share. 
+# 
+# sc_coop_links_tokeep = sample(sc_coop_links, size = round(subsample_share*length(sc_coop_links)))
+# length(sc_coop_links_tokeep)
+# 
+# # We can just FLAG, and not remove them, because sc-coop links are not going to cause 
+# # target imbalance in 2nd stage and they make valuable information, so we want to keep them. 
+# # US_SC = UnderSample SustainCocoa 
+# potential_all = 
+#   potential_all %>% 
+#   # be a link outside the category of interest, or in the list of links under-sampled. 
+#   mutate(LINK_TO_KEEP_TO_US_SC = (!LINK_ID %in% sc_coop_links) | 
+#                                    LINK_ID %in% sc_coop_links_tokeep)
+# 
+# stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_SC)) + round((1-subsample_share)*length(sc_coop_links)))
+# 
+# rm(subsample_share, sc_coop_links, sc_coop_links_tokeep, 
+#    target_share, seipcs_direct_share, target_coop_to_other_ratio, 
+#    sc_coop_share_inrows, sc_coop_share)
 
-sc_coop_share_inrows = 
-  nrow(filter(sc_links, BUYER_IS_COOP)) / nrow(sc_links) 
 
-seipcs_direct_share = 0.45
-# this ratio is equal to 1 if coop sourcing = 50%
-target_coop_to_other_ratio = seipcs_direct_share / (1-seipcs_direct_share) # based on SEI-PCS v1.0 (2019) which equates direct sourcing (45%) to coop sourcing.  
-# but we use the share directly
-target_share = seipcs_direct_share
-
-# The sub-sample share is the share of obs. in a category we want to sample - i.e. to *KEEP* - to have a more balanced sample.  
-# Here: the pct of sc-coop links  
-# the lower the 'true' (target) coop sourcing share relative to the share in SC, the lower the sub-sample share, 
-# i.e. the fewer sc-coop links we want to sample.   
-(subsample_share = (target_share / sc_coop_share_inrows) * ((1 - sc_coop_share_inrows) / (1 - target_share)))
-# Derived from Equation: SHARE_ss * N_sc / T'_sc = SHARE_target 
-# where N_sc is the # of sc-coop links;
-# T_sc and T'_sc are the total # of sc links resp. before and after sub-sampling; 
-# with T'_sc = T_sc - N_sc(1-S_ss) (the correction implies the factor in the 2nd parenthesis)
-# and N_sc / T_sc = SHARE_sc = sc_coop_share_inrows
-# so the Equation means: 
-# apply the sub-sample share S_ss to N_sc, such that, reported to the total after sub-sampling, we obtain the target share. 
-
-sc_coop_links_tokeep = sample(sc_coop_links, size = round(subsample_share*length(sc_coop_links)))
-length(sc_coop_links_tokeep)
-
-# We can just FLAG, and not remove them, because sc-coop links are not going to cause 
-# target imbalance in 2nd stage and they make valuable information, so we want to keep them. 
-# US_SC = UnderSample SustainCocoa 
+## JRC actual links ------------------
+# Store it in a variable collecting all reasons for a link to be removed
 potential_all = 
   potential_all %>% 
-  # be a link outside the category of interest, or in the list of links under-sampled. 
-  mutate(LINK_TO_KEEP_TO_US_SC = (!LINK_ID %in% sc_coop_links) | 
-                                   LINK_ID %in% sc_coop_links_tokeep)
+  mutate(LINK_TOREMOVE = grepl("JRC_", PRO_ID))
 
-stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_SC)) + round((1-subsample_share)*length(sc_coop_links)))
+potential_all$LINK_TOREMOVE %>% summary()
 
-rm(subsample_share, sc_coop_links, sc_coop_links_tokeep, 
-   target_share, seipcs_direct_share, target_coop_to_other_ratio, 
-   sc_coop_share_inrows, sc_coop_share)
-
-
-
-
-## Virtual links ------------------
-
-### Remove Cargill and JRC false negatives -------------------
+### Remove virtual links with high uncertainty -------------------
+# These are virtual links in Cargill and JRC cells, which are possible false negatives. 
 # We consider virtual links in JRC cells can be false negatives because there is 
 # a bias in that they surveyed the closer intermediaries with higher likelihood.  
-
 potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
@@ -1555,6 +1568,15 @@ potential_all =
 
 if(potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(PRO_ID) %>% grepl(pattern = "SUSTAINCOCOA|KIT_") %>% any()
 ){stop()}
+
+# update the variable collecting all reasons for a link to be removed
+potential_all = 
+  potential_all %>% 
+  mutate(LINK_TOREMOVE = case_when(
+    LINK_POSSIBLE_FALSENEG ~ LINK_TOREMOVE, 
+    TRUE ~ LINK_TOREMOVE
+  ))  
+
 
 # keep working on the same object actually, because when aggregating to cells for 1st stage, 
 # we want to have all the virtual links from Cargill cells. The fact that they can 
@@ -1584,155 +1606,159 @@ potential_all$CELL_ID %>% unique() %>% length()
   filter(LINK_POSSIBLE_FALSENEG) %>% 
   pull(CELL_ID) %>% unique() %>% length())
 
-### Remove JRC false negatives --------------
-# These are in cells with isolated farmers that get separated from their village by the cell match. 
-# + the few cases of villages with very few surveyed farmers 
-# (not addressed in JRC script to be addressed here.)
-# (Note that in the first stage, they get weights proportional to representativity, 
-# so we only address virtual links being false negatives in the second stage here.)
-potential_all = 
-  potential_all %>% 
-  group_by(CELL_ID) %>% 
-  mutate(
-    CELL_N_JRC_FARMERS = length(na.omit(unique(grep(pattern = "JRC_", x = PRO_ID, value = TRUE))))
-  ) %>% 
-  ungroup()
-potential_all %>% 
-  summarise(.by = CELL_N_JRC_FARMERS, 
-            N_CELLS = length(unique(CELL_ID))) %>% 
-  arrange(CELL_N_JRC_FARMERS)
 
-
-# The below does not change anything now that virtual links are removed for JRC cells above. 
-potential_all$LINK_POSSIBLE_FALSENEG %>% sum()
-# Discard virtual links in cells with less than 4 farmers 
-# (but not in cells with 0 JRC farmers, these are all the others, 
-#  nor in cells where there could be a sustaincocoa or a KIT village)
-potential_all =
-  potential_all %>% 
-  group_by(CELL_ID) %>% 
-  mutate(
-    LINK_JRC_POSSIBLE_FALSENEG = 
-      CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_|KIT_", PRO_ID))), 
-  ) %>% 
-  ungroup() %>% 
-  # update the existing variable LINK_POSSIBLE_FALSENEG
-  mutate(
-    LINK_POSSIBLE_FALSENEG = case_when(
-      LINK_JRC_POSSIBLE_FALSENEG ~ TRUE, 
-      TRUE ~ LINK_POSSIBLE_FALSENEG
-    )
-  )
-potential_all$LINK_POSSIBLE_FALSENEG %>% sum()
-
-# potential_all %>% filter(LINK_JRC_POSSIBLE_FALSENEG & !LINK_POSSIBLE_FALSENEG)
-
-potential_all %>% filter(LINK_POSSIBLE_FALSENEG) %>% View()
-potential_all %>% filter(CELL_ID == 385) %>% View()
-# number of JRC villages in the data 
-# potential_all %>% filter(grepl("JRC_", x = PRO_ID)) %>% pull(PRO_VILLAGE_NAME) %>% unique() %>% length()
-# potential_all %>% filter(grepl("JRC_", x = PRO_ID) & LINK_POSSIBLE_FALSENEG) %>% pull(PRO_VILLAGE_NAME) %>% unique() %>% length()
-# but that's not what matters here. We'd rather know how many cells get their virtual links removed
-potential_all %>% filter(CELL_N_JRC_FARMERS %in% 1:3 & LINK_POSSIBLE_FALSENEG) %>%
-  pull(CELL_ID) %>% unique() %>% length()
-
-# check that no cell is completely removed (it shouldn't)
-stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
-            pull(CELL_ID) %>% unique() %>% length() == sum(grid_ctoid$IS_TERRITORIAL)
-)
-
-potential_all %>% 
-  filter(
-    LINK_JRC_POSSIBLE_FALSENEG
-  ) %>% nrow()
-potential_all %>% 
-  filter(LINK_JRC_POSSIBLE_FALSENEG) %>% 
-  pull(CELL_ID) %>% unique() %>% length()
-
-potential_all = potential_all %>% select(-LINK_JRC_POSSIBLE_FALSENEG)
+# # The below does not change anything now that virtual links are removed for JRC cells above. 
+# # These are in cells with isolated farmers that get separated from their village by the cell match. 
+# # + the few cases of villages with very few surveyed farmers 
+# # (not addressed in JRC script to be addressed here.)
+# # (Note that in the first stage, they get weights proportional to representativity, 
+# # so we only address virtual links being false negatives in the second stage here.)
+# potential_all = 
+#   potential_all %>% 
+#   group_by(CELL_ID) %>% 
+#   mutate(
+#     CELL_N_JRC_FARMERS = length(na.omit(unique(grep(pattern = "JRC_", x = PRO_ID, value = TRUE))))
+#   ) %>% 
+#   ungroup()
+# potential_all %>% 
+#   summarise(.by = CELL_N_JRC_FARMERS, 
+#             N_CELLS = length(unique(CELL_ID))) %>% 
+#   arrange(CELL_N_JRC_FARMERS)
+# 
+# 
+# potential_all$LINK_POSSIBLE_FALSENEG %>% sum()
+# # Discard virtual links in cells with less than 4 farmers 
+# # (but not in cells with 0 JRC farmers, these are all the others, 
+# #  nor in cells where there could be a sustaincocoa or a KIT village)
+# potential_all =
+#   potential_all %>% 
+#   group_by(CELL_ID) %>% 
+#   mutate(
+#     LINK_JRC_POSSIBLE_FALSENEG = 
+#       CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_|KIT_", PRO_ID))), 
+#   ) %>% 
+#   ungroup() %>% 
+#   # update the existing variable LINK_POSSIBLE_FALSENEG
+#   mutate(
+#     LINK_POSSIBLE_FALSENEG = case_when(
+#       LINK_JRC_POSSIBLE_FALSENEG ~ TRUE, 
+#       TRUE ~ LINK_POSSIBLE_FALSENEG
+#     )
+#   )
+# potential_all$LINK_POSSIBLE_FALSENEG %>% sum()
+# 
+# # potential_all %>% filter(LINK_JRC_POSSIBLE_FALSENEG & !LINK_POSSIBLE_FALSENEG)
+# 
+# potential_all %>% filter(LINK_POSSIBLE_FALSENEG) %>% View()
+# potential_all %>% filter(CELL_ID == 385) %>% View()
+# # number of JRC villages in the data 
+# # potential_all %>% filter(grepl("JRC_", x = PRO_ID)) %>% pull(PRO_VILLAGE_NAME) %>% unique() %>% length()
+# # potential_all %>% filter(grepl("JRC_", x = PRO_ID) & LINK_POSSIBLE_FALSENEG) %>% pull(PRO_VILLAGE_NAME) %>% unique() %>% length()
+# # but that's not what matters here. We'd rather know how many cells get their virtual links removed
+# potential_all %>% filter(CELL_N_JRC_FARMERS %in% 1:3 & LINK_POSSIBLE_FALSENEG) %>%
+#   pull(CELL_ID) %>% unique() %>% length()
+# 
+# # check that no cell is completely removed (it shouldn't)
+# stopifnot(filter(potential_all, !LINK_POSSIBLE_FALSENEG) %>% 
+#             pull(CELL_ID) %>% unique() %>% length() == sum(grid_ctoid$IS_TERRITORIAL)
+# )
+# 
+# potential_all %>% 
+#   filter(
+#     LINK_JRC_POSSIBLE_FALSENEG
+#   ) %>% nrow()
+# potential_all %>% 
+#   filter(LINK_JRC_POSSIBLE_FALSENEG) %>% 
+#   pull(CELL_ID) %>% unique() %>% length()
+# 
+# potential_all = potential_all %>% select(-LINK_JRC_POSSIBLE_FALSENEG)
 
 ### Random sub-sampling --------------------
 
-# Make separate object for convenience 
-traintest_2dstg = 
-  potential_all %>% 
-  # Imbalance should be computed in the train/test set only. 
-  filter(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK) %>% 
-  # Moreover, imbalance should be computed with all the possible false negatives removed. 
-  filter(!LINK_POSSIBLE_FALSENEG)
-# order in the above filters is inconsequential
+# The below code is nice, but applying such sub/down/under-sampling to all the data would be incorrect
+# and would lead to overestimating the model performance. 
+# See e.g. https://topepo.github.io/caret/subsampling-for-class-imbalances.html
 
-# Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
-# "the number of pairs that do not have a link to the number of pairs that do have a link."
-# but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives. 
-(N_cells = traintest_2dstg$CELL_ID %>% unique() %>% length())
-(M_coops = coopbs$COOP_BS_ID %>% unique() %>% length())
-(E_links = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
-# this is the same as 
-E_links == consol_IC2Bcoops %>% nrow()
+# # Make separate object for convenience 
+# traintest_2dstg = 
+#   potential_all %>% 
+#   # Imbalance should be computed in the train/test set only. 
+#   filter(CELL_ACTUAL_LINK & !CELL_ACTUAL_ONLYOTHER_LINK) %>% 
+#   # Moreover, imbalance should be computed with all the possible false negatives removed. 
+#   filter(!LINK_POSSIBLE_FALSENEG)
+# # order in the above filters is inconsequential
+# 
+# # Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
+# # "the number of pairs that do not have a link to the number of pairs that do have a link."
+# # but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives. 
+# (N_cells = traintest_2dstg$CELL_ID %>% unique() %>% length())
+# (M_coops = coopbs$COOP_BS_ID %>% unique() %>% length())
+# (E_links = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
+# # this is the same as 
+# E_links == consol_IC2Bcoops %>% nrow()
+# 
+# (initial_imbalance = (N_cells*M_coops - E_links)/E_links)
+# 
+# # And the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links). 
+# # i.e. the ratio of virtual to actual links
+# (N_actual = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
+# (N_virtual = traintest_2dstg$LINK_IS_VIRTUAL %>% sum())
+# (current_imbalance = N_virtual / N_actual)
+# 
+# # This is a reduction by a factor of 
+# (round(initial_imbalance/current_imbalance))
+# 
+# # Compute it as a share 
+# (current_virtual_share = N_virtual / (N_actual + N_virtual))
+# # note it can be computed as 
+# current_imbalance/(current_imbalance + 1)
+# 
+# # and 
+# (current_actual_share = N_actual / (N_actual + N_virtual))
+# # (or)
+# 1/(current_imbalance + 1)
+# 
+# # Now, there are three possible targets: 
+#   # - 1 do nothing because the imbalance is already limited by previous informed sub-sampling
+# if(initial_imbalance/4 > current_imbalance){
+#   print("It is not needed to further correct for class imbalance by random sub-sampling.")
+#   # just make the variable exist to avoid bugs.
+#   potential_all = 
+#     potential_all %>% 
+#     mutate(LINK_TO_KEEP_TO_US_VIRTUAL = TRUE)
+# }else{
+#   # - 2 the target of perfect balance 
+#   target_no_imbalance_share = .5
+#   # - 3 the target of a 4 times lower imbalance, as in Mungo et al. 2023 who choose an sub-sampling ratio 4 times lower than the data imbalance 
+#   (target_mungo_imbalance = current_imbalance/4)
+#   target_mungo_share = 1 / (target_mungo_imbalance + 1) # following above equivalence
+#   
+#   TARGET_SHARE_TO_USE = target_mungo_share
+#   
+#   # Apply the sub-sample share formula (see sc coop link sub-sampling above  for explanations)  
+#   (subsample_share = (TARGET_SHARE_TO_USE / current_virtual_share) * ((1 - current_virtual_share) / (1 - TARGET_SHARE_TO_USE)))
+#   
+#   # Sample in virtual links 
+#   virtual_links = 
+#     # important to sample only in virtual links of the train-test set 
+#     traintest_2dstg %>% 
+#     filter(LINK_IS_VIRTUAL) %>% 
+#     pull(LINK_ID) 
+#   
+#   virtual_links_tokeep = sample(virtual_links, size = round(subsample_share*length(virtual_links)))
+#   length(virtual_links_tokeep)
+#   
+#   potential_all = 
+#     potential_all %>% 
+#     # be a link outside the category of interest, or in the list of links under-sampled. 
+#     mutate(LINK_TO_KEEP_TO_US_VIRTUAL = (!LINK_ID %in% virtual_links) | 
+#                                           LINK_ID %in% virtual_links_tokeep)
+#   
+#   stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_VIRTUAL)) + 
+#               round((1-subsample_share)*length(virtual_links)))
+# }
+# rm(traintest_2dstg)
 
-(initial_imbalance = (N_cells*M_coops - E_links)/E_links)
-
-# And the actual imbalance, i.e. now that we limited the number of virtual links to within 72km (the max observed distance in actual links). 
-# i.e. the ratio of virtual to actual links
-(N_actual = traintest_2dstg$LINK_IS_ACTUAL_COOP %>% sum())
-(N_virtual = traintest_2dstg$LINK_IS_VIRTUAL %>% sum())
-(current_imbalance = N_virtual / N_actual)
-
-# This is a reduction by a factor of 
-(round(initial_imbalance/current_imbalance))
-
-# Compute it as a share 
-(current_virtual_share = N_virtual / (N_actual + N_virtual))
-# note it can be computed as 
-current_imbalance/(current_imbalance + 1)
-
-# and 
-(current_actual_share = N_actual / (N_actual + N_virtual))
-# (or)
-1/(current_imbalance + 1)
-
-# Now, there are three possible targets: 
-  # - 1 do nothing because the imbalance is already limited by previous informed sub-sampling
-if(initial_imbalance/4 > current_imbalance){
-  print("It is not needed to further correct for class imbalance by random sub-sampling.")
-  # just make the variable exist to avoid bugs.
-  potential_all = 
-    potential_all %>% 
-    mutate(LINK_TO_KEEP_TO_US_VIRTUAL = TRUE)
-}else{
-  # - 2 the target of perfect balance 
-  target_no_imbalance_share = .5
-  # - 3 the target of a 4 times lower imbalance, as in Mungo et al. 2023 who choose an sub-sampling ratio 4 times lower than the data imbalance 
-  (target_mungo_imbalance = current_imbalance/4)
-  target_mungo_share = 1 / (target_mungo_imbalance + 1) # following above equivalence
-  
-  TARGET_SHARE_TO_USE = target_mungo_share
-  
-  # Apply the sub-sample share formula (see sc coop link sub-sampling above  for explanations)  
-  (subsample_share = (TARGET_SHARE_TO_USE / current_virtual_share) * ((1 - current_virtual_share) / (1 - TARGET_SHARE_TO_USE)))
-  
-  # Sample in virtual links 
-  virtual_links = 
-    # important to sample only in virtual links of the train-test set 
-    traintest_2dstg %>% 
-    filter(LINK_IS_VIRTUAL) %>% 
-    pull(LINK_ID) 
-  
-  virtual_links_tokeep = sample(virtual_links, size = round(subsample_share*length(virtual_links)))
-  length(virtual_links_tokeep)
-  
-  potential_all = 
-    potential_all %>% 
-    # be a link outside the category of interest, or in the list of links under-sampled. 
-    mutate(LINK_TO_KEEP_TO_US_VIRTUAL = (!LINK_ID %in% virtual_links) | 
-                                          LINK_ID %in% virtual_links_tokeep)
-  
-  stopifnot(nrow(potential_all) == nrow(filter(potential_all, LINK_TO_KEEP_TO_US_VIRTUAL)) + 
-              round((1-subsample_share)*length(virtual_links)))
-}
-
-rm(traintest_2dstg)
 
 # EXPORT -------
 # Export here the data for the second stage, to then work from a lighter object
@@ -1753,13 +1779,11 @@ saveRDS(potential_all,
 rm(potential_all_save, potential)
 
 # 1ST STAGE DATA --------------
-potential_all = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
+potential_1st = readRDS(here("temp_data", "prepared_main_dataset", paste0("cell_links_", grid_size_m*1e-3, "km.Rdata")))
 
-## Apply sub-sampling -------------
-# We apply only 1st stage sub-sampling. 
-potential_1st = 
-  potential_all %>% 
-  filter(LINK_TO_KEEP_TO_US_SC)
+# Apply only 1st stage sub-sampling - NOPE, not anymore, this was incorrect. 
+# This would changed the outcome but not the predictors, so it just introduces error in the training data
+# filter(LINK_TO_KEEP_TO_US_SC)
 
 
 # Prepare 
@@ -2120,21 +2144,18 @@ cell_weights =
             CELL_JRCKIT_COCOA_FARMLAND_HA = sum(PRO_COCOA_FARMLAND_HA, na.rm = TRUE),
             CELL_COCOA_HA = unique(CELL_COCOA_HA)) %>% 
   mutate(
+    CELL_AREA_WEIGHT = CELL_JRCKIT_COCOA_FARMLAND_HA/CELL_COCOA_HA, 
+    CELL_AREA_WEIGHT = if_else(CELL_AREA_WEIGHT > 1, 1, CELL_AREA_WEIGHT), # bound to 1, because in 6 cells this is higher in survey data. 
     CELL_REPRESENTATIVITY_WEIGHT = case_when(
-      CELL_COCOA_HA > 0 ~ CELL_JRCKIT_COCOA_FARMLAND_HA/CELL_COCOA_HA, 
+      grepl("SUSTAINCOCOA|KIT", paste0(CELL_DATA_SOURCE)) ~ 1,       
+      CELL_COCOA_HA > 0 ~ CELL_AREA_WEIGHT, 
       TRUE ~ NA
-    ),
-    NORMALIZER = sum(CELL_REPRESENTATIVITY_WEIGHT, na.rm = TRUE), 
-    CELL_REPRESENTATIVITY_NORM_WEIGHT = case_when(
-      grepl("SUSTAINCOCOA", paste0(CELL_DATA_SOURCE)) ~ 1, 
-      grepl("JRC|KIT", paste0(CELL_DATA_SOURCE)) ~ CELL_REPRESENTATIVITY_WEIGHT/NORMALIZER, 
-      TRUE ~ NA)
-    ) %>% 
-  select(CELL_ID, CELL_DATA_SOURCE, CELL_REPRESENTATIVITY_WEIGHT, CELL_REPRESENTATIVITY_NORM_WEIGHT)
-# NOTE! THAT AS SUCH, THE WEIGHTS ARE NORMALISED ONLY WITHIN JRC CELLS, AND THEN HAVE A WEIGHT = 1 IN SC DATA CELLS 
+    )) %>% 
+  select(CELL_ID, CELL_DATA_SOURCE, CELL_AREA_WEIGHT, CELL_REPRESENTATIVITY_WEIGHT)
+
 # stopifnot(cell_weights$CELL_REPRESENTATIVITY_NORM_WEIGHT %>% sum(na.rm = TRUE) %>% round(10) == nrow(filter(cell_weights, !is.na(CELL_REPRESENTATIVITY_NORM_WEIGHT))))
 
-cell_weights$CELL_REPRESENTATIVITY_NORM_WEIGHT %>% summary()
+cell_weights$CELL_REPRESENTATIVITY_WEIGHT %>% summary()
 
 ## Merge all cell variables -------------
 cell_all = 
