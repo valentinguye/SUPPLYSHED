@@ -210,6 +210,29 @@ cells =
               values_fill = FALSE) 
 
 
+# Convert DISTANCES from meter to kilometer
+cells = 
+  cells %>% 
+  mutate(CELL_AVG_COOP_BS_10KM_TRI_METER = CELL_AVG_COOP_BS_10KM_TRI*1e-3, 
+         CELL_AVG_1_NEAREST_COOP_BS_10KM_TRI_METER = CELL_AVG_1_NEAREST_COOP_BS_10KM_TRI*1e-3, 
+         CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI_METER = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI*1e-3)
+
+
+# Convert TRI from mm to meter
+cells = 
+  cells %>% 
+  mutate(CELL_TRI_METER = CELL_TRI_MM*1e-3,
+         CELL_AVG_COOP_BS_10KM_TRI_METER = CELL_AVG_COOP_BS_10KM_TRI*1e-3, 
+         CELL_AVG_1_NEAREST_COOP_BS_10KM_TRI_METER = CELL_AVG_1_NEAREST_COOP_BS_10KM_TRI*1e-3, 
+         CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI_METER = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI*1e-3) %>% 
+  select(-CELL_TRI_MM, -CELL_AVG_COOP_BS_10KM_TRI, -CELL_AVG_1_NEAREST_COOP_BS_10KM_TRI, -CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI)
+
+links = 
+  links %>% 
+  mutate(CELL_TRI_METER = CELL_TRI_MM*1e-3, 
+         COOP_BS_10KM_TRI_METER = COOP_BS_10KM_TRI*1e-3) %>% 
+  select(-CELL_TRI_MM, -COOP_BS_10KM_TRI)
+
 ```
 
 
@@ -224,13 +247,20 @@ summary(cells$CELL_IMPOSSIBLE_HA)
 # Very few cells have more than 80% of their area impossible for cocoa expansion. 
 # Consequently, most cells are possibly of interest to our study, either because they have cocoa, or because 
 # they have some space for cocoa to expand. 
+bef = nrow(cells)
 cells = 
   cells %>%  
   filter(!(CELL_COCOA_SHARE < 0.01 & CELL_IMPOSSIBLE_SHARE > 0.8))
+aft = nrow(cells)
+(bef-aft)
 
+bef = nrow(links)
 links = 
   links %>% 
   filter(!(CELL_COCOA_SHARE < 0.01 & CELL_IMPOSSIBLE_SHARE > 0.8))
+aft = nrow(links)
+(bef-aft)
+rm(bef, aft)
 
 # FEW EXTRA-TERRITORIAL LEFT
 # Remove cells with no district (very few since we already removed cells outside inland territory in data preparation)
@@ -293,7 +323,136 @@ cells_stg2_development =
 
 ```
 
+## Formula 1st stage
+```{r}
+# PREDICTORS
 
+# Identify predictors with no variance to exclude them
+# E.g.: 
+stg1_development$CELL_PROP_COOP_SSI_ECOM %>% summary()
+
+stg1_development_nocharcol = 
+  stg1_development %>% 
+  select_if(~!is.character(.)) %>% 
+  select(-CELL_DATA_SOURCE)
+ 
+stg1_features_toexclude = 
+names(stg1_development_nocharcol)[map_lgl(stg1_development_nocharcol, 
+                                function(x){
+                                  var(x, na.rm = TRUE) == 0 |
+                                  all(is.na(x))
+                                })]
+# stg1_development %>% select(all_of(stg1_features_toexclude)) %>% View()
+
+# Formula, for all models: 
+anyNA(stg1_development)
+# names(cells)
+# anyNA(cells)
+# stg1_development %>% names() %>% grep(~., pattern = "CELL_COUNT_", value = T)
+# stg1_development %>% select(
+#     contains("_HA") & contains("CELL_AVG"),
+# ) %>% names() %>% grep(~., pattern = "CELL_AVG_", value = T)
+
+stg1_allfeatures = 
+  cells %>% 
+  select(
+    # Exclude all LU vars, on both cell and coop level, except for settlements. 
+    (starts_with("CELL_AVG_") & !ends_with("_HA")) | 
+    contains("SETTLEMENT")                         |
+    starts_with("CELL_PROP_")                      | 
+    # starts_with("CELL_DISTRICT_")                  |
+    starts_with("CELL_COUNT_"),
+    # some corrections/additions
+    -CELL_PROP_VOLUME_COOPS, -CELL_PROP_VOLUME_OTHERS,
+    # - CELL_DISTRICT_NAME_ORG, -CELL_DISTRICT_GEOCODE,
+    
+    CELL_TRI_METER, CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_MIN_DISTANCE_METERS, CELL_MIN_TRAVEL_METERS
+  ) %>%
+  names()
+
+# Include coop-level features summarised at the 1 nearest, the 5 nearest and the whole-coop levels. This increases the simple fit performance from an OOB R2 of .17 (with only summaries at 5 nearest coop-level) to .24  names()  
+  
+#Exclude features with no variance
+stg1_allfeatures %>% length()
+stg1_allfeatures = 
+  stg1_allfeatures[!stg1_allfeatures %in% stg1_features_toexclude]
+stg1_allfeatures %>% length()
+
+# Restricted list of more exogenous features regarding the further applications of the model. 
+# This excludes SSI and certification related variables, as well as the number of known buyers. 
+stg1_exofeatures = 
+  stg1_allfeatures %>% 
+  grep(~., pattern = "DISTANCE|TRAVEL|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
+       value = TRUE) %>% 
+  unique()
+
+setdiff(stg1_allfeatures, stg1_exofeatures)
+
+stg1_formula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
+stg1_mformula_exofeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_exofeatures, collapse = " + ")))
+
+```
+
+## Formula 2nd stage
+```{r}
+stg2_development %>% names() %>% grep(~., pattern = "CELL_PROP_", value = T)
+stg2_development %>% select(
+     (ends_with("_HA"))
+) %>% names() %>% grep(~., pattern = "CELL_AVG_", value = T)
+
+stg2_allfeatures = 
+  stg2_development %>% 
+  select(
+    # Do not include any LU var, on either cell or coop level, except for settlements. 
+    # Do not include SSI-related vars either, because the development data is biased towards CCP, and thus ANY_SSI and not any other SSI. 
+    # stg2_development %>% filter(grepl("CARGILL", PRO_ID)) %>% pull(COOP_SSI_CARGILL) %>% summary()
+    
+    # Cell level
+    CELL_TRI_METER, CELL_SETTLEMENT_HA,
+    
+    # Topologic - i.e. other-link level
+    CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT, 
+    # We could add cell level average/prop/count of nearest and potential coops, but they are not in the link data set currently. 
+    # CELL_MIN_DISTANCE_METERS, this does not exist either currently. 
+    
+    # Link level
+    LINK_TRAVEL_MINUTES, LINK_TRAVEL_METERS, LINK_DISTANCE_METERS, 
+    
+    # Coop level 
+    starts_with("COOP_FARMERS"), 
+    COOP_N_KNOWN_BS, 
+    # starts_with("COOP_DISTRICT_"), -COOP_DISTRICT_NAME,
+    starts_with("COOP_STATUS_"), 
+    COOP_BS_10KM_TRI_METER, COOP_BS_10KM_SETTLEMENT_HA, 
+    
+    # More endogenous: 
+    COOP_N_KNOWN_BUYERS, 
+    COOP_RFA, COOP_UTZ, COOP_FT,
+    COOP_CERTIFIED 
+    # Never include those, because our observed links data is biased towards link existence when there is a SSI (the CCP, Cargill's SSI). 
+    # Don't include dummies for other SSIs than Cargill's, because having many training data from Cargill means our observed links data is biased towards link existence when there is no other SSI than Cargill's. 
+    # COOP_HAS_SSI, 
+    # starts_with("COOP_SSI_"), 
+   
+  ) %>%
+  names()  
+  
+# Restricted list of more exogenous features regarding the further applications of the model. 
+# This additionally exclude certification related variables, as well as the number of known buyers. 
+stg2_exofeatures = 
+  stg2_allfeatures %>% 
+  grep(~., pattern = "DISTANCE|TRAVEL|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
+       value = TRUE) %>% 
+  unique()
+
+setdiff(stg2_allfeatures, stg2_exofeatures)
+
+stg2_formula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_allfeatures, collapse = " + ")))
+stg2_mformula_exofeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_exofeatures, collapse = " + ")))
+
+
+
+```
 
 # INPUT DESCRIPTIVES 
 
@@ -368,65 +527,65 @@ summary_data <- data.frame(
 Metric = c("Source", 
             "Year", 
             "Spatial information",
+            "Avg. Eucl. distance to cooperative (km)",
             "Villages", 
             "Cocoa farmers", 
             "Farmer-Buyer Links", 
                  "With cooperatives", 
                  "With other buyers", 
-            "Share of cooperative outlet in volumes sold", 
-            "Average farmer-cooperative Eucl. distance (km)",
+            "% of cooperative outlet in volumes sold", 
             "Buyers", 
                  "Cooperatives", 
                  "Other buyers"
            ),
   JRC = c(
           "JRC", "2019", "Farm point", 
+          round(mean(filter(jrcdata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           length(unique(jrcdata$PRO_VILLAGE_NAME)), 
           length(unique(jrcdata$PRO_ID)), 
           nrow(jrcdata), 
           nrow(filter(jrcdata, !is.na(COOP_BS_ID))), 
           nrow(filter(jrcdata, !BUYER_IS_COOP)),
-          paste0(round(100*jrc_coop_vol_kg / jrc_total_vol_kg, 1),"%"),
-          round(mean(filter(jrcdata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
+          paste0(round(100*jrc_coop_vol_kg / jrc_total_vol_kg, 1)),
           length(unique(jrcdata$BUYER_ACTUAL_LINK_ID)),
           length(unique(pull(filter(jrcdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(jrcdata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           ),
   SC = c(
           "Sustain-Cocoa project", "2022", "Village point", 
+          round(mean(filter(scdata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           length(unique(scdata$PRO_VILLAGE_NAME)), 
           length(unique(scdata$PRO_ID)),
           nrow(scdata), 
           nrow(filter(scdata, !is.na(COOP_BS_ID))), 
           nrow(filter(scdata, !BUYER_IS_COOP)),
-          paste0(round(100*sc_coop_vol_kg / sc_total_vol_kg, 1),"%"),
-          round(mean(filter(scdata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
+          paste0(round(100*sc_coop_vol_kg / sc_total_vol_kg, 1)),
           length(unique(scdata$BUYER_ACTUAL_LINK_ID)),
           length(unique(scdata$BUYER_ACTUAL_LINK_ID)), # repeat the count in links. This other way to count does not count coops that are not in IC2B: length(unique(pull(filter(scdata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           "NA"
           ),
   KIT = c(
           "Bymolt et al. 2018", "2017", "Village point",
+          "NA",
           length(unique(kitdata$PRO_VILLAGE_NAME)), 
           length(unique(kitdata$PRO_ID)), 
           nrow(kitdata), 
           nrow(filter(kitdata, BUYER_IS_COOP)), 
           nrow(filter(kitdata, !BUYER_IS_COOP)), 
-          paste0(round(100*kit_coop_vol_kg / kit_total_vol_kg, 1),"%"),
-          "NA",
+          paste0(round(100*kit_coop_vol_kg / kit_total_vol_kg, 1)),
           "NA", 
           "NA",
           "NA"
             ),
   CARGILL = c(
           "Online repository", "2019", "Farm polygon", 
+          round(mean(filter(cargilldata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           "NA", # don't know the number of villages
           length(unique(cargilldata$PRO_ID)), 
           nrow(filter(cargilldata, !is.na(COOP_BS_ID))), 
           length(unique(cargilldata$BUYER_ACTUAL_LINK_ID)),
           nrow(filter(cargilldata, !BUYER_IS_COOP)),
           "NA",
-          round(mean(filter(cargilldata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
           length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(cargilldata, !is.na(COOP_BS_ID)), BUYER_ACTUAL_LINK_ID))),
           length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
@@ -440,15 +599,15 @@ summary_data
 table <- summary_data %>%
   kbl() %>%
   kable_classic(full_width = F, html_font = "Arial") %>% 
-  
-  row_spec(7, extra_css = "padding-left: 10px;") %>%
+  # column_spec(1, width = "4.7cm") %>% # that's to cut nicely $
+  column_spec(1, width = "7.5cm") %>%
   row_spec(8, extra_css = "padding-left: 10px;") %>%
-  row_spec(11, extra_css = "padding-left: 10px;") %>%
-  row_spec(12, extra_css = "padding-left: 10px;")
+  row_spec(9, extra_css = "padding-left: 10px;") %>%
+  row_spec(12, extra_css = "padding-left: 10px;") %>%
+  row_spec(13, extra_css = "padding-left: 10px;")
 
 table
 # has to be saved manually now, because save_kable saving work
-
 # save_kable(table, here("outputs", "input_data_descriptives", "Observed_links_table.png"))
 
 ```
@@ -615,13 +774,58 @@ stg1_development %>% nrow()
 ```
 The map on the information content of the Cells data is produced after model development, in order to add the AoA status.
 
-### Summary stats 
+### Features
 
+```{r}
+# Report des. stats. for a selection of predictors 
 
-The descriptive statistics on the cell-level features are computed in the Explanation section, 
-together with other analyses on predictors, and after the making of the formula including all or most 
-exogenous only predictors.   
+selected_cells_preds =
+  stg1_development %>%
+  # Some ad hoc conversions
+  mutate(across(.cols = contains("_PROP_"), .fns = ~round(.x*100, 1))) %>% 
+  mutate(CELL_MIN_DISTANCE_KM = CELL_MIN_DISTANCE_METERS*1e-3,
+         CELL_MIN_TRAVEL_KM = CELL_MIN_TRAVEL_METERS*1e-3, 
+         CELL_AVG_TRAVEL_KM_5_NEAREST_COOPS = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS*1e-3) %>% 
+  select(#Sample = SPLIT, 
+         `% of cooperative outlet` = CELL_PROP_VOLUME_COOPS, 
+         #`Cocoa output from cell (kg)` = CELL_VOLUME_KG,
+         `Shortest Eucl. distance to a coop (km)` = CELL_MIN_DISTANCE_KM, 
+         `Shortest road distance to a coop (km)` = CELL_MIN_TRAVEL_KM, 
+         `Avg. road distance to the 5 nearest coops (km)` = CELL_AVG_TRAVEL_KM_5_NEAREST_COOPS, 
+         # `Avg. Eucl. distance to the 5 nearest coops (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+         
+         `# buying stations within 72km` = CELL_N_BS_WITHIN_DIST, 
+         `# coops in department` = CELL_N_COOP_IN_DPT,
+         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
 
+         `Terrain ruggedness index (m)` = CELL_TRI_METER,
+         `Settlements area (ha)` = CELL_SETTLEMENT_HA,
+         
+         `Avg. settlements area 10km around 5 nearest coops (ha)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA,
+
+         `# farmers in 5 nearest coops` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
+         `# BS of 5 nearest coops` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
+         # `Avg. TRI around 5 nearest coops (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI_METER,
+         
+         # `Nearest coop being SCOOPS` = CELL_PROP_1_NEAREST_COOP_STATUS_SCOOPS,
+         `% of 5 nearest coops being SCOOPS` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
+         # `% of all coops within 72 km being SCOOPS` = CELL_PROP_COOP_STATUS_SCOOPS,
+         
+         # `Nearest coop being COOP-CA` = CELL_PROP_1_NEAREST_COOP_STATUS_COOPCA,
+         `% of 5 nearest coops being COOP-CA` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
+         # `% of all coops within 72 km being COOP-CA` = CELL_PROP_COOP_STATUS_COOPCA,
+
+        `% of 5 nearest coops certified` = CELL_PROP_5_NEAREST_COOP_CERTIFIED,
+        # `% of 5 nearest coops certified Rainforest Alliance` = CELL_PROP_5_NEAREST_COOP_RFA,
+        # `% of 5 nearest coops certified UTZ` = CELL_PROP_5_NEAREST_COOP_UTZ,
+        `% of 5 nearest coops with corporate programmes` = CELL_PROP_5_NEAREST_COOP_HAS_SSI
+         ) 
+
+datasummary_skim(selected_cells_preds)
+datasummary_skim(selected_cells_preds, 
+                 output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
+
+```
 
 
 ### LU 
@@ -649,49 +853,13 @@ exogenous only predictors.
 
 ## Links data
 
-### Observed links 
-This starts from links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there). 
-```{r}
-obs_links_des = 
-  links %>% 
-  filter(LINK_IS_ACTUAL) %>% 
-  mutate(LINK_SOURCE = case_when(
-    grepl("CARGILL", PRO_ID) ~ "Cargill data",
-    grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
-    grepl("JRC", PRO_ID) ~ "JRC data",
-  ))
-
-length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
-
-totbl = 
-  obs_links_des %>% 
-  summarise(.by = LINK_SOURCE,  
-    # Number of 
-    # Links
-    `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
-    `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
-    # Farms
-    `Farms` = length(unique(na.omit(PRO_ID))), 
-    `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
-    # Buyers
-    Buyers = length(unique(na.omit(BUYER_ID))),
-    `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
-    `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
-    `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
-    
-    )
-
-totbl
-
-```
-
 ### Imbalance
 ```{r}
 # Compute the imbalance ratio in the data (N(N-1) - E)/E as in Mungo et al. 2023.
 # "the number of pairs that do not have a link to the number of pairs that do have a link."
 # but here, be N the number of cells, and replace 'N-1' by M, the number of cooperatives.
 (N_cells = stg2_development$CELL_ID %>% unique() %>% length())
-(M_coops = coopbs$COOP_BS_ID %>% unique() %>% length())
+(M_coops = coopbs22$COOP_BS_ID %>% unique() %>% length())
 (E_links = stg2_development$LINK_IS_ACTUAL_COOP %>% sum())
 
 (initial_imbalance = (N_cells*M_coops - E_links)/E_links)
@@ -703,129 +871,101 @@ totbl
 (current_imbalance = N_virtual / N_actual)
 ```
 
-
-
-### Balance tests in Links features
-With differences between actual and/virtual in development. 
-Alternatively, we could look at: 
-- Only in actual 
-- Only in all (potential)
-
+Observed links - redundant with Table 1 currently so not doing it
 ```{r}
-names(stg2_development)
-stg2_features_tobalance_1 =
-  stg2_development %>%
-  mutate(across(where(is.logical), as.integer)) %>% 
-  select(LINK_IS_ACTUAL_COOP_class, 
-         LINK_DISTANCE_METERS,
-         LINK_IS_WITH_1_NEAREST_COOPS,
-         LINK_IS_WITH_5_NEAREST_COOPS,
-         CELL_N_BS_WITHIN_DIST,
-         CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
-         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_IMPOSSIBLE_HA, CELL_TRI_MM)
+# # This is links data, where no under-sampling has been applied (so the biased sampling towards coops is still in there).
 
-datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
-                    data = stg2_features_tobalance_1, 
-                    output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
-
-stg2_features_tobalance_2 =
-  stg2_development %>%
-  mutate(across(where(is.logical), as.integer)) %>% 
-  select(LINK_IS_ACTUAL_COOP_class,
-         COOP_FARMERS, 
-         COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
-         starts_with("COOP_STATUS_"), 
-         COOP_CERTIFIED, COOP_RFA, COOP_UTZ, COOP_FT, 
-         COOP_HAS_SSI, starts_with("COOP_SSI_"), 
-         starts_with("COOP_BS_10KM_"))
-
-datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
-                    data = stg2_features_tobalance_2)
+# obs_links_des = 
+#   links %>% 
+#   filter(LINK_IS_ACTUAL) %>% 
+#   mutate(LINK_SOURCE = case_when(
+#     grepl("CARGILL", PRO_ID) ~ "Cargill data",
+#     grepl("SUSTAINCOCOA", PRO_ID) ~ "SC data",
+#     grepl("JRC", PRO_ID) ~ "JRC data",
+#   ))
+# 
+# length(unique(na.omit(obs_links_des$LINK_ID_OTHERS)))
+# 
+# totbl = 
+#   obs_links_des %>% 
+#   summarise(.by = LINK_SOURCE,  
+#     # Number of 
+#     # Links
+#     `with coops` = length(unique(na.omit(LINK_ID_COOPS))), # if_else(BUYER_IS_COOP, LINK_ID, NA)
+#     `with others` = length(unique(na.omit(LINK_ID_OTHERS))), 
+#     # Farms
+#     `Farms` = length(unique(na.omit(PRO_ID))), 
+#     `Villages` = length(unique(na.omit(PRO_VILLAGE_NAME))), 
+#     # Buyers
+#     Buyers = length(unique(na.omit(BUYER_ID))),
+#     `IC2B coops` = length(unique(na.omit(LINK_ACTUAL_COOP_ID))),
+#     `IC2B buying stations` = length(unique(na.omit(LINK_ACTUAL_COOP_BS_ID))),
+#     `Not coops` = length(unique(na.omit(if_else(!BUYER_IS_COOP, BUYER_ID, NA))))
+#     
+#     )
+# totbl
 
 ```
+
+### Features
+```{r}
+stg2_allfeatures
+selected_links_preds =
+  stg2_development %>%
+  # Some ad hoc conversions
+  # mutate(across(.cols = contains("_PROP_"), .fns = ~round(.x*100, 1))) %>% 
+  mutate(LINK_DISTANCE_KM = LINK_DISTANCE_METERS*1e-3,
+         LINK_TRAVEL_KM = LINK_TRAVEL_METERS*1e-3, 
+         LINK_TRAVEL_MINUTES = LINK_TRAVEL_MINUTES*1e-3, 
+         LINK_IS_EXISTING = if_else(LINK_IS_ACTUAL_COOP_class == "Actual_links","Yes","No")
+         ) %>% 
+  select(#Sample = SPLIT, 
+         `Cell-coop link exists` = LINK_IS_EXISTING ,
+         `Eucl. distance to a coop (km)` = LINK_DISTANCE_KM, 
+         `Road distance to a coop (km)` = LINK_TRAVEL_KM, 
+         `Road duration to a coop (min)` = LINK_TRAVEL_MINUTES, 
+
+         `# buying stations within 72km` = CELL_N_BS_WITHIN_DIST, 
+         `# coops in department` = CELL_N_COOP_IN_DPT,
+         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
+
+         `Terrain ruggedness index (m)` = CELL_TRI_METER,
+         `Settlements area (ha)` = CELL_SETTLEMENT_HA,
+         
+         `Terrain ruggedness index 10km around coop (m)` = COOP_BS_10KM_TRI_METER,
+         `Settlements area 10km around coop (ha)` = COOP_BS_10KM_SETTLEMENT_HA,
+
+         `# farmers in linked coop` = COOP_FARMERS,
+         `# BS of linked coop` = COOP_N_KNOWN_BS,
+
+         `SCOOPS status of linked coop` = COOP_STATUS_SCOOPS,
+         `COOP-CA status of linked coop` = COOP_STATUS_COOPCA,
+         
+         `# FT farmers in linked coop` = COOP_FARMERS_FT,
+         `# RFA farmers in linked coop` = COOP_FARMERS_RFA,
+         `FT certification in linked coop` = COOP_FT,
+         `RFA certification in linked coop` = COOP_RFA,
+         `UTZ certification in linked coop` = COOP_UTZ,
+         
+        `Number of known buyers of linked coop` = COOP_N_KNOWN_BUYERS
+        ) 
+
+
+datasummary_skim(selected_links_preds, 
+                 fun_numeric = list(Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max))
+# , Histogram = function(x) hist(list(x))
+
+datasummary_skim(selected_links_preds, fun_numeric = list(Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max),
+                 output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.html")))
+
+
+```
+
 
 
 # MODEL DEVELOPMENT
 
 ## 1st stage
-### Design & Formula
-```{r}
-## For familiar: 
-# Experimental design 
-exp_design = "fs+mb" #bt(fs+mb,100)
-
-# Repository for familiar 1st stage 
-# summon_familiar writes all it does in a repo. It returns nothing here.  
-stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
-dir.create(stage1_expdes_repo)
-
-# PREDICTORS
-
-# Identify predictors with no variance to exclude them
-# E.g.: 
-stg1_development$CELL_PROP_COOP_SSI_ECOM %>% summary()
-
-stg1_development_nocharcol = 
-  stg1_development %>% 
-  select_if(~!is.character(.)) %>% 
-  select(-CELL_DATA_SOURCE)
- 
-stg1_features_toexclude = 
-names(stg1_development_nocharcol)[map_lgl(stg1_development_nocharcol, 
-                                function(x){
-                                  var(x, na.rm = TRUE) == 0 |
-                                  all(is.na(x))
-                                })]
-# stg1_development %>% select(all_of(stg1_features_toexclude)) %>% View()
-
-# Formula, for all models: 
-anyNA(stg1_development)
-# names(cells)
-# anyNA(cells)
-# stg1_development %>% names() %>% grep(~., pattern = "CELL_COUNT_", value = T)
-# stg1_development %>% select(
-#     contains("_HA") & contains("CELL_AVG"),
-# ) %>% names() %>% grep(~., pattern = "CELL_AVG_", value = T)
-
-stg1_allfeatures = 
-  cells %>% 
-  select(
-    # Exclude all LU vars, on both cell and coop level, except for settlements. 
-    (starts_with("CELL_AVG_") & !ends_with("_HA")) | 
-    contains("SETTLEMENT")                         |
-    starts_with("CELL_PROP_")                      | 
-    # starts_with("CELL_DISTRICT_")                  |
-    starts_with("CELL_COUNT_"),
-    # some corrections/additions
-    -CELL_PROP_VOLUME_COOPS, -CELL_PROP_VOLUME_OTHERS,
-    # - CELL_DISTRICT_NAME_ORG, -CELL_DISTRICT_GEOCODE,
-    
-    CELL_TRI_MM, CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_MIN_DISTANCE_METERS, CELL_MIN_TRAVEL_METERS
-  ) %>%
-  names()
-
-# Include coop-level features summarised at the 1 nearest, the 5 nearest and the whole-coop levels. This increases the simple fit performance from an OOB R2 of .17 (with only summaries at 5 nearest coop-level) to .24  names()  
-  
-#Exclude features with no variance
-stg1_allfeatures %>% length()
-stg1_allfeatures = 
-  stg1_allfeatures[!stg1_allfeatures %in% stg1_features_toexclude]
-stg1_allfeatures %>% length()
-
-# Restricted list of more exogenous features regarding the further applications of the model. 
-# This excludes SSI and certification related variables, as well as the number of known buyers. 
-stg1_exofeatures = 
-  stg1_allfeatures %>% 
-  grep(~., pattern = "DISTANCE|TRAVEL|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
-       value = TRUE) %>% 
-  unique()
-
-setdiff(stg1_allfeatures, stg1_exofeatures)
-
-stg1_formula_allfeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_allfeatures, collapse = " + ")))
-stg1_mformula_exofeatures = as.formula(paste0("CELL_PROP_VOLUME_COOPS ~ ", paste0(stg1_exofeatures, collapse = " + ")))
-
-```
 
 The first stage has `r length(stg1_allfeatures)` potential features, `r length(stg1_exofeatures)` of which are exogenous to further applications. 
 
@@ -834,7 +974,7 @@ This is simple because it does not do feature selection nor optimize hyper-param
 ```{r}
 stg1_mfit = ranger(data = stg1_development, 
                    # splitrule="beta",
-                   num.trees = 500,
+                   num.trees = 5000,
                    # mtry = 30,
                    # min.node.size= 10,
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_WEIGHT,
@@ -844,7 +984,7 @@ stg1_mfit = ranger(data = stg1_development,
 print(stg1_mfit)
 
 stg1_mfit = ranger(data = stg1_development, 
-                   splitrule="beta",
+                   # splitrule="beta",
                    # mtry = 20,
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_NORM_WEIGHT,
                    formula = stg1_mformula_exofeatures, 
@@ -852,11 +992,49 @@ stg1_mfit = ranger(data = stg1_development,
                    )
 print(stg1_mfit)
 
+```
+### CARET 
+```{r}
+set.seed(8888)
+cl <- makePSOCKcluster(detectCores() - 2)
+registerDoParallel(cl)
+getDoParWorkers()
+tic()
 
+model1_loocv5k <- 
+  train(form = stg1_formula_allfeatures, 
+        data = stg1_development,
+        trControl = trainControl(method="LOOCV"),
+        method = "ranger", 
+        importance="permutation", 
+        num.trees = 5000,
+        tuneLength=10
+        # tuneGrid = data.frame(splitrule = "poisson",
+        #                         min.node.size = 5,
+        #                        mtry = c(8, 20, 40, 60, 77)
+        #                        )
+        )
+
+toc()
+stopCluster(cl)
+registerDoSEQ()
+
+to_eval = model1_loocv5k
+# In this case, all three caret methods give exactly the same values. 
+# the finalModel performs better. 
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
 ```
 
 
-### CARET
+### CARET RFE
 ```{r}
 # MAIN MODEL NOW 
 # 32h quand même, pour allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5
@@ -873,6 +1051,7 @@ model1_rfe <-
         trControl = trainControl(method="LOOCV"),
         method = "ranger", 
         importance="permutation", 
+        num.trees = 500,
         tuneLength=10,
         # tuneGrid = data.frame(splitrule = "poisson",
         #                   min.node.size = 5,
@@ -893,6 +1072,7 @@ stopCluster(cl)
 registerDoSEQ()
 
 model1_rfe$fit
+model1_rfe$fit %>% getTrainPerf()
 
 saveRDS(model1_rfe, 
         file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_10tuneL_sizesevery15_cv5"))
@@ -1295,8 +1475,14 @@ predict function like anywhere else.
 # ?as_familiar_data
 # ?predict  
 
-anyNA(stg1_development)
+## For familiar: 
+# Experimental design 
+exp_design = "fs+mb" #bt(fs+mb,100)
 
+# Repository for familiar 1st stage 
+# summon_familiar writes all it does in a repo. It returns nothing here.  
+stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
+dir.create(stage1_expdes_repo)
 
 # let's go
 summon_familiar(
@@ -1384,67 +1570,6 @@ All important features positively explain the share of coop outlet, except the d
 
 
 ## 2nd stage
-
-### Formula
-```{r}
-stg2_development %>% names() %>% grep(~., pattern = "CELL_PROP_", value = T)
-stg2_development %>% select(
-     (ends_with("_HA"))
-) %>% names() %>% grep(~., pattern = "CELL_AVG_", value = T)
-
-stg2_allfeatures = 
-  stg2_development %>% 
-  select(
-    # Do not include any LU var, on either cell or coop level, except for settlements. 
-    # Do not include SSI-related vars either, because the development data is biased towards CCP, and thus ANY_SSI and not any other SSI. 
-    # stg2_development %>% filter(grepl("CARGILL", PRO_ID)) %>% pull(COOP_SSI_CARGILL) %>% summary()
-    
-    # Cell level
-    CELL_TRI_MM, CELL_SETTLEMENT_HA,
-    
-    # Topologic - i.e. other-link level
-    CELL_N_BS_WITHIN_DIST, CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT, 
-    # We could add cell level average/prop/count of nearest and potential coops, but they are not in the link data set currently. 
-    # CELL_MIN_DISTANCE_METERS, this does not exist either currently. 
-    
-    # Link level
-    LINK_TRAVEL_MINUTES, LINK_TRAVEL_METERS, LINK_DISTANCE_METERS, 
-    
-    # Coop level 
-    starts_with("COOP_FARMERS"), 
-    COOP_N_KNOWN_BS, 
-    # starts_with("COOP_DISTRICT_"), -COOP_DISTRICT_NAME,
-    starts_with("COOP_STATUS_"), 
-    COOP_BS_10KM_TRI, COOP_BS_10KM_SETTLEMENT_HA, 
-    
-    # More endogenous: 
-    COOP_N_KNOWN_BUYERS, 
-    COOP_RFA, COOP_UTZ, COOP_FT,
-    COOP_CERTIFIED 
-    # Never include those, because our observed links data is biased towards link existence when there is a SSI (the CCP, Cargill's SSI). 
-    # Don't include dummies for other SSIs than Cargill's, because having many training data from Cargill means our observed links data is biased towards link existence when there is no other SSI than Cargill's. 
-    # COOP_HAS_SSI, 
-    # starts_with("COOP_SSI_"), 
-   
-  ) %>%
-  names()  
-  
-# Restricted list of more exogenous features regarding the further applications of the model. 
-# This additionally exclude certification related variables, as well as the number of known buyers. 
-stg2_exofeatures = 
-  stg2_allfeatures %>% 
-  grep(~., pattern = "DISTANCE|TRAVEL|N_BS_WITHIN|N_KNOWN_BS|N_COOP_IN|LICBUY|STATUS|_TRI|SETTLEMENT|COOP_FARMERS$", 
-       value = TRUE) %>% 
-  unique()
-
-setdiff(stg2_allfeatures, stg2_exofeatures)
-
-stg2_formula_allfeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_allfeatures, collapse = " + ")))
-stg2_mformula_exofeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", paste0(stg2_exofeatures, collapse = " + ")))
-
-
-
-```
 
 ### Simple fit
 ```{r}
@@ -2221,7 +2346,7 @@ links_topredict_save = links_topredict
 #   links_inaoa %>% 
 #   summarise(.by = c(CELL_ID, LINK_POTENTIAL_COOP_ID), 
 #           # Don't select all COOP_BS_ variables to save some computation for now. 
-#           across(.cols = c(COOP_BS_10KM_TRI, COOP_BS_10KM_SETTLEMENT_HA), .fns = ~mean(.x, na.rm = TRUE)),
+#           across(.cols = c(COOP_BS_10KM_TRI_METER, COOP_BS_10KM_SETTLEMENT_HA), .fns = ~mean(.x, na.rm = TRUE)),
 #           LINK_TRAVEL_MINUTES  = mean(LINK_TRAVEL_MINUTES, na.rm = TRUE),  
 #           LINK_TRAVEL_METERS   = mean(LINK_TRAVEL_METERS, na.rm = TRUE),
 #           LINK_DISTANCE_METERS = mean(LINK_DISTANCE_METERS, na.rm = TRUE)
@@ -2730,7 +2855,7 @@ either conditional or unconditional probabilities to be linked with the coop, fo
 Do here (for now) the des stats that need objects not available before the Model development part of this script.  
 
 ### Balance tests
-Balance tests between development and prediction data 
+Balance tests between 1st stage development and prediction data 
 ```{r}
 cells_features_tobalance = 
   rbind(
@@ -2748,6 +2873,49 @@ stopifnot(cells_features_tobalance %>% filter(SPLIT == "Development set") %>% no
 
 ```
 
+
+Balance tests between 2nd stage development and prediction data 
+```{r}
+
+```
+
+
+Balance tests between actual and/virtual in development. 
+Alternatively, we could look at: 
+- Only in actual 
+- Only in all (potential)
+```{r}
+names(stg2_development)
+stg2_features_tobalance_1 =
+  stg2_development %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class, 
+         LINK_DISTANCE_METERS,
+         LINK_IS_WITH_1_NEAREST_COOPS,
+         LINK_IS_WITH_5_NEAREST_COOPS,
+         CELL_N_BS_WITHIN_DIST,
+         CELL_N_COOP_IN_DPT, CELL_AVG_N_LICBUY_IN_DPT,
+         CELL_COCOA_HA, CELL_SETTLEMENT_HA, CELL_IMPOSSIBLE_HA, CELL_TRI_METER)
+
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_1, 
+                    output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.png")))
+
+stg2_features_tobalance_2 =
+  stg2_development %>%
+  mutate(across(where(is.logical), as.integer)) %>% 
+  select(LINK_IS_ACTUAL_COOP_class,
+         COOP_FARMERS, 
+         COOP_N_KNOWN_BUYERS, COOP_N_KNOWN_BS,
+         starts_with("COOP_STATUS_"), 
+         COOP_CERTIFIED, COOP_RFA, COOP_UTZ, COOP_FT, 
+         COOP_HAS_SSI, starts_with("COOP_SSI_"), 
+         starts_with("COOP_BS_10KM_"))
+
+datasummary_balance(~LINK_IS_ACTUAL_COOP_class, 
+                    data = stg2_features_tobalance_2)
+
+```
 
 
 # EXPORT 
