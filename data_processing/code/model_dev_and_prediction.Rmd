@@ -1004,7 +1004,7 @@ tic()
 model1_loocv5k <- 
   train(form = stg1_formula_allfeatures, 
         data = stg1_development,
-        trControl = trainControl(method="LOOCV"),
+        trControl = trainControl(method="LOOCV", returnResamp = "all"), # necessary to assess variability in error est. 
         method = "ranger", 
         importance="permutation", 
         num.trees = 5000,
@@ -1019,6 +1019,11 @@ toc()
 stopCluster(cl)
 registerDoSEQ()
 
+saveRDS(model1_loocv5k, 
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_10tuneL_5ktrees"))
+
+## EVALUATE 
+# model1_loocv5k = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_10tuneL_5ktrees"))
 to_eval = model1_loocv5k
 # In this case, all three caret methods give exactly the same values. 
 # the finalModel performs better. 
@@ -1031,6 +1036,35 @@ mean(to_eval$resample$Rsquared)
 to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
 getTrainPerf(to_eval)$TrainRsquared 
 to_eval$finalModel$r.squared
+
+# Make RSE manually 
+# Relative Squared Error is the ratio of the MSE to the mean of squared differences between observed and averaged outcome values.  
+avg_stg1_outcome = stg1_development$CELL_PROP_VOLUME_COOPS %>% mean()
+stg1_development = 
+  stg1_development %>% 
+  mutate(NAIVE_MODEL_SQUARED_ERROR = (CELL_PROP_VOLUME_COOPS - avg_stg1_outcome)^2)
+stg1_mean_squared_naive_error = mean(stg1_development$NAIVE_MODEL_SQUARED_ERROR)
+(to_eval$resample$RMSE^2 / stg1_mean_squared_naive_error)
+
+# Plot 
+metric_resamples = rbind(
+  data.frame(distribution = to_eval$resample$RMSE, 
+             metric = "RMSE"), 
+  data.frame(distribution = to_eval$resample$MAE, 
+             metric = "MAE"), 
+  data.frame(distribution = to_eval$resample$Rsquared, 
+             metric = "R2"), 
+  data.frame(distribution = (to_eval$resample$RMSE^2) / stg1_mean_squared_naive_error, 
+             metric = "RSE")
+)
+
+ggplot(metric_resamples, aes(x = factor(metric, levels = c("RMSE", "MAE", "R2", "RSE")), y = distribution)) + 
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), trim = FALSE) + 
+  labs(title="Performance estimates across resamples of final model", x="Metric", y = "") +
+  theme_minimal() +
+  theme(title = element_text(face="bold"),
+        plot.title = element_text(face="bold", size = 15))
+
 ```
 
 
@@ -1048,7 +1082,7 @@ tic()
 model1_rfe <- 
   rfe(form = stg1_formula_allfeatures, 
         data = stg1_development,
-        trControl = trainControl(method="LOOCV"),
+        trControl = trainControl(method="LOOCV", returnResamp = "all"),
         method = "ranger", 
         importance="permutation", 
         num.trees = 500,
@@ -1076,6 +1110,28 @@ model1_rfe$fit %>% getTrainPerf()
 
 saveRDS(model1_rfe, 
         file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_10tuneL_sizesevery15_cv5"))
+
+
+## EVALUATE 
+to_eval = model1_rfe$fit 
+# Plot 
+metric_resamples = rbind(
+  data.frame(distribution = to_eval$resample$RMSE, 
+             metric = "RMSE"), 
+  data.frame(distribution = to_eval$resample$MAE, 
+             metric = "MAE"), 
+  data.frame(distribution = to_eval$resample$Rsquared, 
+             metric = "R2"), 
+  data.frame(distribution = (to_eval$resample$RMSE^2) / stg1_mean_squared_naive_error, 
+             metric = "RSE")
+)
+
+ggplot(metric_resamples, aes(x = factor(metric, levels = c("RMSE", "MAE", "R2", "RSE")), y = distribution)) + 
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), trim = FALSE) + 
+  labs(title="Performance estimates across resamples of final model", x="Metric", y = "") +
+  theme_minimal() +
+  theme(title = element_text(face="bold"),
+        plot.title = element_text(face="bold", size = 15))
 
 ```
 
@@ -1147,7 +1203,7 @@ saveRDS(model1_caret_xgb,
         file = here("temp_data", "model", "caret", "stage_1", "allfeatures_xgbtree_4boot632_5tuneL"))
 ```
 
-#### Test Performance
+### Test Performance across resampling schemes
 From readings, (documentation, Stackoverflow etc.) and tests below, it appears that: 
 Metrics obtained from $finalModel objects are always a different because they are provided by the native package (ranger here), and notably for R2 because the formula to calculate it is special in caret. 
 
@@ -1542,16 +1598,9 @@ summon_familiar(
 ```
 The results folder outputed by summon_familiar is saved manually to different place, to protect it from being overwritten in a subsequent run of the above block. 
 
-
-
 Several things to say: 
 
-
 The relative squared error being lower than 1, the model still performs better than the mean predictor. 
-
-
-
-
 
 The most important variables, across the ensemble of models, are: 
 1/ the number of (CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS); 
@@ -1567,6 +1616,61 @@ Now, let's see whether these features contribute to increase or decrease the cel
 
 All important features positively explain the share of coop outlet, except the distance of the closest coop (which is expected), and the number of RFA farmers (which is surprising). 
 
+#### Finders
+```{r}
+# All 1st stage models have been written by familiar in 
+stage1_expdes_repo
+
+# We use one specifically, identified by: 
+# ---------------------------------------------
+model1_date = "20250117092735"
+  # the name for 5 "20250116210833"
+  # the name for 100 "20250114231822" 
+  # the name for 40 "20241204190335"
+# ---------------------------------------------
+
+# Finders of familiar outputs
+
+# Feature info - this gives generic info about the features in the model 
+# feature_info = readRDS(here(stage1_expdes_repo, "20241127134237_feature_info.RDS"))
+
+# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
+# iterations = readRDS(here(stage1_expdes_repo, "20241125194101_iterations.RDS"))
+
+# familiar_data - a maxi list containing all info of a run. 
+# famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
+
+collection = readRDS(here(stage1_expdes_repo, "familiar_collections", "pooled_data.RDS"))
+
+# Model development results - to report model performance
+stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
+
+# Models - to run predictions
+stage1_model_path = here(stage1_expdes_repo, 
+                         "trained_models", 
+                         "random_forest_ranger", 
+                         "random_forest_ranger_permutation")
+
+# Select the model/ensemble we want to work with 
+
+stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
+model1_name = 
+  stage1_ensemble_names %>% 
+  grep(~.,  
+       pattern = model1_date, 
+       value = TRUE) # take the first one in case there are several
+                                          
+model1 = readRDS(here(stage1_model_path, model1_name))
+model1
+
+# These are the names of all individual trained ("built") models 
+stage1_model_names = list.files(stage1_model_path, pattern = "model")
+indiv_model1_names = 
+  stage1_model_names %>% 
+  grep(~.,  
+       pattern = model1_date, 
+       value = TRUE) # take the first one in case there are several
+```
 
 
 ## 2nd stage
@@ -1590,7 +1694,7 @@ stg2_simple
 ```
 
 
-### caret
+### CARET
 ```{r}
 # Custom summary function (otherwise not possible to obtain all metrics in a single run of caret::train)
 customSummary <- function(data, lev = NULL, model = NULL) {
@@ -1622,36 +1726,36 @@ stg2_HPgrid =  expand.grid(
 )
 
 # *WITHOUT* INSIDE UNDER-SAMPLING OF NONEXISTENT LINKS TO SAME FREQUENCY AS EXISTENT ONES
-tic()
-
-set.seed(8888)
-seeds <- vector(mode = "list", length = 6)
-for(i in 1:6) seeds[[i]] <- sample.int(1000, 36)
-seeds[[6]] = sample.int(1000, 1)
-
-model2_caret_xgb = 
-  train(
-    x = stg2_development %>% select(all_of(stg2_allfeatures)),
-    y = stg2_development$LINK_IS_ACTUAL_COOP_class, 
-    method="xgbTree", 
-    metric = "ROC",
-    # tuneLength=5, 
-    tuneGrid = stg2_HPgrid,
-    # More about this function here: https://topepo.github.io/caret/model-training-and-tuning.html#control
-    trControl=trainControl(method="cv",number=5,
-                           savePredictions=T, # TRUE is equivalent to "all" and is necessary to use thresholder() later on. 
-                           #returnResamp = TRUE,
-                           verboseIter = TRUE,
-                           summaryFunction = customSummary, 
-                           classProbs = TRUE,  # necessary to obtain ROC, 
-                           # sampling = "down",
-                           seeds = seeds
-                           ), 
-    verbose = FALSE
-  )
-toc()
-
-model2_caret_xgb
+# tic()
+# 
+# set.seed(8888)
+# seeds <- vector(mode = "list", length = 6)
+# for(i in 1:6) seeds[[i]] <- sample.int(1000, 36)
+# seeds[[6]] = sample.int(1000, 1)
+# 
+# model2_caret_xgb = 
+#   train(
+#     x = stg2_development %>% select(all_of(stg2_allfeatures)),
+#     y = stg2_development$LINK_IS_ACTUAL_COOP_class, 
+#     method="xgbTree", 
+#     metric = "ROC",
+#     # tuneLength=5, 
+#     tuneGrid = stg2_HPgrid,
+#     # More about this function here: https://topepo.github.io/caret/model-training-and-tuning.html#control
+#     trControl=trainControl(method="cv",number=5,
+#                            savePredictions=T, # TRUE is equivalent to "all" and is necessary to use thresholder() later on. 
+#                            #returnResamp = TRUE,
+#                            verboseIter = TRUE,
+#                            summaryFunction = customSummary, 
+#                            classProbs = TRUE,  # necessary to obtain ROC, 
+#                            # sampling = "down",
+#                            seeds = seeds
+#                            ), 
+#     verbose = FALSE
+#   )
+# toc()
+# 
+# model2_caret_xgb
 
 # *WITH* INSIDE UNDER-SAMPLING OF NONEXISTENT LINKS TO SAME FREQUENCY AS EXISTENT ONES
 # (sampling argument in trainControl)
@@ -1684,7 +1788,7 @@ model2_caret_xgb_down =
   )
 toc()
 
-saveRDS(model2_caret_xgb, 
+saveRDS(model2_caret_xgb_down, 
         here("temp_data", "model", "caret", "stage_2", "model2_caret_xgb"))
 ```
 
@@ -1789,7 +1893,7 @@ summon_familiar(
 
 ```
 
-### Finders
+#### Finders
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 ## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
@@ -1836,60 +1940,7 @@ model2
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 # Read caret model 
-model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5"))
-
-# All 1st stage models have been written by familiar in 
-stage1_expdes_repo
-
-# We use one specifically, identified by: 
-# ---------------------------------------------
-model1_date = "20250117092735"
-  # the name for 5 "20250116210833"
-  # the name for 100 "20250114231822" 
-  # the name for 40 "20241204190335"
-# ---------------------------------------------
-
-# Finders of familiar outputs
-
-# Feature info - this gives generic info about the features in the model 
-# feature_info = readRDS(here(stage1_expdes_repo, "20241127134237_feature_info.RDS"))
-
-# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
-# iterations = readRDS(here(stage1_expdes_repo, "20241125194101_iterations.RDS"))
-
-# familiar_data - a maxi list containing all info of a run. 
-# famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
-
-collection = readRDS(here(stage1_expdes_repo, "familiar_collections", "pooled_data.RDS"))
-
-# Model development results - to report model performance
-stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
-
-# Models - to run predictions
-stage1_model_path = here(stage1_expdes_repo, 
-                         "trained_models", 
-                         "random_forest_ranger", 
-                         "random_forest_ranger_permutation")
-
-# Select the model/ensemble we want to work with 
-
-stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
-model1_name = 
-  stage1_ensemble_names %>% 
-  grep(~.,  
-       pattern = model1_date, 
-       value = TRUE) # take the first one in case there are several
-                                          
-model1 = readRDS(here(stage1_model_path, model1_name))
-model1
-
-# These are the names of all individual trained ("built") models 
-stage1_model_names = list.files(stage1_model_path, pattern = "model")
-indiv_model1_names = 
-  stage1_model_names %>% 
-  grep(~.,  
-       pattern = model1_date, 
-       value = TRUE) # take the first one in case there are several
+model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))
 
 ```
 
@@ -1905,20 +1956,54 @@ model2_caret_xgb = readRDS(here("temp_data", "model", "caret", "stage_2", "model
 ## 1st stage 
 CARET
 ```{r}
-# Make RSE manually 
-mean_stg1_outcome = stg1_development$CELL_PROP_VOLUME_COOPS %>% mean()
+  
+to_eval = model1_rfe$fit
 
+mean(to_eval$resample$RMSE)
+to_eval$results[row.names(to_eval$bestTune),"RMSE"]
+getTrainPerf(to_eval)$TrainRMSE 
+to_eval$finalModel$prediction.error %>% sqrt()
+
+mean(to_eval$resample$Rsquared)
+to_eval$results[row.names(to_eval$bestTune),"Rsquared"]
+getTrainPerf(to_eval)$TrainRsquared 
+to_eval$finalModel$r.squared
+
+# Make RSE manually 
+# Relative Squared Error is the ratio of the MSE to the mean of squared differences between observed and averaged outcome values.  
+avg_stg1_outcome = stg1_development$CELL_PROP_VOLUME_COOPS %>% mean()
 stg1_development = 
   stg1_development %>% 
-  mutate(NAIVE_MODEL_SQUARED_ERROR = (CELL_PROP_VOLUME_COOPS - mean_stg1_outcome)^2)
+  mutate(NAIVE_MODEL_SQUARED_ERROR = (CELL_PROP_VOLUME_COOPS - avg_stg1_outcome)^2)
+stg1_mean_squared_naive_error = mean(stg1_development$NAIVE_MODEL_SQUARED_ERROR)
+(mean(to_eval$resample$RMSE^2) / stg1_mean_squared_naive_error)
 
-stg1_mean_squared_naive_error = stg1_development$NAIVE_MODEL_SQUARED_ERROR %>% mean()
+# Plot 
+metric_resamples = rbind(
+  data.frame(distribution = to_eval$resample$RMSE, 
+             metric = "RMSE"), 
+  data.frame(distribution = to_eval$resample$MAE, 
+             metric = "MAE"), 
+  data.frame(distribution = to_eval$resample$Rsquared, 
+             metric = "R2"), 
+  data.frame(distribution = (to_eval$resample$RMSE^2) / stg1_mean_squared_naive_error, 
+             metric = "RSE")
+)
 
-model1_rmse = model1_rfe$fit$results %>% filter(mtry == 26, splitrule == "extratrees") %>% pull(RMSE) 
+perf_plot_stg1 = 
+  ggplot(metric_resamples, aes(x = factor(metric, levels = c("RMSE", "MAE", "R2", "RSE")), y = distribution)) + 
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), trim = FALSE) + 
+  labs(title="", x="Metric", y = "") +
+  theme_minimal() +
+  theme(title = element_text(face="bold"),
+        plot.title = element_text(face="bold", size = 15))
 
-model1_mse = model1_rmse^2
-
-model1_rse = model1_mse / stg1_mean_squared_naive_error
+ggsave(perf_plot_stg1, 
+       filename = "perf_allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5.png", 
+       path = here("outputs"),
+       width = 25, 
+       height = 20,
+       units = "cm")
 
 ```
 
@@ -1960,20 +2045,26 @@ model2_perf = getTrainPerf(model2_caret_xgb)
 # Access resampling results
 resamples <- model2_caret_xgb$resample
 
-# Calculate mean and standard deviation of performance metrics
-mean_roc <- mean(resamples$ROC)
-sd_roc <- sd(resamples$ROC)
-mean_sens <- mean(resamples$Sens)
-sd_sens <- sd(resamples$Sens)
-mean_spec <- mean(resamples$Spec)
-sd_spec <- sd(resamples$Spec)
+# Calculate mean of performance metrics
+#  standard deviations commented out because meaningless in current 5 cv 
+(mean_roc <- mean(resamples$ROC))
+# sd_roc <- sd(resamples$ROC)
+(mean_sens <- mean(resamples$Sens))
+# sd_sens <- sd(resamples$Sens)
+(mean_spec <- mean(resamples$Spec))
+# sd_spec <- sd(resamples$Spec)
+
+(mean_prec <- mean(resamples$Precision))
+(mean_recall <- mean(resamples$Recall))
+(mean_accu <- mean(resamples$Accuracy))
 
 # This is to access performance metrics aggregated over resamples for different models 
-resamps <- resamples(list(first_caret = model2_caret_xgb, first_caret2 = model2_caret_rf))
-summary(resamps)
+# resamps <- resamples(list(first_caret = model2_caret_xgb, first_caret2 = model2_caret_rf))
+# summary(resamps)
 
 # And to run statistical tests of the diff in performance between models: 
 # https://topepo.github.io/caret/model-training-and-tuning.html#extracting-predictions-and-class-probabilities
+
 
 
 ```
@@ -2079,6 +2170,17 @@ vimp_top10 =
 ```
 
 #### Explanation
+CARET
+```{r}
+featurePlot(x = BostonHousing[, regVar], 
+            y = BostonHousing$medv, 
+            plot = "scatter",
+            type = c("p", "smooth"),
+            span = .5,
+            layout = c(3, 1))
+```
+
+
 
 Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots.
 All this is sketchy, and interpretations are challenging !!! 
@@ -2302,16 +2404,17 @@ cells_topredict =
 ### Links
 ```{r}
 
-# Predict link existence only for cells in the AOA   
-links = 
-  links %>%
-  left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
-            by = "CELL_ID")
+# # Predict link existence only for cells in the AOA - NO, do predict link existence there. 
+# # the discarding by AoA will be applied when unconditioning second stage's probas. 
+# links = 
+#   links %>%
+#   left_join(cells %>% select(CELL_ID, CELL_IS_IN_AOA), 
+#             by = "CELL_ID")
 
 # Should it be the under-sampled data rather here? NO, I don't think so. We DO want to make predictions for all virtual links! 
-links_inaoa =
+links_topredict =
   links %>% 
-  filter(CELL_IS_IN_AOA & !CELL_NO_POTENTIAL_LINK)
+  filter(!CELL_NO_POTENTIAL_LINK) # CELL_IS_IN_AOA & 
 
 
 # Aggregate links connecting a cell to a coop, to have one row per cell-coop pair. 
@@ -2324,7 +2427,7 @@ links %>% select(starts_with("COOP_BS_")) %>% names()
 links %>% select(starts_with("LINK_")) %>% names()
 
 links_topredict = 
-  links_inaoa %>% 
+  links_topredict %>% 
   group_by(CELL_ID, LINK_POTENTIAL_COOP_ID) %>% 
   mutate(
     # Even if the names of the summarised variables are not rigorously correct, do not change them, 
@@ -2343,7 +2446,7 @@ links_topredict %>% select(starts_with("LINK_")) %>% names()
 
 links_topredict_save = links_topredict
 # links_summarised = 
-#   links_inaoa %>% 
+#   links_topredict %>% 
 #   summarise(.by = c(CELL_ID, LINK_POTENTIAL_COOP_ID), 
 #           # Don't select all COOP_BS_ variables to save some computation for now. 
 #           across(.cols = c(COOP_BS_10KM_TRI_METER, COOP_BS_10KM_SETTLEMENT_HA), .fns = ~mean(.x, na.rm = TRUE)),
@@ -2353,12 +2456,12 @@ links_topredict_save = links_topredict
 #           ) 
 # nrow(links_summarised)
 # links_unique = 
-#   links_inaoa %>% 
+#   links_topredict %>% 
 #   # select(starts_with("LINK_"), all_of(model2_caret_xgb$finalModel$feature_names)) %>% 
 #   select(!any_of(names(links_summarised))) %>% names()
 #   distinct(CELL_ID, LINK_POTENTIAL_COOP_ID, .keep_all = TRUE)
 # 
-# rm(links_inaoa)
+# rm(links_topredict)
 # 
 # stopifnot(nrow(links_summarised) == nrow(links_unique))
 # 
@@ -2672,13 +2775,16 @@ links_topredict =
     LINK_PROBA_H60KM = if_else(
       LINK_DISTANCE_METERS <= 60*1e3, 1, 0), 
     LINK_PROBA_HDISTR = if_else(
-      CELL_DISTRICT_NAME == COOP_DISTRICT_NAME, 1, 0)
+      CELL_DISTRICT_NAME == COOP_DISTRICT_NAME, 1, 0), 
+    
+    LINK_PROBA_HCONTI = 1/LINK_DISTANCE_METERS
   )
 
 links_topredict$LINK_PROBA_H10KM %>% summary()
 links_topredict$LINK_PROBA_H30KM %>% summary()
 links_topredict$LINK_PROBA_H60KM %>% summary()
 links_topredict$LINK_PROBA_HDISTR %>% summary()
+links_topredict$LINK_PROBA_HCONTI %>% summary()
 
 ```
 
@@ -2757,43 +2863,53 @@ links_topredict =
     CELL_NORMSUM_H30KM  = sum(LINK_PROBA_H30KM), 
     CELL_NORMSUM_H60KM  = sum(LINK_PROBA_H60KM), 
     CELL_NORMSUM_HDISTR = sum(LINK_PROBA_HDISTR), 
+    CELL_NORMSUM_HCONTI = sum(LINK_PROBA_HCONTI), 
     CELL_N_POTENTIAL_LINKS = length(na.omit(unique(LINK_POTENTIAL_COOP_ID))), 
   ) %>% 
   ungroup() %>% 
   mutate(
-    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas ALL AS LIKELY
-    # i.e. 1/number of potential links
-    # When it's NA, it means we are in a cell outside the AoA, so leave it NA (not necessary anymore, but would need to add this line:       is.na(CELL_NORMSUM_THRESH) ~ NA,
+    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas ALL AS LIKELY (i.e. 1/number of potential links)
+    # because the point here is not to reflect unconditional probabilities to sell to a coop, but *conditional* probabilities, i.e. 
+    # the probability to sell to coops even very far, very unlikely, if we knew for sure that cocoa is sold to some coops. 
+    # In other words, if we knew cocoa is sold to coops and not other buyers, what coops would it be? 
+    # However, for heuristics, set it to zero, because this is the rule of heuristics. 
+    
     LINK_PROBA_THRESH_NORMED = case_when(
       CELL_NORMSUM_THRESH > 0 ~ LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
       TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
       ), 
+    # no need for a case_when here, because CELL_NORMSUM_HCONTI == 0 never happens 
+    LINK_PROBA_HCONTI_NORMED = LINK_PROBA_HCONTI / CELL_NORMSUM_HCONTI,
+    
     LINK_PROBA_H10KM_NORMED = case_when(
       CELL_NORMSUM_H10KM > 0 ~ LINK_PROBA_H10KM / CELL_NORMSUM_H10KM, 
-      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      TRUE ~ 0
       ), 
     LINK_PROBA_H30KM_NORMED = case_when(
       CELL_NORMSUM_H30KM > 0 ~ LINK_PROBA_H30KM / CELL_NORMSUM_H30KM, 
-      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      TRUE ~ 0
       ), 
     LINK_PROBA_H60KM_NORMED = case_when(
       CELL_NORMSUM_H60KM > 0 ~ LINK_PROBA_H60KM / CELL_NORMSUM_H60KM, 
-      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      TRUE ~ 0
       ), 
     LINK_PROBA_HDISTR_NORMED = case_when(
       CELL_NORMSUM_HDISTR > 0 ~ LINK_PROBA_HDISTR / CELL_NORMSUM_HDISTR, 
-      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      TRUE ~ 0
       )
   )
 
+links_topredict$LINK_PROBA_THRESH_NORMED %>% summary() 
+links_topredict$LINK_PROBA_HCONTI_NORMED %>% summary() 
+links_topredict$LINK_PROBA_H60KM_NORMED %>% summary() 
 # links_topredict %>% 
 #   filter(round(CELL_UNCOND_NORMSUM_THRESH,10) != round(CELL_SHARE_COOP * CELL_NORMSUM_THRESH, 10)) %>% nrow()
 
 stopifnot(
-links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% pull(CELL_IS_IN_AOA) %>% any() == FALSE
+links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() == 0 
 )
 stopifnot(
-links_topredict %>% filter(is.na(LINK_PROBA_H60KM_NORMED)) %>% pull(CELL_IS_IN_AOA) %>% any() == FALSE
+links_topredict %>% filter(is.na(LINK_PROBA_H60KM_NORMED)) %>% nrow() == 0 
 )
 
 links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() 

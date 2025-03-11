@@ -761,7 +761,7 @@ jrc_coops =
   jrc_coops %>% 
   left_join(jrc_buyer_roster,
             by = "JRC_BUYER_ID", 
-            multiple = "all") %>% 
+            relationship = "many-to-many") %>% 
   rowwise() %>% 
   mutate(TRADER_NAME = case_when(
     i04aq15__buyer_code == "AUTRE" | any(str_contains(i04aq15__buyer_code, as.character(1:100), switch = TRUE)) ~ NA,
@@ -914,7 +914,7 @@ jrc_geo =
   jrc_geo %>% 
   inner_join(village_ctoid %>% st_drop_geometry(), 
              by = "PRO_VILLAGE_NAME", 
-             multiple = "all")
+             relationship = "many-to-many")
 
 jrc_geo_prosf = 
   jrc_geo %>% 
@@ -1062,7 +1062,7 @@ jrc_geo =
   inner_join(section3a %>% select(PRODUCER_ID, JRC_BUYER_ID, 
                                   LINK_VOLUME_KG = kg_both_season), 
             by = c("PRODUCER_ID", "JRC_BUYER_ID")) # section3a is a producer-level data set, so we match on both producer and buyer ids.  
-            # multiple = "all") 
+            # relationship = "many-to-many") 
 # multiple are not expected, because although one producer may have several buyers in section3a, we removed these as they were very few and not properly given a different buyer ID. 
 
 if(jrc_geo$JRC_BUYER_ID %>% anyNA()){stop("unexpected introduction of NAs")}

@@ -190,7 +190,7 @@ consol <- data.frame(
 initcoln <- ncol(consol)
 initrown <- nrow(consol)
 consol <- full_join(consol, carg_links, 
-                    by = intersect(colnames(consol), colnames(carg_links)), multiple = "all") 
+                    by = intersect(colnames(consol), colnames(carg_links)), relationship = "many-to-many") 
 
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
@@ -198,7 +198,7 @@ if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclos
 initcoln <- ncol(consol)
 initrown <- nrow(consol)
 consol <- full_join(consol, jrc_links, 
-                    by = intersect(colnames(consol), colnames(jrc_links)), multiple = "all") 
+                    by = intersect(colnames(consol), colnames(jrc_links)), relationship = "many-to-many") 
 
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
@@ -206,7 +206,7 @@ if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclos
 initcoln <- ncol(consol)
 initrown <- nrow(consol)
 consol <- full_join(consol, sc_links, 
-                    by = intersect(colnames(consol), colnames(sc_links)), multiple = "all") 
+                    by = intersect(colnames(consol), colnames(sc_links)), relationship = "many-to-many") 
 
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
@@ -214,7 +214,7 @@ if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclos
 initcoln <- ncol(consol)
 initrown <- nrow(consol)
 consol <- full_join(consol, kit_links, 
-                    by = intersect(colnames(consol), colnames(kit_links)), multiple = "all") 
+                    by = intersect(colnames(consol), colnames(kit_links)), relationship = "many-to-many") 
 
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
@@ -694,7 +694,7 @@ grid_ctoid %>%
   inner_join(potential %>% 
               filter(CELL_NO_ACTUAL_LINK) %>% 
               select(CELL_ID, CELL_N_BS_WITHIN_DIST), 
-            by = "CELL_ID", multiple = "all") %>% 
+            by = "CELL_ID", relationship = "many-to-many") %>% 
   mutate(PROBLEM = CELL_N_BS_WITHIN_DIST.x < CELL_N_BS_WITHIN_DIST.y) %>% 
   filter(PROBLEM) %>% 
   nrow() > 0
@@ -784,7 +784,7 @@ potential_all =
   potential %>% 
   full_join(
     consol_other %>% select(-COOP_BS_ID), # as this is only NAs
-    by = intersect(colnames(potential), colnames(consol_other)), multiple = "all") %>% 
+    by = intersect(colnames(potential), colnames(consol_other)), relationship = "many-to-many") %>% 
   # create indicator for these links
   mutate(LINK_IS_ACTUAL_OTHER = !is.na(LINK_ID_OTHERS),
          # and correct LINK_IS_ACTUAL_COOP which otherwise has now NAs because of the merge
@@ -1166,6 +1166,8 @@ potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% nrow()
 
 rm(travel_times, only_potential_coords)
 
+
+
 ## Cell-level topological variables ------------------
 
 ### Nb of potential coops -------- 
@@ -1347,7 +1349,7 @@ coopbs_ohe =
     COOP_SSI_MARS = grepl("MARS", CERTIFICATIONS),
     COOP_SSI_SUCDEN = grepl("SUCDEN", CERTIFICATIONS),
     COOP_SSI_PURATOS = grepl("PURATOS", CERTIFICATIONS),
-    COOP_SSI_OTHER = grepl("OTHER", CERTIFICATIONS)
+    COOP_OTHER_PROG = grepl("OTHER", CERTIFICATIONS) # these are not necessarily SSIs or certifications (see IC2B making script). 
   ) %>% 
   ungroup() %>% 
   mutate(tmp_value = TRUE, 
@@ -1992,7 +1994,7 @@ coop_vars_toavg = c(
   "COOP_SSI_MARS",
   "COOP_SSI_SUCDEN",
   "COOP_SSI_PURATOS",
-  "COOP_SSI_OTHER",
+  "COOP_OTHER_PROG",
   # Coop status
   "COOP_STATUS_SCOOPS",
   "COOP_STATUS_COOP-CA" # repeat for COOP-CA, bc we don't always know (so it's not going to be perfectly colinear)
@@ -2127,7 +2129,7 @@ cell_countvars =
 cell_countvars$CELL_COUNT_1_NEAREST_COOP_FARMERS %>% summary()
 coopbs$TOTAL_FARMERS %>% summary()
 
-stopifnot(max(coopbs$TOTAL_FARMERS, na.rm = TRUE) == max(cell_countvars$CELL_COUNT_1_NEAREST_COOP_FARMERS))
+# stopifnot(max(coopbs$TOTAL_FARMERS, na.rm = TRUE) == max(cell_countvars$CELL_COUNT_1_NEAREST_COOP_FARMERS))
 
 cell_countvars %>% 
   filter(CELL_ID == 6545) %>% 

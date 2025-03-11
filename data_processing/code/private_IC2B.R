@@ -103,17 +103,20 @@ unique_unique <- function(col_name){
 
 # This helper function selects the most frequent value of a character or numeric column (for use typically within a group). 
 # This is used typically on coop names and on coordinates. 
-# [1] and mean() reduce to a single value to accommodate where different values occur equally frequently.
+# Note: previously, this function was using DescTools::Mode() which was not able to parse NAs out when they are as many as non-NAs. 
+# Moreover, the use of factor() ordered values alphabetically, and not by occurrence, such that there was a bias towards some names when handling multiples modes. 
+# The new code handle this better. 
 unique_mode <- function(col_name){
+  col_name_nona <- na.omit(col_name)
+  ucol_name_nona <- unique(col_name_nona)
   if(is.character(col_name)){
-    um <- as.character(Mode(factor(col_name, exclude = NA), na.rm = TRUE))[1]
+    # This selects the first occurring modal value where different values occur equally frequently.
+    um <- ucol_name_nona[which.max(tabulate(match(col_name_nona, ucol_name_nona)))]
   } 
   if(is.numeric(col_name)){
-    if(length(col_name)>2){
-      um <- as.numeric(Mode(col_name, na.rm = TRUE)) %>% mean() 
-    } else {
-      um <- mean(col_name, na.rm=T)
-    }
+    tab <- tabulate(match(col_name_nona, ucol_name_nona))
+    # mean() reduce to a single value to accommodate where different values occur equally frequently.
+    um <- mean(ucol_name_nona[tab == max(tab)])
   } 
   return(um)
 }
@@ -1488,6 +1491,7 @@ civ <-
 # Homogenize district info 
 if(anyNA(civ$COOP_POINT_ID)){stop("this is not expected and an issue for the homogenization below")}
 
+civ1 <- civ
 civ <- 
   civ %>% 
   group_by(COOP_POINT_ID) %>% 
@@ -1510,6 +1514,15 @@ if(
   filter(NOT_HOMOGENIZED) %>% nrow() > 0
 ){stop("department info homogenization not complete")}  
 
+civ %>% 
+  group_by(COOP_POINT_ID) %>% 
+  mutate(NOT_HOMOGENIZED = !all(is.na(DISTRICT_GEOCODE)) & !all(!is.na(DISTRICT_GEOCODE))) %>% 
+  ungroup() %>% 
+  filter(NOT_HOMOGENIZED) %>%
+  arrange(COOP_POINT_ID) %>% 
+  select(COOP_POINT_ID, DISTRICT_GEOCODE, AREA_NAME) %>% 
+  View()
+  
 
 # Make clean district name based on this, replacing the previous variable that never made sense (was empty). 
 civ <- 
@@ -1866,6 +1879,8 @@ civ <-
     
     CERT_LIST = gsub(pattern = "RAAGRICULTURE BIOLOGIQUE", "RAINFOREST ALLIANCE, AGRICULTURE BIOLOGIQUE", x = CERT_LIST),
     
+    CERT_LIST = gsub(pattern = "OLD-RA", "RAINFOREST ALLIANCE", x = CERT_LIST),
+    CERT_LIST = gsub(pattern = "NEW-RA", "RAINFOREST ALLIANCE", x = CERT_LIST),
     CERT_LIST = str_split(CERT_LIST, pattern = ";|,|\\/|\\&|-| AND | OR | ET "),
     CERT_LIST = map(CERT_LIST, str_squish),
     CERT_LIST = map(CERT_LIST, ~ gsub("UTZ_.*", "UTZ", .x)) # handles the many "UTZ_CO1000009236" style instances
@@ -1878,7 +1893,7 @@ unique(unlist(civ$CERT_LIST)) %>% sort()
 # this function should take as input a character vector of length > 1. 
 fn_standard_certification_names <- function(x) {
   y <- x
-  if(grepl("RAINFOREST ALLIANCE|RFA|OLD-RA|NEW-RA|^RA$", x) & !grepl("NOT GRANTED|SUSPEND", x)){
+  if(grepl("RAINFOREST ALLIANCE|RFA|^OLDRA$|^NEWRA$|^RA$", x) & !grepl("NOT GRANTED|SUSPEND", x)){
     y <- "RAINFOREST ALLIANCE"
   } 
   if(grepl("FAIRTRADE|FAIR TRADE|FAITRADE|FAIRTRIDE|FAITRIDE|FT USA|^FT$", x) & !grepl("SUSPENDED", x)){
@@ -1926,7 +1941,7 @@ fn_standard_certification_names <- function(x) {
   if(grepl("^TRACE$|CACAO TRACE|CACAOTRACE|CACAO-TRACE", x)){
     y <- "CACAO-TRACE (PURATOS)"
   }
-  if(grepl("FERMICOA|4C|4 C|^ASA$|PROGRAMME DE L'UNION ECOOKIM|^AVEC$|^CACAO$|CACAO AMI DES FORETS|CAIR INTERNATIONAL|^CARE$|CE 834|CIV [(]GIZ[)]|COCOA PRACTICISE|COH SACO|EQUITE 2|NOVATION VERTE|^CLMRS$|^CMS$|^COCOA ACTION$|COCOACTION|^COH$|COOPACADEMY2|GROUPEMENT|ICRAFT|^ICS$|^INO$|^N0$|^OILP$|SASSANDRA|CHILD LABOUR|PILOT|^ECOCERT$|IMPACTUM|CHILDREN|AGROFORESTRY|AGROMAP|ASCA|^GAL$|^GIZ$|^ICI$|^LANTEUR$|^MICRO$|^MOCA$|^NEW$|^NA$|^NEANT$|^OLD$|^PP$|PRODUCTIVITY PACKAGE|^PRO$|^PROPLANTEUR$|^RCCP$|^STB$|COACHING|SOLIDARIDAD|RESPONSIBLY SOURCED COCOA|^SOCIAL$|^STARBUCK$", x)){
+  if(grepl("FERMICOA|4C|4 C|^ASA$|PROGRAMME DE L'UNION ECOOKIM|^AVEC$|^CACAO$|CACAO AMI DES FORETS|CAIR INTERNATIONAL|^CARE$|CE 834|CIV [(]GIZ[)]|COCOA PRACTICISE|COH SACO|EQUITE 2|NOVATION VERTE|^CLMRS$|^CMS$|^COCOA ACTION$|COCOACTION|^COH$|COOPACADEMY2|GROUPEMENT|ICRAFT|^ICS$|^INO$|^N0$|^OILP$|SASSANDRA|CHILD LABOUR|PILOT|^ECOCERT$|IMPACTUM|CHILDREN|AGROFORESTRY|^AGROMAP$|^ASCA$|^GAL$|^GIZ$|^ICI$|^LANTEUR$|^MICRO$|^MOCA$|^NEANT$|^PP$|PRODUCTIVITY PACKAGE|^PRO$|^PROPLANTEUR$|^RCCP$|^STB$|COACHING|SOLIDARIDAD|^SOCIAL$|^STARBUCK$", x)){
     y <- "OTHER PROGRAMMES OR CERTIFICATIONS"
   }
   if(grepl("DECERTIFIED", x)){y <- NA}
@@ -1936,13 +1951,14 @@ fn_standard_certification_names <- function(x) {
   if(grepl("SUPPLIER STANDARD", x)){y <- NA}
   if(grepl("2007", x)){y <- NA}
   if(grepl("NOP )", x)){y <- NA}
+  if(grepl("^NA$", x)){y <- NA}
   if(grepl("9999", x)){y <- NA}
   if(!is.na(x) & nchar(x)==0){y <- NA}
   # if(is.na(x)){y <- "9999"}
   
   return(y)
 }
-# civ %>% filter(grepl("2007", DISCL_CERTIFICATION_NAME)) %>% View()
+civ %>% filter(grepl("RESPONSIBLY SOURCED COCOA", DISCL_CERTIFICATION_NAME)) %>% select(DISCL_CERTIFICATION_NAME, CERT_LIST) %>% View()
 # civ %>% filter(grepl("NOP )", DISCL_CERTIFICATION_NAME, ignore.case = T)) %>% View()
 # civ %>% filter(grepl("trace", DISCL_CERTIFICATION_NAME, ignore.case = T)) %>% View()
 civ <- 

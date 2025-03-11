@@ -50,7 +50,7 @@ set.seed(8888)
 
 # Storage directories
 dir.create(here("outputs", "aggregate_sheds"), recursive = TRUE)
-
+dir.create(here("temp_data", "food_security_VSS"), recursive = TRUE)
 
 ## Functions
 # Trase palettes etc. for plots
@@ -85,7 +85,7 @@ coopbs22_sf =
   filter(!is.na(LONGITUDE)) %>% 
   st_as_sf(coords = c("LONGITUDE", "LATITUDE"), crs = 4326)
 
-coopbs22_sf$COOP_ID %>% unique()%>% length() 
+coopbs22_sf$COOP_ID %>% unique() %>% length() 
 
 links = readRDS(here("temp_data", "model", paste0("links_topredict.Rdata")))
 
@@ -101,9 +101,15 @@ cells =
          - CELL_DENSEFOREST_HA
          - CELL_OTHERFORESTS_HA
          - CELL_IMPOSSIBLE_HA, 
-    CELL_FOREST_HA = CELL_DENSEFOREST_HA + CELL_OTHERFORESTS_HA,
+     CELL_FOREST_HA = CELL_DENSEFOREST_HA + CELL_OTHERFORESTS_HA,
     CELL_ALL_CD_HA = CELL_OLD_CD_HA + CELL_REC_CD_HA,
-    CELL_1minusSHARE_COOP = 1 - CELL_SHARE_COOP) 
+    CELL_1minusSHARE_COOP = 1 - CELL_SHARE_COOP, 
+    
+    CELL_NODEF_EXPANSION_SHARE = CELL_NODEF_EXPANSION_HA / cell_area_ha,
+    CELL_FOREST_SHARE = CELL_FOREST_HA / cell_area_ha,
+    CELL_DENSEFOREST_SHARE = CELL_DENSEFOREST_HA / cell_area_ha,
+    CELL_OTHERFORESTS_SHARE = CELL_OTHERFORESTS_HA / cell_area_ha
+   ) 
 
 ```
 
@@ -115,6 +121,10 @@ cells_toplot =
    # Work on PERCENTAGE, not share, from here, for display. 
     CELL_SHARE_COOP = 100*CELL_SHARE_COOP,
     CELL_COCOA_SHARE = 100*CELL_COCOA_SHARE, 
+    CELL_FOREST_SHARE = 100*CELL_FOREST_SHARE, 
+    CELL_DENSEFOREST_SHARE = 100*CELL_DENSEFOREST_SHARE, 
+    CELL_OTHERFORESTS_SHARE = 100*CELL_OTHERFORESTS_SHARE, 
+    CELL_NODEF_EXPANSION_SHARE = 100*CELL_NODEF_EXPANSION_SHARE, 
     # Round hectares
     across(.cols = ends_with("_HA"), .fns = ~.x/1000), # replaces all the variables ending with _HA
     across(.cols = ends_with("_HA"), .fns = ~round(.x, 1)) 
@@ -158,8 +168,8 @@ fn_aggregate_lu = function(out_or_in_share){
             COCOA          = round(sum({{out_or_in_share}}*CELL_COCOA_HA) / 1000, 1),
             FOREST         = round(sum({{out_or_in_share}}*CELL_FOREST_HA) / 1000, 1),
             `DENSE FOREST` = round(sum({{out_or_in_share}}*CELL_DENSEFOREST_HA) / 1000, 1),
-            `OTHER FOREST` = round(sum({{out_or_in_share}}*CELL_OTHERFORESTS_HA) / 1000, 1),
-            `AVAILABLE, NOT FORESTED LAND` = round(sum({{out_or_in_share}}*CELL_NODEF_EXPANSION_HA) / 1000, 1), 
+            `OTHER FORESTS` = round(sum({{out_or_in_share}}*CELL_OTHERFORESTS_HA) / 1000, 1),
+            `OTHER AGRICULTURAL LAND` = round(sum({{out_or_in_share}}*CELL_NODEF_EXPANSION_HA) / 1000, 1), 
             `COCOA DEFORESTATION`          = round(sum({{out_or_in_share}}*CELL_ALL_CD_HA) / 1000, 1)
             ) %>% 
   filter(CELL_IS_IN_AOA) %>% 
@@ -174,8 +184,8 @@ fn_aggregate_lu_relative = function(out_or_in_share){
             COCOA          = 100*round(sum({{out_or_in_share}}*CELL_COCOA_HA) / sum(CELL_COCOA_HA), 2),
             FOREST         = 100*round(sum({{out_or_in_share}}*CELL_FOREST_HA) / sum(CELL_FOREST_HA), 1),
             `DENSE FOREST` = 100*round(sum({{out_or_in_share}}*CELL_DENSEFOREST_HA) / sum(CELL_DENSEFOREST_HA), 2),
-            `OTHER FOREST` = 100*round(sum({{out_or_in_share}}*CELL_OTHERFORESTS_HA) / sum(CELL_OTHERFORESTS_HA), 2),
-            `AVAILABLE, NOT FORESTED LAND` = 100*round(sum({{out_or_in_share}}*CELL_NODEF_EXPANSION_HA) / sum(CELL_NODEF_EXPANSION_HA), 2),
+            `OTHER FORESTS` = 100*round(sum({{out_or_in_share}}*CELL_OTHERFORESTS_HA) / sum(CELL_OTHERFORESTS_HA), 2),
+            `OTHER AGRICULTURAL LAND` = 100*round(sum({{out_or_in_share}}*CELL_NODEF_EXPANSION_HA) / sum(CELL_NODEF_EXPANSION_HA), 2),
             `COCOA DEFORESTATION`          = 100*round(sum({{out_or_in_share}}*CELL_ALL_CD_HA) / sum(CELL_ALL_CD_HA), 2)
             ) %>% 
   filter(CELL_IS_IN_AOA) %>% 
@@ -194,15 +204,17 @@ aggr_tbl =
   
 aggr_tbl
 
-out_tbl = 
-  aggr_tbl %>% 
+# Create table with kableExtra and add indentation
+out_tbl <- 
+  aggr_tbl %>%
   kbl() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "responsive"))
-  # row_spec(12, extra_css = "padding-left: 20px;")
+  kable_classic(full_width = F, html_font = "Arial") %>% 
+  # column_spec(1, width = "4.7cm") %>% # that's to cut nicely $
+  column_spec(1, width = "5cm") 
 
 out_tbl
 
-save_kable(out_tbl, here("outputs", "aggregate_sheds", "LU_in_out.png"))
+# save_kable(out_tbl, here("outputs", "aggregate_sheds", "LU_in_out.png"))
 
 ```
 
@@ -291,12 +303,12 @@ Use palettes with blue: BlueGold, BlueYl (similar), BlueOr, DkViolet2
 #### Cocoa x share
 BlueYl
 ```{r}
-cells_toplot$CELL_COCOA_KHA %>% summary()
+cells_toplot$CELL_COCOA_SHARE %>% summary()
 
 # This makes the bivariate bins
 cells_toplot = 
   cells_toplot %>% 
-  bi_class(CELL_COCOA_KHA,
+  bi_class(CELL_COCOA_SHARE,
             `Cooperative outlet (%)`, 
             dim = 3, 
             style = "quantile", 
@@ -305,7 +317,7 @@ cells_toplot =
 # This is just for display in the legend
 breaks = 
   cells_toplot %>% 
-  bi_class_breaks(CELL_COCOA_KHA,
+  bi_class_breaks(CELL_COCOA_SHARE,
                   `Cooperative outlet (%)`, 
                   dim = 3, 
                   style = "quantile", 
@@ -329,7 +341,7 @@ map =
 
 legend <- bi_legend(pal = "BlueYl",
                     dim = 3,
-                    xlab = "Cocoa farms (kha)",
+                    xlab = "Cocoa area (%)",
                     ylab = "Cooperative outlet (%)",
                     size = 10, 
                     breaks = breaks, 
@@ -359,12 +371,12 @@ ggsave(
 #### Forest x share
 BlueOr
 ```{r}
-cells_toplot$CELL_FOREST_KHA %>% summary()
+cells_toplot$CELL_FOREST_SHARE %>% summary()
 
 # This makes the bivariate bins
 cells_toplot = 
   cells_toplot %>% 
-  bi_class(CELL_FOREST_KHA,
+  bi_class(CELL_FOREST_SHARE,
             `Cooperative outlet (%)`, 
             dim = 3, 
             style = "quantile", 
@@ -373,7 +385,7 @@ cells_toplot =
 # This is just for display in the legend
 breaks = 
   cells_toplot %>% 
-  bi_class_breaks(CELL_FOREST_KHA,
+  bi_class_breaks(CELL_FOREST_SHARE,
                   `Cooperative outlet (%)`, 
                   dim = 3, 
                   style = "quantile", 
@@ -397,7 +409,7 @@ map =
 
 legend <- bi_legend(pal = "BlueOr",
                     dim = 3,
-                    xlab = "Forested land (kha)",
+                    xlab = "Forest area (%)",
                     ylab = "Cooperative outlet (%)",
                     size = 10, 
                     breaks = breaks, 
@@ -411,15 +423,15 @@ forest_bivplot =
 forest_bivplot
 ```
 
-#### Not forested land x share
+#### Other ag. land x share
 DkViolet2
 ```{r}
-cells_toplot$CELL_NODEF_EXPANSION_KHA %>% summary()
+cells_toplot$CELL_NODEF_EXPANSION_SHARE %>% summary()
 
 # This makes the bivariate bins
 cells_toplot = 
   cells_toplot %>% 
-  bi_class(CELL_NODEF_EXPANSION_KHA,
+  bi_class(CELL_NODEF_EXPANSION_SHARE,
             `Cooperative outlet (%)`, 
             dim = 3, 
             style = "quantile", 
@@ -428,7 +440,7 @@ cells_toplot =
 # This is just for display in the legend
 breaks = 
   cells_toplot %>% 
-  bi_class_breaks(CELL_NODEF_EXPANSION_KHA,
+  bi_class_breaks(CELL_NODEF_EXPANSION_SHARE,
                   `Cooperative outlet (%)`, 
                   dim = 3, 
                   style = "quantile", 
@@ -453,7 +465,7 @@ map =
 legend <- bi_legend(pal = "DkCyan2",
                     dim = 3,
                     flip_axes = TRUE,
-                    xlab = "'Available' land (kha)",
+                    xlab = "Other agricultural land area (%)",
                     ylab = "Cooperative outlet (%)",
                     size = 10, 
                     breaks = breaks, 
@@ -476,10 +488,10 @@ multipanel_bivplot =
     avb_bivplot,
     ncol = 3, nrow = 1, 
     common.legend = FALSE, 
-    labels = c("COCOA EXTENT", "FOREST EXTENT", 
-               "NO-COCOA, NO-FOREST LAND"), 
+    labels = c("A. COCOA EXTENT", "B. FOREST EXTENT", 
+               "C. OTHER AGRICULTURAL LAND"), 
     hjust = c(-0.5, -0.5, -0.2), 
-    font.label = list(size = 16, color = "black", face = "bold", family = NULL)
+    font.label = list(size = 14, color = "black", face = "bold", family = NULL)
     # align = "h"
   ) %>% 
     annotate_figure(top = text_grob("COOPERATIVE OUTLET & ...\n", face = "bold", size = 18))
@@ -650,47 +662,311 @@ linked_coops =
 
             )
 
+# Calculate the total LU in the aggregate CSS
 cells = 
   cells %>% 
-  mutate(CELL_COCOA_CSS_HA  = CELL_COCOA_HA *CELL_SHARE_COOP,
-         CELL_FOREST_CSS_HA = CELL_FOREST_HA*CELL_SHARE_COOP, 
-         CELL_ALL_CD_CSS_HA = CELL_ALL_CD_HA*CELL_SHARE_COOP, 
-         CELL_NODEF_EXPANSION_CSS_HA = CELL_NODEF_EXPANSION_HA*CELL_SHARE_COOP)
+  mutate(CELL_COCOA_CSS_HA           = CELL_SHARE_COOP*CELL_COCOA_HA ,
+         CELL_FOREST_CSS_HA          = CELL_SHARE_COOP*CELL_FOREST_HA, 
+         CELL_DENSEFOREST_CSS_HA     = CELL_SHARE_COOP*CELL_DENSEFOREST_HA, 
+         CELL_ALL_CD_CSS_HA          = CELL_SHARE_COOP*CELL_ALL_CD_HA, 
+         CELL_NODEF_EXPANSION_CSS_HA = CELL_SHARE_COOP*CELL_NODEF_EXPANSION_HA)
 
 (cocoa_aggr_pcss = cells$CELL_COCOA_CSS_HA %>% sum())
 (all_cd_aggr_pcss = cells$CELL_ALL_CD_CSS_HA %>% sum())
 (nodef_aggr_pcss = cells$CELL_NODEF_EXPANSION_CSS_HA %>% sum())
 (forest_aggr_pcss = cells$CELL_FOREST_CSS_HA %>% sum())
+(denseforest_aggr_pcss = cells$CELL_DENSEFOREST_CSS_HA %>% sum())
 
 linked_coops$COOP_FOREST_HA %>% sum()
 linked_coops$COOP_FOREST_H10KM_HA %>% sum()
 linked_coops$COOP_FOREST_HDISTR_HA %>% sum()
-
 linked_coops$COOP_CONDI_FOREST_HA %>% sum()
-
-
-
-```
-
-## Hotspots
-
-### Distribution
-```{r}
-linked_coops$COOP_ALL_CD_HA %>% summary()
 
 linked_coops = 
   linked_coops %>% 
   mutate(
     COOP_PROP_OF_COCOA_HA = 100 * COOP_COCOA_HA / cocoa_aggr_pcss, 
     COOP_PROP_OF_FOREST_HA = 100 * COOP_FOREST_HA / forest_aggr_pcss, 
+    COOP_PROP_OF_DENSEFOREST_HA = 100 * COOP_DENSEFOREST_HA / denseforest_aggr_pcss, 
 
-    COOP_PROP_OF_ALL_CD_HA = 100 * COOP_ALL_CD_HA / cocoa_aggr_pcss, 
+    COOP_PROP_OF_ALL_CD_HA = 100 * COOP_ALL_CD_HA / all_cd_aggr_pcss, 
     COOP_ALL_ANNUAL_CD_HA = COOP_ALL_CD_HA / 16
     )
 
 linked_coops$COOP_PROP_OF_COCOA_HA %>% summary()
 linked_coops$COOP_PROP_OF_FOREST_HA %>% summary()
+linked_coops$COOP_PROP_OF_DENSEFOREST_HA %>% summary()
 linked_coops$COOP_PROP_OF_ALL_CD_HA %>% summary()
+
+```
+
+## Descriptives
+
+### Total area
+```{r}
+
+quantile(linked_coops$COOP_AREA_HA, seq(0,1,0.1))
+
+# Calculate the cumulative sum of COOP_AREA_HA
+linked_coops <- linked_coops %>%
+  arrange(desc(COOP_AREA_HA))
+linked_coops <- linked_coops %>%
+  mutate(COOP_AREA_HA_cumulative_sum = cumsum(COOP_AREA_HA))
+
+# Calculate the total sum 
+total_sum <- sum(linked_coops$COOP_AREA_HA)
+
+# Calculate the cumulative percentage of COOP_AREA_HA
+linked_coops <- linked_coops %>%
+  mutate(
+    COOP_AREA_RANK_cumulative_percentage        = 100*COOP_AREA_HA_cumulative_sum / total_sum, 
+    COOP_AREA_RANK = case_when(
+       COOP_AREA_RANK_cumulative_percentage < 20 ~ "Top 20%",
+       COOP_AREA_RANK_cumulative_percentage >= 20 & COOP_AREA_RANK_cumulative_percentage < 80 ~ "20-80%", 
+       COOP_AREA_RANK_cumulative_percentage >= 80 ~ "Bottom 20%"
+       )
+    )
+    
+linked_coops$COOP_AREA_RANK %>% table()
+
+# Determine the number of observations in each decile
+deciles <- seq(10, 100, by = 10)
+
+# model
+decile_counts <- sapply(deciles, function(d) {
+  sum(linked_coops$COOP_AREA_RANK_cumulative_percentage <= d)
+})
+decile_results <- data.frame(
+  Decile = deciles,
+  Count = decile_counts
+)
+
+
+decile_results
+
+coop22_sf = 
+  coopbs22_sf %>% 
+  # keep only one BS point for plotting this
+  distinct(COOP_ID, .keep_all = TRUE) %>% 
+  left_join(linked_coops, 
+            by = join_by(COOP_ID == LINK_POTENTIAL_COOP_ID)) %>% 
+  arrange(desc(COOP_AREA_HA))
+
+# the supply sheds of only 9 cooperatives include 20% of the remaining dense forest in all cooperative supply sheds. 
+100*decile_results[2,"Count"]/nrow(coop22_sf)
+
+coop22_sf = 
+  coop22_sf %>% 
+  mutate(
+    COOP_AREA_RANK = factor(COOP_AREA_RANK, levels = c("Bottom 20%","20-80%","Top 20%")))
+
+map_hotspot_coops_totalarea = 
+ ggplot(coop22_sf) +
+  geom_sf(mapping = aes(size = COOP_AREA_RANK, fill = COOP_AREA_HA),
+         shape = 21) + #, col = COOP_AREA_HA
+  
+  scale_size_manual(name = "Relative to all cooperatives",
+                    # labels=unit_format(unit = "%", sep = "")
+                    values = c("Bottom 20%" = 0.1,"20-80%" = 1,"Top 20%" = 4)
+                    ) +
+  scale_fill_viridis_c(na.value = "transparent", name = "Absolute",
+                       labels=unit_format(unit = "ha", sep = "")) +
+  
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "Hotspots of total area in individual PCSS",
+    subtitle = ""
+  ) + 
+   guides(size=guide_legend(title="Relative to all cooperatives"))
+
+```
+
+### Cocoa area
+```{r}
+linked_coops$COOP_AREA_HA %>% summary()
+linked_coops$COOP_COCOA_HA %>% summary()
+
+quantile(linked_coops$COOP_COCOA_HA, seq(0,1,0.1))
+
+# Calculate the cumulative sum of COOP_COCOA_HA
+linked_coops <- linked_coops %>%
+  arrange(desc(COOP_COCOA_HA))
+linked_coops <- linked_coops %>%
+  mutate(COOP_COCOA_HA_cumulative_sum = cumsum(COOP_COCOA_HA))
+
+# Calculate the total sum 
+total_sum <- sum(linked_coops$COOP_COCOA_HA)
+
+# Calculate the cumulative percentage of COOP_COCOA_HA
+linked_coops <- linked_coops %>%
+  mutate(
+    COOP_COCOA_RANK_cumulative_percentage        = 100*COOP_COCOA_HA_cumulative_sum / total_sum, 
+    COOP_COCOA_RANK = case_when(
+       COOP_COCOA_RANK_cumulative_percentage < 20 ~ "Top 20%",
+       COOP_COCOA_RANK_cumulative_percentage >= 20 & COOP_COCOA_RANK_cumulative_percentage < 80 ~ "20-80%", 
+       COOP_COCOA_RANK_cumulative_percentage >= 80 ~ "Bottom 20%"
+       )
+    )
+    
+linked_coops$COOP_COCOA_RANK %>% table()
+
+# Determine the number of observations in each decile
+deciles <- seq(10, 100, by = 10)
+
+# model
+decile_counts <- sapply(deciles, function(d) {
+  sum(linked_coops$COOP_COCOA_RANK_cumulative_percentage <= d)
+})
+decile_results <- data.frame(
+  Decile = deciles,
+  Count = decile_counts
+)
+
+
+decile_results
+
+coop22_sf = 
+  coopbs22_sf %>% 
+  # keep only one BS point for plotting this
+  distinct(COOP_ID, .keep_all = TRUE) %>% 
+  left_join(linked_coops, 
+            by = join_by(COOP_ID == LINK_POTENTIAL_COOP_ID)) %>% 
+  arrange(desc(COOP_COCOA_HA))
+
+# the supply sheds of only 9 cooperatives include 20% of the remaining dense forest in all cooperative supply sheds. 
+100*decile_results[2,"Count"]/nrow(coop22_sf)
+
+coop22_sf = 
+  coop22_sf %>% 
+  mutate(
+    COOP_COCOA_RANK = factor(COOP_COCOA_RANK, levels = c("Bottom 20%","20-80%","Top 20%")))
+
+map_hotspot_coops_cocoa = 
+ ggplot(coop22_sf) +
+  geom_sf(mapping = aes(size = COOP_COCOA_RANK, fill = COOP_COCOA_HA),
+         shape = 21) + #, col = COOP_COCOA_HA
+  
+  scale_size_manual(name = "Relative to all cooperatives",
+                    # labels=unit_format(unit = "%", sep = "")
+                    values = c("Bottom 20%" = 0.1,"20-80%" = 1,"Top 20%" = 4)
+                    ) +
+  scale_fill_viridis_c(na.value = "transparent", name = "Absolute",
+                       labels=unit_format(unit = "ha", sep = "")) +
+  
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "",
+    subtitle = ""
+  ) + 
+   guides(size=guide_legend(title="Relative to all cooperatives"))
+
+```
+
+### Dense forest distribution
+
+```{r}
+
+quantile(linked_coops$COOP_DENSEFOREST_HA, seq(0,1,0.1))
+quantile(linked_coops$COOP_PROP_OF_DENSEFOREST_HA, seq(0,1,0.1))
+
+# Calculate the cumulative sum of COOP_DENSEFOREST_HA
+linked_coops <- linked_coops %>%
+  arrange(desc(COOP_DENSEFOREST_HA))
+linked_coops <- linked_coops %>%
+  mutate(COOP_DENSEFOREST_HA_cumulative_sum = cumsum(COOP_DENSEFOREST_HA))
+
+# Calculate the total sum 
+total_sum <- sum(linked_coops$COOP_DENSEFOREST_HA)
+
+# Calculate the cumulative percentage of COOP_DENSEFOREST_HA
+linked_coops <- linked_coops %>%
+  mutate(
+    COOP_DENSEFOREST_RANK_cumulative_percentage        = 100*COOP_DENSEFOREST_HA_cumulative_sum / total_sum, 
+    COOP_DENSEFOREST_RANK = case_when(
+       COOP_DENSEFOREST_RANK_cumulative_percentage < 20 ~ "Top 20%",
+       COOP_DENSEFOREST_RANK_cumulative_percentage >= 20 & COOP_DENSEFOREST_RANK_cumulative_percentage < 80 ~ "20-80%", 
+       COOP_DENSEFOREST_RANK_cumulative_percentage >= 80 ~ "Bottom 20%"
+       )
+    )
+    
+linked_coops$COOP_DENSEFOREST_RANK %>% table()
+
+# Determine the number of observations in each decile
+deciles <- seq(10, 100, by = 10)
+
+# model
+decile_counts <- sapply(deciles, function(d) {
+  sum(linked_coops$COOP_DENSEFOREST_RANK_cumulative_percentage <= d)
+})
+decile_results <- data.frame(
+  Decile = deciles,
+  Count = decile_counts
+)
+
+
+decile_results
+
+coop22_sf = 
+  coopbs22_sf %>% 
+  # keep only one BS point for plotting this
+  distinct(COOP_ID, .keep_all = TRUE) %>% 
+  left_join(linked_coops, 
+            by = join_by(COOP_ID == LINK_POTENTIAL_COOP_ID)) %>% 
+  arrange(desc(COOP_DENSEFOREST_HA))
+
+# the supply sheds of only 9 cooperatives include 20% of the remaining dense forest in all cooperative supply sheds. 
+100*decile_results[2,"Count"]/nrow(coop22_sf)
+
+coop22_sf = 
+  coop22_sf %>% 
+  mutate(
+    COOP_DENSEFOREST_RANK = factor(COOP_DENSEFOREST_RANK, levels = c("Bottom 20%","20-80%","Top 20%")))
+
+map_hotspot_coops_dense_forest = 
+ ggplot(coop22_sf) +
+  geom_sf(mapping = aes(size = COOP_DENSEFOREST_RANK, fill = COOP_DENSEFOREST_HA),
+         shape = 21) + #, col = COOP_DENSEFOREST_HA
+  
+  scale_size_manual(name = "Relative to all cooperatives",
+                    # labels=unit_format(unit = "%", sep = "")
+                    values = c("Bottom 20%" = 0.1,"20-80%" = 1,"Top 20%" = 4)
+                    ) +
+  scale_fill_viridis_c(na.value = "transparent", name = "Absolute",
+                       labels=unit_format(unit = "ha", sep = "")) +
+  
+  geom_sf(data = departements, fill = "transparent", col = "black") +
+  theme_bw() + 
+  guides(colour = guide_legend(override.aes = list(size=10))) +
+  scale_x_continuous(breaks = xlabs, labels = paste0(xlabs,'°W')) +
+  scale_y_continuous(breaks = ylabs, labels = paste0(ylabs,'°N')) +
+  labs(
+    title = "Hotspots of remaining dense forest in individual PCSS",
+    subtitle = ""
+  ) + 
+   guides(size=guide_legend(title="Relative to all cooperatives"))
+
+# ggsave(
+#   plot = map_hotspot_coops_dense_forest,
+#   filename = paste0("map_hotspot_coops_dense_forest.png"),
+#   path = here("outputs", "individual_sheds"),
+#   width = 25,
+#   height = 20,
+#   units = "cm")
+
+
+```
+
+### All CD distribution
+```{r}
+# ALL CD (COCOA DEFORESTATION) 
 
 quantile(linked_coops$COOP_ALL_CD_HA, seq(0,1,0.1))
 quantile(linked_coops$COOP_PROP_OF_ALL_CD_HA, seq(0,1,0.1))
@@ -1074,10 +1350,234 @@ coop_sheds_h60km =
 
 ```
 
-## Hotspots
+
+# E. Cell exposure to coop attributes
+
+## Proba from inverse distance  
+
+```{r}
+coop22 = 
+  coopbsy %>% 
+  filter(YEAR == 2022) %>% 
+  # do that to match the output of the model 
+  mutate(COOP_ID = paste0("COOP-",COOP_ID)) %>% 
+  distinct(COOP_ID, .keep_all = TRUE)
+
+# (in links data, COOP_ID and LINK_POTENTIAL_COOP_ID are actually the same, but use the latter when using links data for consistency)
+# links %>% filter(paste0("COOP-", COOP_ID) != LINK_POTENTIAL_COOP_ID) %>% View()
+
+# links %>% 
+#   group_by(CELL_ID) %>% 
+#   mutate(CELL_WEIGHTS_SUM = sum(LINK_PROBA_THRESH_NORMED)) %>% 
+#   ungroup() %>% 
+#   pull(CELL_WEIGHTS_SUM) %>% summary()
+
+# join coop attributes to links data - not necessary, everything in links already
+# links_coopattr = 
+#   links %>% 
+#   left_join(coop22, 
+#             by = join_by(LINK_POTENTIAL_COOP_ID == COOP_ID))
+# nrow(links_coopattr)
+# nrow(links)
+
+names(links)[grepl("COOP_", names(links))]
+vars_to_distribute = c("COOP_CERTIFIED_OR_SSI", 
+                       "COOP_CERTIFIED", "COOP_HAS_SSI",
+                       "COOP_RFA", "COOP_UTZ", "COOP_FT", 
+                       names(links)[grepl("COOP_SSI_", names(links))],
+                       "COOP_OTHER_PROG",
+                       # "COOP_N_KNOWN_BUYERS", # do not include this one, not very informative, because oftentimes it is null, and maximum 3 once distributed to cells.  
+                       "COOP_STATUS_SCOOPS", "COOP_STATUS_COOPCA")
+
+cell_exp =
+  links %>% 
+  summarise(.by = CELL_ID, 
+            across(.cols = all_of(vars_to_distribute), 
+                   .fns = ~sum(.x*LINK_PROBA_HCONTI_NORMED), # THIS IS WHERE IS DETERMINED THE PROBA USED FOR EXPOSURE MEASUREMENT  
+                   .names = paste0("PROBA_", "{.col}")), 
+            CELL_LONGITUDE = unique(CELL_LONGITUDE),
+            CELL_LATITUDE = unique(CELL_LATITUDE)
+            )
+
+links_cellproba = 
+  links %>% 
+  left_join(
+    cell_exp, 
+    by = "CELL_ID"
+  )
+
+links_cellproba %>% 
+  select(CELL_ID, LINK_PROBA_THRESH_NORMED, LINK_POTENTIAL_COOP_ID, COOP_CERTIFIED, CELL_PROBA_COOP_CERTIFIED) %>% 
+  arrange(CELL_ID, desc(LINK_PROBA_THRESH_NORMED)) %>% 
+  View()
+
+# Join to World Bank household bundles (grappes)
+
+wb21 = read.dta13(here("input_data", "WB", "CIV_2021_EHCVM-2_v01_M_STATA14", "s00_me_civ2021.dta"))
+wb21 = 
+  wb21 %>% 
+  st_as_sf(coords = c("GPS__Longitude", "GPS__Latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(crs = civ_crs)
+
+cell_exp = 
+  cell_exp %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(crs = civ_crs) %>% 
+  st_buffer(dist = 1e3*MODEL_RESOLUTION_KM/2)
+
+# make them square
+st_geometry(cell_exp) <- 
+  sapply(st_geometry(cell_exp), FUN = function(x){st_as_sfc(st_bbox(x))}) %>% st_sfc(crs = civ_crs)
+
+cell_exp[1,] %>% st_geometry() %>% plot()
+
+wb21_exp = 
+  wb21 %>% 
+  st_join(cell_exp, 
+          join = st_within)
+
+ggplot() + 
+  geom_sf(data = cell_exp, col = "transparent", fill = "lightgrey") +
+  geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
+  geom_sf(data = wb21_exp, aes(col = PROBA_COOP_CERTIFIED), size = 1) + 
+  scale_colour_viridis_c() +
+  theme_trase() +
+  guides(fill="none")
+
+wb21_exp =  
+  wb21_exp %>% 
+  st_drop_geometry()
+
+stopifnot(
+wb21_exp %>% filter(PROBA_COOP_CERTIFIED_OR_SSI & !PROBA_COOP_CERTIFIED & !PROBA_COOP_HAS_SSI) %>% nrow() == 0 &
+
+wb21_exp %>% filter(!PROBA_COOP_CERTIFIED_OR_SSI & (PROBA_COOP_CERTIFIED | PROBA_COOP_HAS_SSI)) %>% nrow() == 0
+)
+
+save.dta13(wb21_exp, 
+           here("temp_data", "food_security_VSS", "s00_me_civ2021_coopVSSvars_invdistproba.dta"))
+  
+
+wb21_exp$PROBA_COOP_CERTIFIED %>% summary()
+wb21_exp$PROBA_COOP_CERTIFIED_OR_SSI %>% summary()
+wb21_exp$PROBA_COOP_HAS_SSI %>% summary()
 
 
-## Heuristics
+
+```
+
+
+
+## Proba from model 
+
+```{r}
+coop22 = 
+  coopbsy %>% 
+  filter(YEAR == 2022) %>% 
+  # do that to match the output of the model 
+  mutate(COOP_ID = paste0("COOP-",COOP_ID)) %>% 
+  distinct(COOP_ID, .keep_all = TRUE)
+
+# (in links data, COOP_ID and LINK_POTENTIAL_COOP_ID are actually the same, but use the latter when using links data for consistency)
+# links %>% filter(paste0("COOP-", COOP_ID) != LINK_POTENTIAL_COOP_ID) %>% View()
+
+# links %>% 
+#   group_by(CELL_ID) %>% 
+#   mutate(CELL_WEIGHTS_SUM = sum(LINK_PROBA_THRESH_NORMED)) %>% 
+#   ungroup() %>% 
+#   pull(CELL_WEIGHTS_SUM) %>% summary()
+
+# join coop attributes to links data - not necessary, everything in links already
+# links_coopattr = 
+#   links %>% 
+#   left_join(coop22, 
+#             by = join_by(LINK_POTENTIAL_COOP_ID == COOP_ID))
+# nrow(links_coopattr)
+# nrow(links)
+
+names(links)[grepl("COOP_", names(links))]
+vars_to_distribute = c("COOP_CERTIFIED_OR_SSI", 
+                       "COOP_CERTIFIED", "COOP_HAS_SSI",
+                       "COOP_RFA", "COOP_UTZ", "COOP_FT", 
+                       names(links)[grepl("COOP_SSI_", names(links))],
+                       "COOP_OTHER_PROG",
+                       # "COOP_N_KNOWN_BUYERS", # do not include this one, not very informative, because oftentimes it is null, and maximum 3 once distributed to cells.  
+                       "COOP_STATUS_SCOOPS", "COOP_STATUS_COOPCA")
+
+cell_exp =
+  links %>% 
+  summarise(.by = CELL_ID, 
+            across(.cols = all_of(vars_to_distribute), 
+                   .fns = ~sum(.x*LINK_PROBA_THRESH_NORMED), # THIS IS THE DIFFERENCE WITH PREVIOUS CODE BLOCK
+                   .names = paste0("PROBA_", "{.col}")), 
+            CELL_LONGITUDE = unique(CELL_LONGITUDE),
+            CELL_LATITUDE = unique(CELL_LATITUDE)
+            )
+
+links_cellproba = 
+  links %>% 
+  left_join(
+    cell_exp, 
+    by = "CELL_ID"
+  )
+
+links_cellproba %>% 
+  select(CELL_ID, LINK_PROBA_THRESH_NORMED, LINK_POTENTIAL_COOP_ID, COOP_CERTIFIED, CELL_PROBA_COOP_CERTIFIED) %>% 
+  arrange(CELL_ID, desc(LINK_PROBA_THRESH_NORMED)) %>% 
+  View()
+
+# Join to World Bank household bundles (grappes)
+
+wb21 = read.dta13(here("input_data", "WB", "CIV_2021_EHCVM-2_v01_M_STATA14", "s00_me_civ2021.dta"))
+wb21 = 
+  wb21 %>% 
+  st_as_sf(coords = c("GPS__Longitude", "GPS__Latitude"), crs = 4326, remove = FALSE) %>% 
+  st_transform(crs = civ_crs)
+
+cell_exp = 
+  cell_exp %>% 
+  st_as_sf(coords = c("CELL_LONGITUDE", "CELL_LATITUDE"), crs = 4326) %>% 
+  st_transform(crs = civ_crs) %>% 
+  st_buffer(dist = 1e3*MODEL_RESOLUTION_KM/2)
+
+# make them square
+st_geometry(cell_exp) <- 
+  sapply(st_geometry(cell_exp), FUN = function(x){st_as_sfc(st_bbox(x))}) %>% st_sfc(crs = civ_crs)
+
+
+cell_exp[1,] %>% st_geometry() %>% plot()
+wb21_exp = 
+  wb21 %>% 
+  st_join(cell_exp, 
+          join = st_within)
+
+ggplot() + 
+  geom_sf(data = cell_exp, col = "transparent", fill = "lightgrey") +
+  geom_sf(data = departements, fill = "transparent", col = "darkgrey") +
+  geom_sf(data = wb21_exp, aes(col = PROBA_COOP_CERTIFIED), size = 1) + 
+  scale_colour_viridis_c() +
+  theme_trase() +
+  guides(fill="none")
+
+wb21_exp =  
+  wb21_exp %>% 
+  st_drop_geometry()
+
+stopifnot(
+wb21_exp %>% filter(PROBA_COOP_CERTIFIED_OR_SSI & !PROBA_COOP_CERTIFIED & !PROBA_COOP_HAS_SSI) %>% nrow() == 0 &
+
+wb21_exp %>% filter(!PROBA_COOP_CERTIFIED_OR_SSI & (PROBA_COOP_CERTIFIED | PROBA_COOP_HAS_SSI)) %>% nrow() == 0
+)
+
+save.dta13(wb21_exp, 
+           here("temp_data", "food_security_VSS", "s00_me_civ2021_coopVSSvars_modelproba.dta"))
+  
+
+wb21_exp$PROBA_COOP_CERTIFIED %>% summary()
+wb21_exp$PROBA_COOP_CERTIFIED_OR_SSI %>% summary()
+wb21_exp$PROBA_COOP_HAS_SSI %>% summary()
+
+```
 
 # Additional stuff 
 ## Distance map
@@ -1188,7 +1688,7 @@ cells =
   cells %>% 
   left_join(
     links %>% select(CELL_ID, `Sourcing shed type`) %>% distinct(CELL_ID, .keep_all = TRUE), 
-    by = "CELL_ID", multiple = "all"
+    by = "CELL_ID", relationship = "many-to-many"
   )
 cells$`Sourcing shed type` %>% table()
 

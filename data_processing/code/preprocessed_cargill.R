@@ -179,7 +179,7 @@ carg_pt_bs =
   left_join(bs_carg %>% select(SIMPLIF_ABRVNAME, BUYER_LONGITUDE = LONGITUDE, BUYER_LATITUDE = LATITUDE, 
                                COOP_BS_ID), # to be able to match back to IC2B. 
             by = join_by("SIMPLIF_COOPERATIV" == "SIMPLIF_ABRVNAME"), 
-            multiple = "all") 
+            relationship = "many-to-many") 
 
 carg_pt_sfbs = 
   carg_pt_bs %>% 

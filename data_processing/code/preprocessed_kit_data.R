@@ -23,6 +23,11 @@ civ_crs <- 32630
 # load in particular the function fn_trader_to_group_names, str_trans, ... 
 source(here("code", "USEFUL_STUFF_supplyshedproj.R"))
 
+departements <- read_sf("input_data/s3/CIV_DEPARTEMENTS.geojson")
+
+departements = 
+  st_transform(departements, crs = civ_crs)
+
 kit = read.dta13(here("input_data", "KIT", "dataverse_files", "0.1 Cocoa_Livelihoods_export_Dataverse_stata13.dta"),
                  convert.factors = TRUE, # we want those labels. this is the default. 
                  generate.factors=TRUE,
