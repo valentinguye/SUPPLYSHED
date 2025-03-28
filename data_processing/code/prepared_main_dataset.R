@@ -69,6 +69,9 @@ jrc_links = read.csv(here("temp_data", "preprocessed_jrc_data", "jrc_links_stand
 # KIT link data
 kit_links = read.csv(here("temp_data", "preprocessed_kit", "kit_hh_pseudolinks_standardized.csv"))  
 
+# WORLD BANK link data
+wb_links = read.csv(here("temp_data", "preprocessed_wb", "wb_hh_pseudolinks_standardized.csv"))  
+
 # Sustain-cocoa link data
 # sc_links_vil = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_links_standardized.csv"))
 sc_links = read.csv(here("temp_data", "preprocessed_sustain_cocoa", "sustain_cocoa_hh_links_standardized.csv"))
@@ -216,6 +219,14 @@ initrown <- nrow(consol)
 consol <- full_join(consol, kit_links, 
                     by = intersect(colnames(consol), colnames(kit_links)), relationship = "many-to-many") 
 
+if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
+
+# Add WORLD BANK
+initcoln <- ncol(consol)
+initrown <- nrow(consol)
+consol <- full_join(consol, wb_links,
+                    by = intersect(colnames(consol), colnames(wb_links)), relationship = "many-to-many")
+stopifnot(initrown+nrow(wb_links) == nrow(consol))
 if(ncol(consol) != initcoln){stop("something went wrong in consolidating disclosure data.")}
 
 # remove first rows that were just here for left_join-ing
@@ -753,9 +764,10 @@ if(
 #   pull(IS_EMPTY_GRID) %>% summary()
            
 
-## Add links to other intermediaries --------------
-# Do it here because given our data inputs, links to other intermediaries than coops is the exception and not the rule. 
-# (It's from JRC & SC only.)
+## Add links to other intermediaries and pseudo links --------------
+# Do it here because given our data inputs, links to other intermediaries than coops is the exception and not the rule (it's from JRC & SC only.)
+
+# And pseudo links are more common, they are from KIT and WB data now. 
 
 # Cell-level variables prepared above
 cell_vars = 
@@ -796,7 +808,16 @@ stopifnot(sum(potential_all$LINK_IS_ACTUAL_OTHER) == nrow(consol_other))
 
 # This adds 517 rows from JRC and ~270 from SC (one row per actual link with another buyer than a coop). 
 # plus 143 rows from SC which are with a coop not matched with IC2B. 
+# Plus many rows from KIT and WB. 
 
+# There is an issue when one of these links falls in a cell granted as having no potential link (too far from any coop). 
+# This is the case of one WB link (with another buyer than a coop). 
+# Just remove it. Not the cleanest way, but including these pseudo links earlier in the process would require lots of caution and recoding;
+potential_all = 
+  potential_all %>% 
+  group_by(CELL_ID) %>% 
+  filter(!(all(is.na(LINK_POTENTIAL_COOP_BS_ID)) & LINK_IS_ACTUAL_OTHER)) %>% 
+  ungroup()
 
 ## Remove links from cells outside CIV ----------------------- 
 # Identify cells outside 
@@ -985,9 +1006,9 @@ only_potential_propt =
   filter(!CELL_NO_POTENTIAL_LINK) %>% # this includes actual links with other buyers than coops 
   
   # In addition, remove the SC links with other buyers or unmatched coops bc they miss coordinates. 
-  # Remove also the KIT pseudo links
+  # Remove also the KIT and WB pseudo links
   # but leave links between JRC producers and their geolocated other buyers. 
-  filter(!(grepl("SUSTAINCOCOA|KIT", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
+  filter(!(grepl("SUSTAINCOCOA|KIT|WB_", PRO_ID) & is.na(LINK_ACTUAL_COOP_BS_ID))) 
 
 # plot(st_geometry(only_potential_propt)) don't plot, its too heavy at 3km cells
 
@@ -995,6 +1016,10 @@ if(only_potential_propt %>% filter(st_is_empty(geometry)) %>% nrow() > 0 |
    anyNA(only_potential_propt$BUYER_LONGITUDE)){stop("only_potential_propt does not have the expected spatial attributes at this stage")}
 
 rm(potential_obsed, potential_notobsed)
+
+# lui <- only_potential_propt %>% filter(is.na(BUYER_LONGITUDE)) %>% filter(!grepl("WB_", PRO_ID)) 
+# potential_all %>% filter(!CELL_NO_POTENTIAL_LINK) %>% filter(!LINK_IS_POTENTIAL) %>% View()
+
 
 # st_distance needs to work on same size df. 
 only_potential_itmpt = 
@@ -1060,8 +1085,11 @@ rm(only_potential_propt)
 # only_potential_coords %>% 
 #   filter(duplicated(PROEXT_LATITUDE, PROEXT_LONGITUDE, BUYER_LONGITUDE, BUYER_LATITUDE))
 
-# write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
+write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
 
+# old = read.csv(here("temp_data", "14012025_potential_links_4km_coords.csv"))
+# old %>% filter(!is.na(LINK_ID_OTHERS)) %>% nrow()
+# only_potential_coords %>% filter(!is.na(LINK_ID_OTHERS)) %>% nrow()
 
 travel_times = read.csv(here("input_data", "IIASA", "complete.csv")) %>% 
   # Turn distance from kilometer into meter
@@ -1161,7 +1189,7 @@ potential_all =
 potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% nrow()
 # potential_all2 %>% select(starts_with("PROEXT"), everything()) %>% View()
 
-# The unmatched links are those with no buyer coordinates in SC or KIT data, and those with no potential link at all. 
+# The unmatched links are those with no buyer coordinates in SC, KIT or WB data, and those with no potential link at all. 
 # potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% View()
 
 rm(travel_times, only_potential_coords)
@@ -1564,11 +1592,11 @@ potential_all =
   potential_all %>% 
   group_by(CELL_ID) %>% 
   mutate(
-    CELL_HAS_FALSENEG = any(grepl("CARGILL_|JRC_", PRO_ID)) & !(any(grepl("SUSTAINCOCOA_|KIT_", PRO_ID)))) %>% 
+    CELL_HAS_FALSENEG = any(grepl("CARGILL_|JRC_", PRO_ID)) & !(any(grepl("SUSTAINCOCOA_|KIT_|WB_", PRO_ID)))) %>% 
   ungroup() %>% 
   mutate(LINK_POSSIBLE_FALSENEG = CELL_HAS_FALSENEG & LINK_IS_VIRTUAL)
 
-if(potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(PRO_ID) %>% grepl(pattern = "SUSTAINCOCOA|KIT_") %>% any()
+if(potential_all %>% filter(CELL_HAS_FALSENEG) %>% pull(PRO_ID) %>% grepl(pattern = "SUSTAINCOCOA|KIT_|WB_") %>% any()
 ){stop()}
 
 # update the variable collecting all reasons for a link to be removed
@@ -1637,7 +1665,7 @@ potential_all$CELL_ID %>% unique() %>% length()
 #   group_by(CELL_ID) %>% 
 #   mutate(
 #     LINK_JRC_POSSIBLE_FALSENEG = 
-#       CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_|KIT_", PRO_ID))), 
+#       CELL_N_JRC_FARMERS %in% c(1:3) & LINK_IS_VIRTUAL & !(any(grepl("SUSTAINCOCOA_|KIT_|WB_", PRO_ID))), 
 #   ) %>% 
 #   ungroup() %>% 
 #   # update the existing variable LINK_POSSIBLE_FALSENEG
@@ -1860,7 +1888,7 @@ cell_depvars %>% filter(!is.na(CELL_VOLUME_KG_COOPS)) %>% nrow()
 potential_1st %>% filter(LINK_VOLUME_KG == 0) %>% View()
 cell_depvars %>% filter(CELL_VOLUME_KG == 0) %>% nrow()
 
-potential_1st %>% filter(grepl(pattern = "KIT|JRC|SUSTAIN", PRO_ID)) %>% 
+potential_1st %>% filter(grepl(pattern = "KIT|WB|JRC|SUSTAIN", PRO_ID)) %>% 
   group_by(CELL_ID) %>% filter(n()>5) %>%
   arrange(CELL_ID) %>% 
   select(!starts_with("COOP_")) %>% 
@@ -1877,6 +1905,7 @@ potential_1st =
   potential_1st %>% 
   mutate(LINK_SOURCE = case_when(grepl("JRC", PRO_ID) ~ "JRC", 
                                  grepl("KIT", PRO_ID) ~ "KIT", 
+                                 grepl("WB_", PRO_ID) ~ "WB", 
                                  grepl("SUSTAINCOCOA", PRO_ID) ~ "SC", 
                                  grepl("CARGILL", PRO_ID) ~ "CARGILL", 
                                  TRUE ~ NA))
@@ -2149,13 +2178,13 @@ cell_weights =
   summarise(.by = "CELL_ID", 
             CELL_DATA_SOURCE = list(na.omit(unique(gsub("_.*", replacement = "", x = PRO_ID)))),
             CELL_N_JRC_FARMERS = length(na.omit(unique(grep(pattern = "JRC_", x = PRO_ID, value = TRUE)))),
-            CELL_JRCKIT_COCOA_FARMLAND_HA = sum(PRO_COCOA_FARMLAND_HA, na.rm = TRUE),
+            CELL_JRCKITWB_COCOA_FARMLAND_HA = sum(PRO_COCOA_FARMLAND_HA, na.rm = TRUE),
             CELL_COCOA_HA = unique(CELL_COCOA_HA)) %>% 
   mutate(
-    CELL_AREA_WEIGHT = CELL_JRCKIT_COCOA_FARMLAND_HA/CELL_COCOA_HA, 
+    CELL_AREA_WEIGHT = CELL_JRCKITWB_COCOA_FARMLAND_HA/CELL_COCOA_HA, 
     CELL_AREA_WEIGHT = if_else(CELL_AREA_WEIGHT > 1, 1, CELL_AREA_WEIGHT), # bound to 1, because in 6 cells this is higher in survey data. 
     CELL_REPRESENTATIVITY_WEIGHT = case_when(
-      grepl("SUSTAINCOCOA|KIT", paste0(CELL_DATA_SOURCE)) ~ 1,       
+      grepl("SUSTAINCOCOA|KIT|WB", paste0(CELL_DATA_SOURCE)) ~ 1,       
       CELL_COCOA_HA > 0 ~ CELL_AREA_WEIGHT, 
       TRUE ~ NA
     )) %>% 

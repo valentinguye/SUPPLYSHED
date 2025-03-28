@@ -464,6 +464,7 @@ stg2_mformula_exofeatures = as.formula(paste0("LINK_IS_ACTUAL_COOP_class ~ ", pa
 jrcdata <- consol %>% filter(grepl("JRC", PRO_ID))
 scdata <- consol %>% filter(grepl("SUSTAINCOCOA", PRO_ID))
 kitdata <- consol %>% filter(grepl("KIT", PRO_ID))
+wbdata <- consol %>% filter(grepl("WB_", PRO_ID))
 cargilldata <- consol %>% filter(grepl("CARGILL", PRO_ID))
 
 paste0("There are ", 
@@ -499,6 +500,16 @@ paste0("There are ",
 )
 
 paste0("There are ", 
+       nrow(wbdata), " farmer-buyer links, between ",
+       length(unique(wbdata$PRO_ID)), " farmers located in ",
+       length(unique(wbdata$PRO_VILLAGE_NAME)), " villages and ",
+       "an unknown number of buyers. ",
+       nrow(filter(wbdata, BUYER_IS_COOP)), " farmers sell to cooperatives, ", 
+       nrow(filter(wbdata, !BUYER_IS_COOP)), " farmers sell to another kind of buyers. ",
+       nrow(filter(wbdata, !is.na(LINK_VOLUME_KG))), " links have clean volume information."
+)
+
+paste0("There are ", 
        nrow(cargilldata), " farmer-buyer links, between ",
        length(unique(cargilldata$PRO_ID)), " farmers located in ",
        length(unique(cargilldata$PRO_VILLAGE_NAME)), " villages and ",
@@ -521,6 +532,10 @@ sum(filter(scdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)
 (kit_coop_vol_kg =  sum(filter(kitdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) )
 sum(filter(kitdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)
 (kit_total_vol_kg = sum(filter(kitdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)+sum(filter(kitdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T))
+
+(wb_coop_vol_kg =  sum(filter(wbdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T) )
+sum(filter(wbdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)
+(wb_total_vol_kg = sum(filter(wbdata, BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T)+sum(filter(wbdata, !BUYER_IS_COOP)$LINK_VOLUME_KG, na.rm = T))
   
 # Create summary data frames
 summary_data <- data.frame(
@@ -577,6 +592,19 @@ Metric = c("Source",
           "NA",
           "NA"
             ),
+  WB = c(
+          "World Bank LSMS", "2021", "Village point",
+          "NA",
+          length(unique(wbdata$PRO_VILLAGE_NAME)), 
+          length(unique(wbdata$PRO_ID)), 
+          nrow(wbdata), 
+          nrow(filter(wbdata, BUYER_IS_COOP)), 
+          nrow(filter(wbdata, !BUYER_IS_COOP)), 
+          paste0(round(100*wb_coop_vol_kg / wb_total_vol_kg, 1)),
+          "NA", 
+          "NA",
+          "NA"
+            ),
   CARGILL = c(
           "Online repository", "2019", "Farm polygon", 
           round(mean(filter(cargilldata, !is.na(COOP_BS_ID))$LINK_ACTUALONLY_DISTANCE_METERS, na.rm = T)/1000,1),
@@ -591,7 +619,7 @@ Metric = c("Source",
           length(unique(pull(filter(cargilldata, !BUYER_IS_COOP), BUYER_ACTUAL_LINK_ID)))
           )
 ) 
-colnames(summary_data) = c(" ", "JRC Data", "SC Data", "KIT Data", "Cargill Data")
+colnames(summary_data) = c(" ", "JRC Data", "SC Data", "KIT Data", "WB Data", "Cargill Data")
 
 summary_data
 
@@ -1508,171 +1536,6 @@ summary(resamps)
 
 ```
 
-
-
-
-### FAMILIAR
-Doing feature ranking and hyper-parameter optimization
-This is the model development. 
-
-This is all handled by package familiar. 
-
-For warm starts: 
-precompute_data_assignment --> An experimentData object.
-precompute_feature_info    --> An experimentData object.
-precompute_vimp            --> An experimentData object.
-(each does additional steps)
-
-predict function like anywhere else. 
-```{r}
-# ?train_familiar
-# ?theme_familiar
-# ?summon_familiar
-# ?as_familiar_data
-# ?predict  
-
-## For familiar: 
-# Experimental design 
-exp_design = "fs+mb" #bt(fs+mb,100)
-
-# Repository for familiar 1st stage 
-# summon_familiar writes all it does in a repo. It returns nothing here.  
-stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
-dir.create(stage1_expdes_repo)
-
-# let's go
-summon_familiar(
-  
-  formula = stg1_formula_allfeatures,
-  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
-  experiment_dir = stage1_expdes_repo,
-  sample_id_column = "CELL_ID",
-  outcome_name = "Cooperative outlet share",
-  # outcome_column = "CELL_PROP_VOLUME_COOPS",
-  outcome_type = "count",
-  experimental_design = exp_design, #"fs + mb", #  # "cv(bt(fs,100) + mb, 3)",
-  
-  # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
-
-  # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
-  parallel = TRUE,
-  parallel_nr_cores = detectCores() - 1, 
-  
-  # PRE-PROCESSING ARGS
-  # (not all "none" are the defaults)
-  filter_method = "none", # no feature to be filtered in pre-processing
-  transformation_method = "none", 
-  normalisation_method = "none",
-  cluster_method = "hclust", # the default. This is categorised in data processing, but it will affect feature selection. 
-  # imputation_method does not matter bc we have no NA. 
-  
-  # FEATURE SELECTION & OPTIMIZATION 
-  fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
-  # fs_method_parameter = list("random_forest_ranger_permutation" = list()), # this would need to have this format, but let it unspecified, so that feature selection optimizes on ALL hyper-parameters. 
-  # vimp_aggregation_method = "borda", # borda is the default. Check guidance to depart. 
-  
-  learner = "random_forest_ranger",
-  # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
-  
-  # EVALUATION INFERENCE
-  # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.  
-  skip_evaluation_elements = c("feature_expressions", "feature_similarity", 
-                               "fs_vimp",  "hyperparameters", "ice_data", 
-                                "permutation_vimp", "univariate_analysis"), #"model_vimp", 
-  
-  # part of this list elements are useless now, since they are skipped by the above. 
-  estimation_type = list("prediction_data" = "bci", "model_performance"="bci", 
-                         "permutation_vimp" = "point", 
-                         "ice_data"= "point", 
-                         "auc_data" = "point", 
-                         "decision_curve_analyis" = "point"), 
-  # estimation_type = list("prediction_data" = "hybrid", "model_performance"="hybrid", 
-  #                        "permutation_vimp" = "ensemble", 
-  #                        "ice_data"= "ensemble", 
-  #                        "auc_data" = "ensemble", 
-  #                        "decision_curve_analyis" = "ensemble"), 
-  confidence_level = 0.95, # the default. 
-  detail_level = "hybrid" # the default. See evaluation vignette. 
-)
-
-```
-The results folder outputed by summon_familiar is saved manually to different place, to protect it from being overwritten in a subsequent run of the above block. 
-
-Several things to say: 
-
-The relative squared error being lower than 1, the model still performs better than the mean predictor. 
-
-The most important variables, across the ensemble of models, are: 
-1/ the number of (CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS); 
-2/ the road distance to the closest buying station (CELL_MIN_DISTANCE_METERS);
-3/ the number of RFA farmers in the 5 nearest cooperatives (CELL_COUNT_5_NEAREST_COOP_FARMERS_RFA); 
-4/ the cocoa extent in a 10km buffer around all the cooperatives located within ~70km (CELL_AVG_COOP_BS_10KM_COCOA_HA); 
-5/ the number of buying stations within 70km (CELL_N_BS_WITHIN_DIST);
-6/ the proportion of simplified coops in the 5 nearest cooperatives (CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS); 
-7/ the proportion of sustainable sourcing initiatives in the 5 nearest cooperatives (CELL_PROP_5_NEAREST_COOP_HAS_SSI);
-
-Now, let's see whether these features contribute to increase or decrease the cell's share of cooperative outlet.  
-
-
-All important features positively explain the share of coop outlet, except the distance of the closest coop (which is expected), and the number of RFA farmers (which is surprising). 
-
-#### Finders
-```{r}
-# All 1st stage models have been written by familiar in 
-stage1_expdes_repo
-
-# We use one specifically, identified by: 
-# ---------------------------------------------
-model1_date = "20250117092735"
-  # the name for 5 "20250116210833"
-  # the name for 100 "20250114231822" 
-  # the name for 40 "20241204190335"
-# ---------------------------------------------
-
-# Finders of familiar outputs
-
-# Feature info - this gives generic info about the features in the model 
-# feature_info = readRDS(here(stage1_expdes_repo, "20241127134237_feature_info.RDS"))
-
-# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
-# iterations = readRDS(here(stage1_expdes_repo, "20241125194101_iterations.RDS"))
-
-# familiar_data - a maxi list containing all info of a run. 
-# famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
-
-collection = readRDS(here(stage1_expdes_repo, "familiar_collections", "pooled_data.RDS"))
-
-# Model development results - to report model performance
-stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
-
-# Models - to run predictions
-stage1_model_path = here(stage1_expdes_repo, 
-                         "trained_models", 
-                         "random_forest_ranger", 
-                         "random_forest_ranger_permutation")
-
-# Select the model/ensemble we want to work with 
-
-stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
-model1_name = 
-  stage1_ensemble_names %>% 
-  grep(~.,  
-       pattern = model1_date, 
-       value = TRUE) # take the first one in case there are several
-                                          
-model1 = readRDS(here(stage1_model_path, model1_name))
-model1
-
-# These are the names of all individual trained ("built") models 
-stage1_model_names = list.files(stage1_model_path, pattern = "model")
-indiv_model1_names = 
-  stage1_model_names %>% 
-  grep(~.,  
-       pattern = model1_date, 
-       value = TRUE) # take the first one in case there are several
-```
-
-
 ## 2nd stage
 
 ### Simple fit
@@ -1793,147 +1656,6 @@ saveRDS(model2_caret_xgb_down,
 ```
 
 
-### familiar
-```{r}
-stop()
-# Columns with NAs
-names(which(colSums(is.na(stg2_development)) > 0)) %>% intersect(stg2_allfeatures)
-
-
-# Experimental design 
-exp_design = "cv(fs+mb, 5)"  # "bt(fs+mb,5)"
-
-# Repository for familiar 1st stage 
-# summon_familiar writes all it does in a repo. It returns nothing here.  
-stage2_expdes_repo = here("temp_data", "model", "familiar", "stage_2", gsub(",","_",exp_design))
-dir.create(stage2_expdes_repo)
-
-# let's go
-summon_familiar(
-  
-  formula = stg2_formula_allfeatures,
-  data = stg2_development %>% select(LINK_ID, LINK_IS_ACTUAL_COOP_class, all_of(stg2_allfeatures)),
-  experiment_dir = stage2_expdes_repo,
-  sample_id_column = "LINK_ID",
-  outcome_name = "Link existence",
-  outcome_column = "LINK_IS_ACTUAL_COOP_class",
-  outcome_type = "binomial",
-  experimental_design = exp_design, #"fs + mb", #  # "cv(bt(fs,100) + mb, 3)",
-
-  # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
-
-  learner = "xgboost_tree",
-  
-  # Set hyper-parameters so that feature selection and model building stages do not tune this. 
-  # Otherwise, training the model is too long! 
-  # However, do NOT specify the signature size (i.e. the number of features to include "sign_size"), to let this be optimized based on feature importance. 
-                                            
-  # input default values in ranger
-  fs_method_parameter = list("random_forest_ranger_permutation"=
-                               list("n_tree" = 500,
-                                     "sample_size" = 0.632,
-                                     "m_try" = 0.5, # ranger's default is round(sqrt(length(stg2_allfeatures)),0),
-                                      # but apparently familiar uses a share 
-                                     "node_size" = 10,
-                                     "tree_depth" = 10 # ranger's default is 0 which means infinite. Here Inf is not accepted, so put the higher bound of familiar's default range. 
-                                     )),
-  # Input default values in xgboost::xgb.train 
-  # hyperparameter = list("xgboost_tree"=
-  #                         list("n_boost" = 2.7, # this means 500 trees
-  #                              "learning_rate" = -1.5, # for log10 to make ~0.3, the default (eta)
-  #                              "alpha" = -6, # for log10 to make 0, the default
-  #                              "lambda" = 0, # for log10 to make 1, the default
-  #                              "tree_depth" = 6,
-  #                              "sample_size" = 0.632,
-  #                              "min_child_weight" = 0.3, # for log10 -1 to make 1, the default
-  #                              "gamma" = -1 # no default in xgboost, just the middle of familiar's default range
-  #                              
-  #                               )),
-  
-  # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
-  parallel = TRUE,
-  parallel_nr_cores = detectCores() - 1, 
-  
-  # PRE-PROCESSING ARGS
-  # (not all "none" are the defaults)
-  filter_method = "none", # no feature to be filtered in pre-processing
-  transformation_method = "none", 
-  normalisation_method = "none",
-  cluster_method = "hclust", # the default. This is categorised in data processing, but it will affect feature selection. 
-  # imputation_method does not matter bc we have no NA. 
-  
-  # FEATURE SELECTION & OPTIMIZATION 
-  fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
-
-  # vimp_aggregation_method = "borda", # borda is the default. Check guidance to depart. 
-  
-  # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
-  
-  # EVALUATION INFERENCE
-  # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.  
-  skip_evaluation_elements = c("feature_expressions", "feature_similarity", 
-                               "fs_vimp",  "hyperparameters", "ice_data", 
-                                "univariate_analysis"), #"model_vimp", "permutation_vimp", 
-  
-  # part of this list elements are useless now, since they are skipped by the above. 
-  estimation_type = list("prediction_data" = "bci", 
-                         "model_performance"="bci", 
-                         "permutation_vimp" = "point", 
-                         "ice_data"= "point", 
-                         "auc_data" = "point", 
-                         "decision_curve_analyis" = "point"), 
-  # estimation_type = list("prediction_data" = "hybrid", "model_performance"="hybrid", 
-  #                        "permutation_vimp" = "ensemble", 
-  #                        "ice_data"= "ensemble", 
-  #                        "auc_data" = "ensemble", 
-  #                        "decision_curve_analyis" = "ensemble"), 
-  confidence_level = 0.95, # the default. 
-  detail_level = "hybrid" # the default. See evaluation vignette. 
-)
-
-```
-
-#### Finders
-This block produces convenient finder objects to access familiar outputs. 
-```{r}
-## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
-# ---------------------------------------------
-model2_date = "20241206091347"
-# ---------------------------------------------
-
-# Finders of familiar outputs
-
-# Feature info - this gives generic info about the features in the model 
-# feature_info = readRDS(here(stage2_expdes_repo, "20241127134237_feature_info.RDS"))
-
-# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
-# iterations = readRDS(here(stage2_expdes_repo, "20241125194101_iterations.RDS"))
-
-# familiar_data - a maxi list containing all info of a run. 
-# famdat = readRDS(here(stage2_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
-
-# Model development results - to report model performance
-stage2_results = here(stage2_expdes_repo, "results", "pooled_data")
-
-# Models - to run predictions
-stage2_model_path = here(stage2_expdes_repo, 
-                         "trained_models", 
-                         "xgboost_tree", 
-                         "random_forest_ranger_permutation")
-
-# Select the model/ensemble we want to work with 
-
-stage2_ensemble_names = list.files(stage2_model_path, pattern = "ensemble")
-model2_name = 
-  stage2_ensemble_names %>% 
-  grep(~.,  
-       pattern = model2_date, 
-       value = TRUE) # take the first one in case there are several
-                                          
-model2 = readRDS(here(stage2_model_path, model2_name))
-model2
-
-```
 
 # READ MODELS
 ## 1st stage
@@ -2007,35 +1729,6 @@ ggsave(perf_plot_stg1,
 
 ```
 
-FAMILIAR
-```{r}
-# Performance metrics are stored here
-model1_perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
-
-model1_perf_metrics
-
-# Normalement ces plots sont déjà exportés automatiquement par summon_familiar, mais apparemment pas pour toutes les métriques. 
-# This takes ~10min with a 200-models ensemble
-plot_perf_model1 = 
-  familiar::plot_model_performance(
-  object = model1,
-  draw = TRUE,
-  facet_by = "metric",
-  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
-  estimation_type = "bci",
-  metric = c("mse", "rse", "r2_score")) #"rmse",  "explained_variance", 
-
-plot_perf_model1[[1]][["layers"]][[1]][["data"]]$data_set <- as.character(plot_perf_model1[[1]][["layers"]][[1]][["data"]]$data_set)
-
-# Save plot
-plot_perf_model1
-
-ggsave(
-  filename = paste0("performance_metrics.png"),
-  path = here("outputs", "familiar", "stage_1", model1_date))
-
-```
-
 ## 2nd stage
 ```{r}
 model2_caret_xgb
@@ -2070,14 +1763,11 @@ resamples <- model2_caret_xgb$resample
 ```
 
 # EXPLANATION
-
 Importance ranks features wrt. each other but cannot tell direction or magnitude. 
 Explanation is produced by feature, and can be interpreted in target scale. 
 
 ### 1st stage 
-
 #### Feature importance
-
 CARET
 ```{r}
 featimp = varImp(model1_rfe$fit)$importance %>% as.data.frame() %>% arrange(desc(Overall))
@@ -2087,44 +1777,44 @@ featimp = varImp(model1_rfe) %>% as.data.frame() %>% arrange(desc(Overall))
 ```
 
 ```{r}
-# Report separately for most exogenous features and more endogenous ones 
-featimp_w =
-  featimp %>% 
-  mutate(PREDICTOR = row.names(featimp)) %>% 
-  pivot_wider(names_from = PREDICTOR, 
-              values_from = Overall) 
-
-# %>% 
-  select(#Sample = SPLIT, 
-         #`Coop outlet share` = CELL_PROP_VOLUME_COOPS, 
-         #`Cocoa output from cell (kg)` = CELL_VOLUME_KG,
-         
-         `Shortest Eucl. distance to a coop (m)` = CELL_MIN_DISTANCE_METERS, 
-         `Shortest road distance to a coop (m)` = CELL_MIN_TRAVEL_METERS, 
-         `Avg. Eucl. distance of the 5 nearest coops (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
-         `Avg. road distance of the 5 nearest coops (m)` = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
-         
-         `# buying stations within 72km` = CELL_N_BS_WITHIN_DIST, 
-         `# coops in department` = CELL_N_COOP_IN_DPT,
-         `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
-
-         `Settlements area (ha)` = CELL_SETTLEMENT_HA,
-         `Terrain ruggedness (TRI, mm)` = CELL_TRI_MM,
-         
-         `Nearest coop being SCOOPS` = CELL_PROP_1_NEAREST_COOP_STATUS_SCOOPS,
-         `Proportion of 5 nearest coops being SCOOPS` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
-         `Proportion of all coops within 72 km being SCOOPS` = CELL_PROP_COOP_STATUS_SCOOPS,
-         
-         `Nearest coop being COOP-CA` = CELL_PROP_1_NEAREST_COOP_STATUS_COOPCA,
-         `Proportion of 5 nearest coops being COOP-CA` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
-         `Proportion of all coops within 72 km being COOP-CA` = CELL_PROP_COOP_STATUS_COOPCA,
-         
-         `Total # farmers of 5 nearest coops` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
-         `Total # BS of 5 nearest coops` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
-         `Avg. TRI around 5 nearest coops (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
-
-         `Avg. settlements extent around 5 nearest coops` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
-         ) 
+# # Report separately for most exogenous features and more endogenous ones 
+# featimp_w =
+#   featimp %>% 
+#   mutate(PREDICTOR = row.names(featimp)) %>% 
+#   pivot_wider(names_from = PREDICTOR, 
+#               values_from = Overall) 
+# 
+# # %>% 
+#   select(#Sample = SPLIT, 
+#          #`Coop outlet share` = CELL_PROP_VOLUME_COOPS, 
+#          #`Cocoa output from cell (kg)` = CELL_VOLUME_KG,
+#          
+#          `Shortest Eucl. distance to a coop (m)` = CELL_MIN_DISTANCE_METERS, 
+#          `Shortest road distance to a coop (m)` = CELL_MIN_TRAVEL_METERS, 
+#          `Avg. Eucl. distance of the 5 nearest coops (m)` = CELL_AVG_DISTANCE_METERS_5_NEAREST_COOPS, 
+#          `Avg. road distance of the 5 nearest coops (m)` = CELL_AVG_TRAVEL_METERS_5_NEAREST_COOPS, 
+#          
+#          `# buying stations within 72km` = CELL_N_BS_WITHIN_DIST, 
+#          `# coops in department` = CELL_N_COOP_IN_DPT,
+#          `# registered licensed buyers in department` = CELL_AVG_N_LICBUY_IN_DPT, 
+# 
+#          `Settlements area (ha)` = CELL_SETTLEMENT_HA,
+#          `Terrain ruggedness (TRI, mm)` = CELL_TRI_MM,
+#          
+#          `Nearest coop being SCOOPS` = CELL_PROP_1_NEAREST_COOP_STATUS_SCOOPS,
+#          `Proportion of 5 nearest coops being SCOOPS` = CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS,
+#          `Proportion of all coops within 72 km being SCOOPS` = CELL_PROP_COOP_STATUS_SCOOPS,
+#          
+#          `Nearest coop being COOP-CA` = CELL_PROP_1_NEAREST_COOP_STATUS_COOPCA,
+#          `Proportion of 5 nearest coops being COOP-CA` = `CELL_PROP_5_NEAREST_COOP_STATUS_COOPCA`,
+#          `Proportion of all coops within 72 km being COOP-CA` = CELL_PROP_COOP_STATUS_COOPCA,
+#          
+#          `Total # farmers of 5 nearest coops` = CELL_COUNT_5_NEAREST_COOP_FARMERS,
+#          `Total # BS of 5 nearest coops` = CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS,
+#          `Avg. TRI around 5 nearest coops (mm)` = CELL_AVG_5_NEAREST_COOP_BS_10KM_TRI,
+# 
+#          `Avg. settlements extent around 5 nearest coops` = CELL_AVG_5_NEAREST_COOP_BS_10KM_SETTLEMENT_HA
+#          ) 
 
 # datasummary_skim(data = stg1_development_exo_features,
 #                 output = here("outputs", "input_data_descriptives", paste0("cells_stg1dev_",MODEL_RESOLUTION_KM,"km_exo_features.png")))
@@ -2133,40 +1823,6 @@ featimp_w =
 # For more endogeneous features
 
 
-```
-
-
-
-
-
-FAMILIAR
-```{r}
-vimp = readRDS(here(stage1_expdes_repo, "variable_importance", "20250117074207_fs_random_forest_ranger_permutation.RDS"))
-
-vimp = vimp[[1]]
-vimp = vimp@vimp_table %>% as.data.frame()
-vimp = vimp %>% arrange(desc(score))
-vimp
-
-importance_repo = here(stage1_results, "variable_importance")
-
-permut_vimp = read.csv2(here(importance_repo, "variable_importance_permutation.csv"))
-
-vimp_top10 = 
-  permut_vimp %>% 
-  filter(similarity_threshold == 1 & data_set == "development" & value !=0) %>% 
-  arrange(desc(value)) %>% 
-  pull(feature) %>% 
-  head(10)
-
-# The plot_model_signature_occurrence method plots the occurrence of features among the first 5 ranks across an ensemble of models (if available). The rank threshold can be specified using the rank_threshold argument or the eval_aggregation_rank_threshold parameter (summon_familiar).
-
-
-#Note: -------
-# The summon_familiar outputs below are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
-# stage1_vimp = here(stage1_expdes_repo, "variable_importance")
-# vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
-# vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
 ```
 
 #### Explanation
@@ -2180,54 +1836,12 @@ featurePlot(x = BostonHousing[, regVar],
             layout = c(3, 1))
 ```
 
-
-
-Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots.
-All this is sketchy, and interpretations are challenging !!! 
-
-```{r}
-# These plots are readily available in the repository below. 
-explanation_repo = here(stage1_results, "explanation")
-
-# To have a global picture, look at the correlation tests (I am not sure about this!)
-
-pd_corr_table = data.frame()
-for(impvar in vimp_top10){
-  pdvar = 
-    read.csv2(here(explanation_repo, paste0("explanation_pd_", impvar, ".csv"))) %>% 
-    filter(data_set == "development") 
-  
-  cortest_pd = 
-    stats::cor.test(x = as.numeric(pdvar$feature_x_value),
-                    y = as.numeric(pdvar$predicted_outcome))
-
-  cortest_actual = 
-    stats::cor.test(x = stg1_development %>% pull(impvar),
-                    y = stg1_development$CELL_PROP_VOLUME_COOPS)
-
-  pd_corr_table[1:2,impvar] = c(cortest_pd$estimate, cortest_pd$p.value)
-  
-  pd_corr_table[3:4,impvar] = c(cortest_actual$estimate, cortest_actual$p.value)
-  row.names(pd_corr_table) = c("Correlation coefficient PD", "p value PD",
-                               "Correlation coefficient", "p value")
-}
-
-pd_corr_table
-```
-
-
-
-### 2nd stage 
+## 2nd stage 
 Feature importance
 ```{r}
 varImp(model2_caret_xgb)
 
-
-
-
 model2_caret_xgb$finalModel$importance %>% as.data.frame() %>% arrange(desc(`%IncMSE`))
-
-
 
 ```
 
@@ -2363,28 +1977,6 @@ center <- colMeans(stg2_development %>% select(all_of(stg2_allfeatures)))
 links$LINK_mahalanobis_dist <- mahalanobis(links %>% select(all_of(stg2_allfeatures)), center, cov_matrix)
 
 ```
-
-### familiar
-```{r}
-# Novelty in development data 
-devdat_prediction_1 = read.csv2(here(stage1_results, "prediction", "prediction.csv"))
-# devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
-
-devdat_prediction_1$novelty %>% as.numeric() %>% summary()
-
-# It is possible to add features that were not in the model initial formula, to gauge novelty (?)
-# but would it make sense (to include LU vars) here? 
-
-# Novelty in to-predict data
-
-cells$CELL_NOVELTY = predict(object = model1, newdata = cells, type = "novelty")
-
-cells$CELL_NOVELTY %>% summary()
-
-# Novelty in the Cells data is in the range of novelty in the 1st stage dev data. 
-# So we don't take it further into account. 
-```
-
 
 
 ## Prediction sets
@@ -2763,31 +2355,6 @@ links_topredict =
                                      LINK_PROBA)) # returns NA for NA probas (!AoA)
 ```
 
-### Heuristics
-```{r}
-links_topredict = 
-  links_topredict %>% 
-  mutate(
-    LINK_PROBA_H10KM = if_else(
-      LINK_DISTANCE_METERS <= 10*1e3, 1, 0),
-    LINK_PROBA_H30KM = if_else(
-      LINK_DISTANCE_METERS <= 30*1e3, 1, 0),
-    LINK_PROBA_H60KM = if_else(
-      LINK_DISTANCE_METERS <= 60*1e3, 1, 0), 
-    LINK_PROBA_HDISTR = if_else(
-      CELL_DISTRICT_NAME == COOP_DISTRICT_NAME, 1, 0), 
-    
-    LINK_PROBA_HCONTI = 1/LINK_DISTANCE_METERS
-  )
-
-links_topredict$LINK_PROBA_H10KM %>% summary()
-links_topredict$LINK_PROBA_H30KM %>% summary()
-links_topredict$LINK_PROBA_H60KM %>% summary()
-links_topredict$LINK_PROBA_HDISTR %>% summary()
-links_topredict$LINK_PROBA_HCONTI %>% summary()
-
-```
-
 
 Determinist prediction - deprecated since now the prediction set does not have these cells. 
 This is just where we are sure that no link can exist because there is no coop. 
@@ -2814,178 +2381,34 @@ This is just where we are sure that no link can exist because there is no coop.
 ```
 
 
+
+# EXPORT 
 ```{r}
+saveRDS(cells_topredict, 
+        here("temp_data", "model", "cells_topredict.Rdata"))
+
 saveRDS(links_topredict, 
-        here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
-
-# links_topredict = readRDS(here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
+        here("temp_data", "model", "links_topredict.Rdata"))
 ```
 
 
-
-# POST-PROCESSING 
-This is all at the Links level. 
-
-Unconditional probabilities
-It is not necessary to work on unconditional probabilities.
-It is strictly equivalent to uncondition before or after normalising, since unconditioning is multiplying by a cell-level quantity. 
-Hence, we join the cell's share of coop outlet, but we don't factor it yet. 
-
-```{r}
-links_topredict = 
-  links_topredict %>% 
-  left_join(
-    cells_topredict %>% select(CELL_SHARE_COOP, CELL_ID), 
-    by = "CELL_ID"
-  ) 
-
-# links_topredict = 
-#   links_topredict %>% 
-#   mutate(
-#     LINK_UNCOND_PROBA = CELL_SHARE_COOP * LINK_PROBA, # include this just for exploration. 
-#     LINK_UNCOND_PROBA_THRESH = CELL_SHARE_COOP * LINK_PROBA_THRESH
-#   )
-
-```
-
-
-
-## Normalisation - cell perspective
-Normalise heuristic probabilities as well. 
-
-```{r}
-links_topredict = 
-  links_topredict %>% 
-  group_by(CELL_ID) %>% 
-  mutate(
-    CELL_NORMSUM_THRESH = sum(LINK_PROBA_THRESH), 
-    CELL_NORMSUM_H10KM  = sum(LINK_PROBA_H10KM), 
-    CELL_NORMSUM_H30KM  = sum(LINK_PROBA_H30KM), 
-    CELL_NORMSUM_H60KM  = sum(LINK_PROBA_H60KM), 
-    CELL_NORMSUM_HDISTR = sum(LINK_PROBA_HDISTR), 
-    CELL_NORMSUM_HCONTI = sum(LINK_PROBA_HCONTI), 
-    CELL_N_POTENTIAL_LINKS = length(na.omit(unique(LINK_POTENTIAL_COOP_ID))), 
-  ) %>% 
-  ungroup() %>% 
-  mutate(
-    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas ALL AS LIKELY (i.e. 1/number of potential links)
-    # because the point here is not to reflect unconditional probabilities to sell to a coop, but *conditional* probabilities, i.e. 
-    # the probability to sell to coops even very far, very unlikely, if we knew for sure that cocoa is sold to some coops. 
-    # In other words, if we knew cocoa is sold to coops and not other buyers, what coops would it be? 
-    # However, for heuristics, set it to zero, because this is the rule of heuristics. 
-    
-    LINK_PROBA_THRESH_NORMED = case_when(
-      CELL_NORMSUM_THRESH > 0 ~ LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
-      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
-      ), 
-    # no need for a case_when here, because CELL_NORMSUM_HCONTI == 0 never happens 
-    LINK_PROBA_HCONTI_NORMED = LINK_PROBA_HCONTI / CELL_NORMSUM_HCONTI,
-    
-    LINK_PROBA_H10KM_NORMED = case_when(
-      CELL_NORMSUM_H10KM > 0 ~ LINK_PROBA_H10KM / CELL_NORMSUM_H10KM, 
-      TRUE ~ 0
-      ), 
-    LINK_PROBA_H30KM_NORMED = case_when(
-      CELL_NORMSUM_H30KM > 0 ~ LINK_PROBA_H30KM / CELL_NORMSUM_H30KM, 
-      TRUE ~ 0
-      ), 
-    LINK_PROBA_H60KM_NORMED = case_when(
-      CELL_NORMSUM_H60KM > 0 ~ LINK_PROBA_H60KM / CELL_NORMSUM_H60KM, 
-      TRUE ~ 0
-      ), 
-    LINK_PROBA_HDISTR_NORMED = case_when(
-      CELL_NORMSUM_HDISTR > 0 ~ LINK_PROBA_HDISTR / CELL_NORMSUM_HDISTR, 
-      TRUE ~ 0
-      )
-  )
-
-links_topredict$LINK_PROBA_THRESH_NORMED %>% summary() 
-links_topredict$LINK_PROBA_HCONTI_NORMED %>% summary() 
-links_topredict$LINK_PROBA_H60KM_NORMED %>% summary() 
-# links_topredict %>% 
-#   filter(round(CELL_UNCOND_NORMSUM_THRESH,10) != round(CELL_SHARE_COOP * CELL_NORMSUM_THRESH, 10)) %>% nrow()
-
-stopifnot(
-links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() == 0 
-)
-stopifnot(
-links_topredict %>% filter(is.na(LINK_PROBA_H60KM_NORMED)) %>% nrow() == 0 
-)
-
-links_topredict %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() 
-
-summary(links_topredict$CELL_NORMSUM_THRESH)
-# It is not anormal that these sums are higher than 1, that's precisely why we normalise actually. 
-
-# links_topredict %>% filter(CELL_NORMSUM_THRESH > 1) %>% View()
-
-
-stopifnot(
-  links_topredict$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) 
-  # + length(unique(pull(filter(links_topredict, CELL_NORMSUM_THRESH == 0), CELL_ID))) # that was for when we (wrongly) set conditional probas to 0 where normsum = 0
-  == 
-    length(unique(links_topredict$CELL_ID)) |
-    
-  links_topredict$LINK_PROBA_H60KM_NORMED %>% sum(na.rm = T) %>% round(5) +
-    length(unique(links_topredict$CELL_ID)) |
-
-  links_topredict$LINK_PROBA_HDISTR_NORMED %>% sum(na.rm = T) %>% round(5) +
-    length(unique(links_topredict$CELL_ID))
-)
-
-```
-
-### Number of linked coops 
-IS THIS THE RIGHT WAY TO COMPUTE IT? I AM NOT SURE 
-```{r}
-cell_nlinks = 
-  links_topredict %>% 
-  summarise(.by = "CELL_ID",
-            # CELL_N_LINKED_COOPS = sum(LINK_PROBA_THRESH_NORMED_CELLMAX > 0), 
-            CELL_N_LINKED_COOPS_ALT = sum(LINK_PROBA_THRESH_NORMED > 0)
-            )
-
-cells_topredict = 
-  cells_topredict %>% 
-  left_join(cell_nlinks, 
-             by = "CELL_ID")
-
-cell_nlinks$CELL_N_LINKED_COOPS %>% summary()
-cells_topredict$CELL_N_LINKED_COOPS %>% summary()
-
-rm(cell_nlinks)
-
-```
-
-
-## Normalisation - coop perspective
-We normalise, from the perspective of every coop, for six types of supply sheds, i.e. the combinations of 
-either conditional or unconditional probabilities to be linked with the coop, for three kinds of cells: productive only, prospective only, and either. 
-```{r}
-# The idea is to export coop-level data sets with sourcing shed shapes, one object for each type, and each time the weighted LU area in all sourcing sheds
-
-
-```
-
-# OUTPUT DESCRIPTIVES 
-Do here (for now) the des stats that need objects not available before the Model development part of this script.  
-
-### Balance tests
+# DEPRECATED CODE   
+## Balance tests
 Balance tests between 1st stage development and prediction data 
 ```{r}
-cells_features_tobalance = 
-  rbind(
-    stg1_development %>% select(CELL_ID, stg1_allfeatures), 
-    cells_topredict  %>% select(CELL_ID, stg1_allfeatures) %>% filter(!CELL_ID %in% stg1_development$CELL_ID), 
-  )
-stopifnot(cells_features_tobalance %>% filter(SPLIT == "Development set") %>% norw() == nrow(stg1_development))
-
-(datasummary_balance(~SPLIT,
-                     data = cells_features_tobalance,
-                     stars = TRUE,
-                     # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet",
-                     notes = "'BS' stands for cooperative buying stations.",
-                     output = here("outputs", "input_data_descriptives", "cells_balance.png")))
+# cells_features_tobalance = 
+#   rbind(
+#     stg1_development %>% select(CELL_ID, stg1_allfeatures), 
+#     cells_topredict  %>% select(CELL_ID, stg1_allfeatures) %>% filter(!CELL_ID %in% stg1_development$CELL_ID), 
+#   )
+# stopifnot(cells_features_tobalance %>% filter(SPLIT == "Development set") %>% norw() == nrow(stg1_development))
+# 
+# (datasummary_balance(~SPLIT,
+#                      data = cells_features_tobalance,
+#                      stars = TRUE,
+#                      # title = "Summaries and balance tests on cell data sets to development and to predict the cell share of cooperative outlet",
+#                      notes = "'BS' stands for cooperative buying stations.",
+#                      output = here("outputs", "input_data_descriptives", "cells_balance.png")))
 
 ```
 
@@ -3034,47 +2457,427 @@ datasummary_balance(~LINK_IS_ACTUAL_COOP_class,
 ```
 
 
-# EXPORT 
-```{r}
-saveRDS(cells_topredict, 
-        here("temp_data", "model", "cells_topredict.Rdata"))
+## FAMILIAR
 
-saveRDS(links_topredict, 
-        here("temp_data", "model", "links_topredict.Rdata"))
+### Train 1st stage
+Doing feature ranking and hyper-parameter optimization
+This is the model development. 
+
+This is all handled by package familiar. 
+
+For warm starts: 
+precompute_data_assignment --> An experimentData object.
+precompute_feature_info    --> An experimentData object.
+precompute_vimp            --> An experimentData object.
+(each does additional steps)
+
+predict function like anywhere else. 
+```{r}
+# ?train_familiar
+# ?theme_familiar
+# ?summon_familiar
+# ?as_familiar_data
+# ?predict  
+
+## For familiar: 
+# Experimental design 
+exp_design = "fs+mb" #bt(fs+mb,100)
+
+# Repository for familiar 1st stage 
+# summon_familiar writes all it does in a repo. It returns nothing here.  
+stage1_expdes_repo = here("temp_data", "model", "familiar", "stage_1", gsub(",","_",exp_design))
+dir.create(stage1_expdes_repo)
+
+# let's go
+summon_familiar(
+  
+  formula = stg1_formula_allfeatures,
+  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
+  experiment_dir = stage1_expdes_repo,
+  sample_id_column = "CELL_ID",
+  outcome_name = "Cooperative outlet share",
+  # outcome_column = "CELL_PROP_VOLUME_COOPS",
+  outcome_type = "count",
+  experimental_design = exp_design, #"fs + mb", #  # "cv(bt(fs,100) + mb, 3)",
+  
+  # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
+
+  # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.  
+  parallel = TRUE,
+  parallel_nr_cores = detectCores() - 1, 
+  
+  # PRE-PROCESSING ARGS
+  # (not all "none" are the defaults)
+  filter_method = "none", # no feature to be filtered in pre-processing
+  transformation_method = "none", 
+  normalisation_method = "none",
+  cluster_method = "hclust", # the default. This is categorised in data processing, but it will affect feature selection. 
+  # imputation_method does not matter bc we have no NA. 
+  
+  # FEATURE SELECTION & OPTIMIZATION 
+  fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
+  # fs_method_parameter = list("random_forest_ranger_permutation" = list()), # this would need to have this format, but let it unspecified, so that feature selection optimizes on ALL hyper-parameters. 
+  # vimp_aggregation_method = "borda", # borda is the default. Check guidance to depart. 
+  
+  learner = "random_forest_ranger",
+  # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
+  
+  # EVALUATION INFERENCE
+  # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.  
+  skip_evaluation_elements = c("feature_expressions", "feature_similarity", 
+                               "fs_vimp",  "hyperparameters", "ice_data", 
+                                "permutation_vimp", "univariate_analysis"), #"model_vimp", 
+  
+  # part of this list elements are useless now, since they are skipped by the above. 
+  estimation_type = list("prediction_data" = "bci", "model_performance"="bci", 
+                         "permutation_vimp" = "point", 
+                         "ice_data"= "point", 
+                         "auc_data" = "point", 
+                         "decision_curve_analyis" = "point"), 
+  # estimation_type = list("prediction_data" = "hybrid", "model_performance"="hybrid", 
+  #                        "permutation_vimp" = "ensemble", 
+  #                        "ice_data"= "ensemble", 
+  #                        "auc_data" = "ensemble", 
+  #                        "decision_curve_analyis" = "ensemble"), 
+  confidence_level = 0.95, # the default. 
+  detail_level = "hybrid" # the default. See evaluation vignette. 
+)
+
+```
+The results folder outputed by summon_familiar is saved manually to different place, to protect it from being overwritten in a subsequent run of the above block. 
+
+Several things to say: 
+
+The relative squared error being lower than 1, the model still performs better than the mean predictor. 
+
+The most important variables, across the ensemble of models, are: 
+1/ the number of (CELL_COUNT_5_NEAREST_COOP_N_KNOWN_BS); 
+2/ the road distance to the closest buying station (CELL_MIN_DISTANCE_METERS);
+3/ the number of RFA farmers in the 5 nearest cooperatives (CELL_COUNT_5_NEAREST_COOP_FARMERS_RFA); 
+4/ the cocoa extent in a 10km buffer around all the cooperatives located within ~70km (CELL_AVG_COOP_BS_10KM_COCOA_HA); 
+5/ the number of buying stations within 70km (CELL_N_BS_WITHIN_DIST);
+6/ the proportion of simplified coops in the 5 nearest cooperatives (CELL_PROP_5_NEAREST_COOP_STATUS_SCOOPS); 
+7/ the proportion of sustainable sourcing initiatives in the 5 nearest cooperatives (CELL_PROP_5_NEAREST_COOP_HAS_SSI);
+
+Now, let's see whether these features contribute to increase or decrease the cell's share of cooperative outlet.  
+
+
+All important features positively explain the share of coop outlet, except the distance of the closest coop (which is expected), and the number of RFA farmers (which is surprising). 
+
+#### Finders
+```{r}
+# All 1st stage models have been written by familiar in 
+stage1_expdes_repo
+
+# We use one specifically, identified by: 
+# ---------------------------------------------
+model1_date = "20250117092735"
+  # the name for 5 "20250116210833"
+  # the name for 100 "20250114231822" 
+  # the name for 40 "20241204190335"
+# ---------------------------------------------
+
+# Finders of familiar outputs
+
+# Feature info - this gives generic info about the features in the model 
+# feature_info = readRDS(here(stage1_expdes_repo, "20241127134237_feature_info.RDS"))
+
+# Iterations - this gives info about the structure of the sampling applied by the experimental design. 
+# iterations = readRDS(here(stage1_expdes_repo, "20241125194101_iterations.RDS"))
+
+# familiar_data - a maxi list containing all info of a run. 
+# famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
+
+collection = readRDS(here(stage1_expdes_repo, "familiar_collections", "pooled_data.RDS"))
+
+# Model development results - to report model performance
+stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
+
+# Models - to run predictions
+stage1_model_path = here(stage1_expdes_repo, 
+                         "trained_models", 
+                         "random_forest_ranger", 
+                         "random_forest_ranger_permutation")
+
+# Select the model/ensemble we want to work with 
+
+stage1_ensemble_names = list.files(stage1_model_path, pattern = "ensemble")
+model1_name = 
+  stage1_ensemble_names %>% 
+  grep(~.,  
+       pattern = model1_date, 
+       value = TRUE) # take the first one in case there are several
+                                          
+model1 = readRDS(here(stage1_model_path, model1_name))
+model1
+
+# These are the names of all individual trained ("built") models 
+stage1_model_names = list.files(stage1_model_path, pattern = "model")
+indiv_model1_names = 
+  stage1_model_names %>% 
+  grep(~.,  
+       pattern = model1_date, 
+       value = TRUE) # take the first one in case there are several
 ```
 
 
+### Train 2nd stage
+```{r}
+stop()
+# Columns with NAs
+names(which(colSums(is.na(stg2_development)) > 0)) %>% intersect(stg2_allfeatures)
 
 
+# Experimental design
+exp_design = "cv(fs+mb, 5)"  # "bt(fs+mb,5)"
+
+# Repository for familiar 1st stage
+# summon_familiar writes all it does in a repo. It returns nothing here.
+stage2_expdes_repo = here("temp_data", "model", "familiar", "stage_2", gsub(",","_",exp_design))
+dir.create(stage2_expdes_repo)
+
+# let's go
+summon_familiar(
+
+  formula = stg2_formula_allfeatures,
+  data = stg2_development %>% select(LINK_ID, LINK_IS_ACTUAL_COOP_class, all_of(stg2_allfeatures)),
+  experiment_dir = stage2_expdes_repo,
+  sample_id_column = "LINK_ID",
+  outcome_name = "Link existence",
+  outcome_column = "LINK_IS_ACTUAL_COOP_class",
+  outcome_type = "binomial",
+  experimental_design = exp_design, #"fs + mb", #  # "cv(bt(fs,100) + mb, 3)",
+
+  # Use bt because we have many features compared to the number of observations.  "The most practical application of bt is for repeating feature selection multiple times (e.g. bt(fs,50)+mb+ev), as this allows for aggregating variable importance and reducing the effect of random selection."
+
+  learner = "xgboost_tree",
+
+  # Set hyper-parameters so that feature selection and model building stages do not tune this.
+  # Otherwise, training the model is too long!
+  # However, do NOT specify the signature size (i.e. the number of features to include "sign_size"), to let this be optimized based on feature importance.
+
+  # input default values in ranger
+  fs_method_parameter = list("random_forest_ranger_permutation"=
+                               list("n_tree" = 500,
+                                     "sample_size" = 0.632,
+                                     "m_try" = 0.5, # ranger's default is round(sqrt(length(stg2_allfeatures)),0),
+                                      # but apparently familiar uses a share
+                                     "node_size" = 10,
+                                     "tree_depth" = 10 # ranger's default is 0 which means infinite. Here Inf is not accepted, so put the higher bound of familiar's default range.
+                                     )),
+  # Input default values in xgboost::xgb.train
+  # hyperparameter = list("xgboost_tree"=
+  #                         list("n_boost" = 2.7, # this means 500 trees
+  #                              "learning_rate" = -1.5, # for log10 to make ~0.3, the default (eta)
+  #                              "alpha" = -6, # for log10 to make 0, the default
+  #                              "lambda" = 0, # for log10 to make 1, the default
+  #                              "tree_depth" = 6,
+  #                              "sample_size" = 0.632,
+  #                              "min_child_weight" = 0.3, # for log10 -1 to make 1, the default
+  #                              "gamma" = -1 # no default in xgboost, just the middle of familiar's default range
+  #
+  #                               )),
+
+  # imbalance_correction_method = "random_undersampling", # do not specify, to avoid any kind of under-sampling, since we did it in external pre-processing.
+  parallel = TRUE,
+  parallel_nr_cores = detectCores() - 1,
+
+  # PRE-PROCESSING ARGS
+  # (not all "none" are the defaults)
+  filter_method = "none", # no feature to be filtered in pre-processing
+  transformation_method = "none",
+  normalisation_method = "none",
+  cluster_method = "hclust", # the default. This is categorised in data processing, but it will affect feature selection.
+  # imputation_method does not matter bc we have no NA.
+
+  # FEATURE SELECTION & OPTIMIZATION
+  fs_method = "random_forest_ranger_permutation", # see https://cran.r-project.org/web/packages/familiar/vignettes/feature_selection_precompiled.html
+
+  # vimp_aggregation_method = "borda", # borda is the default. Check guidance to depart.
+
+  # hyperparameter = list("ranger" = list()), #  "If no parameters are provided, sequential model-based optimisation is used to determine optimal hyperparameters."
+
+  # EVALUATION INFERENCE
+  # The default is "bootstrap_confidence_interval" or "bci", so we have to tell the model to do just quick point estimates where we don't care much about inference. Especially as bci can easily be queried in post-processing.
+  skip_evaluation_elements = c("feature_expressions", "feature_similarity",
+                               "fs_vimp",  "hyperparameters", "ice_data",
+                                "univariate_analysis"), #"model_vimp", "permutation_vimp",
+
+  # part of this list elements are useless now, since they are skipped by the above.
+  estimation_type = list("prediction_data" = "bci",
+                         "model_performance"="bci",
+                         "permutation_vimp" = "point",
+                         "ice_data"= "point",
+                         "auc_data" = "point",
+                         "decision_curve_analyis" = "point"),
+  # estimation_type = list("prediction_data" = "hybrid", "model_performance"="hybrid",
+  #                        "permutation_vimp" = "ensemble",
+  #                        "ice_data"= "ensemble",
+  #                        "auc_data" = "ensemble",
+  #                        "decision_curve_analyis" = "ensemble"),
+  confidence_level = 0.95, # the default.
+  detail_level = "hybrid" # the default. See evaluation vignette.
+)
+
+```
+
+Finders
+This block produces convenient finder objects to access familiar outputs. 
+```{r}
+## ID TO SELECT MODEL TO WORK WITH IN ALL OF BELOW SCRIPT
+# ---------------------------------------------
+model2_date = "20241206091347"
+# ---------------------------------------------
+
+# Finders of familiar outputs
+
+# Feature info - this gives generic info about the features in the model
+# feature_info = readRDS(here(stage2_expdes_repo, "20241127134237_feature_info.RDS"))
+
+# Iterations - this gives info about the structure of the sampling applied by the experimental design.
+# iterations = readRDS(here(stage2_expdes_repo, "20241125194101_iterations.RDS"))
+
+# familiar_data - a maxi list containing all info of a run.
+# famdat = readRDS(here(stage2_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
+
+# Model development results - to report model performance
+stage2_results = here(stage2_expdes_repo, "results", "pooled_data")
+
+# Models - to run predictions
+stage2_model_path = here(stage2_expdes_repo,
+                         "trained_models",
+                         "xgboost_tree",
+                         "random_forest_ranger_permutation")
+
+# Select the model/ensemble we want to work with
+
+stage2_ensemble_names = list.files(stage2_model_path, pattern = "ensemble")
+model2_name =
+  stage2_ensemble_names %>%
+  grep(~.,
+       pattern = model2_date,
+       value = TRUE) # take the first one in case there are several
+
+model2 = readRDS(here(stage2_model_path, model2_name))
+model2
+
+```
+
+### Performance
+```{r}
+# Performance metrics are stored here
+model1_perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
+
+model1_perf_metrics
+
+# Normalement ces plots sont déjà exportés automatiquement par summon_familiar, mais apparemment pas pour toutes les métriques.
+# This takes ~10min with a 200-models ensemble
+plot_perf_model1 =
+  familiar::plot_model_performance(
+  object = model1,
+  draw = TRUE,
+  facet_by = "metric",
+  data = stg1_development %>% select(CELL_ID, CELL_PROP_VOLUME_COOPS, all_of(stg1_allfeatures)),
+  estimation_type = "bci",
+  metric = c("mse", "rse", "r2_score")) #"rmse",  "explained_variance",
+
+plot_perf_model1[[1]][["layers"]][[1]][["data"]]$data_set <- as.character(plot_perf_model1[[1]][["layers"]][[1]][["data"]]$data_set)
+
+# Save plot
+plot_perf_model1
+
+ggsave(
+  filename = paste0("performance_metrics.png"),
+  path = here("outputs", "familiar", "stage_1", model1_date))
+
+```
+
+### Feature importance
+```{r}
+# vimp = readRDS(here(stage1_expdes_repo, "variable_importance", "20250117074207_fs_random_forest_ranger_permutation.RDS"))
+# 
+# vimp = vimp[[1]]
+# vimp = vimp@vimp_table %>% as.data.frame()
+# vimp = vimp %>% arrange(desc(score))
+# vimp
+# 
+# importance_repo = here(stage1_results, "variable_importance")
+# 
+# permut_vimp = read.csv2(here(importance_repo, "variable_importance_permutation.csv"))
+# 
+# vimp_top10 = 
+#   permut_vimp %>% 
+#   filter(similarity_threshold == 1 & data_set == "development" & value !=0) %>% 
+#   arrange(desc(value)) %>% 
+#   pull(feature) %>% 
+#   head(10)
+
+# The plot_model_signature_occurrence method plots the occurrence of features among the first 5 ranks across an ensemble of models (if available). The rank threshold can be specified using the rank_threshold argument or the eval_aggregation_rank_threshold parameter (summon_familiar).
 
 
+#Note: -------
+# The summon_familiar outputs below are not yet aggregated, they are bootstrap-specific lists of ranked features used in model development.  
+# stage1_vimp = here(stage1_expdes_repo, "variable_importance")
+# vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
+# vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
+```
+
+### Explanation
+
+Here we use Individual Conditional Expectation (ICE) and Partial Dependence (PD) plots.
+All this is sketchy, and interpretations are challenging !!! 
+
+```{r}
+# These plots are readily available in the repository below. 
+explanation_repo = here(stage1_results, "explanation")
+
+# To have a global picture, look at the correlation tests (I am not sure about this!)
+
+pd_corr_table = data.frame()
+for(impvar in vimp_top10){
+  pdvar = 
+    read.csv2(here(explanation_repo, paste0("explanation_pd_", impvar, ".csv"))) %>% 
+    filter(data_set == "development") 
+  
+  cortest_pd = 
+    stats::cor.test(x = as.numeric(pdvar$feature_x_value),
+                    y = as.numeric(pdvar$predicted_outcome))
+
+  cortest_actual = 
+    stats::cor.test(x = stg1_development %>% pull(impvar),
+                    y = stg1_development$CELL_PROP_VOLUME_COOPS)
+
+  pd_corr_table[1:2,impvar] = c(cortest_pd$estimate, cortest_pd$p.value)
+  
+  pd_corr_table[3:4,impvar] = c(cortest_actual$estimate, cortest_actual$p.value)
+  row.names(pd_corr_table) = c("Correlation coefficient PD", "p value PD",
+                               "Correlation coefficient", "p value")
+}
+
+pd_corr_table
+```
 
 
+### Novelty
+```{r}
+# Novelty in development data 
+devdat_prediction_1 = read.csv2(here(stage1_results, "prediction", "prediction.csv"))
+# devdat_prediction_2 = read.csv2(here(stage2_results, "prediction", "prediction.csv"))
 
+devdat_prediction_1$novelty %>% as.numeric() %>% summary()
 
+# It is possible to add features that were not in the model initial formula, to gauge novelty (?)
+# but would it make sense (to include LU vars) here? 
 
+# Novelty in to-predict data
 
+cells$CELL_NOVELTY = predict(object = model1, newdata = cells, type = "novelty")
 
+cells$CELL_NOVELTY %>% summary()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# DEPRECATED CODE   
+# Novelty in the Cells data is in the range of novelty in the 1st stage dev data. 
+# So we don't take it further into account. 
+```
 
 
 ## Hold-out validation 

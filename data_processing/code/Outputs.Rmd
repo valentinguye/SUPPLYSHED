@@ -87,7 +87,8 @@ coopbs22_sf =
 
 coopbs22_sf$COOP_ID %>% unique() %>% length() 
 
-links = readRDS(here("temp_data", "model", paste0("links_topredict.Rdata")))
+# links = readRDS(here("temp_data", "model", paste0("links_topredict.Rdata")))
+links = readRDS(here("temp_data", "model", "links_topredict_nopostprocessing.Rdata"))
 
 cells = readRDS(here("temp_data", "model", paste0("cells_topredict.Rdata"))) 
 
@@ -112,6 +113,111 @@ cells =
    ) 
 
 ```
+
+
+# POST-PROCESSING 
+This is all at the Links level. 
+
+Unconditional probabilities
+It is not necessary to work on unconditional probabilities.
+It is strictly equivalent to uncondition before or after normalising, since unconditioning is multiplying by a cell-level quantity. 
+Hence, we join the cell's share of coop outlet, but we don't factor it yet. 
+
+```{r}
+links = 
+  links %>% 
+  left_join(
+    cells %>% select(CELL_SHARE_COOP, CELL_ID), 
+    by = "CELL_ID"
+  ) 
+```
+
+
+## Normalisation (cell perspective)
+Normalise heuristic probabilities as well. 
+
+```{r}
+links = 
+  links %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    CELL_NORMSUM_THRESH = sum(LINK_PROBA_THRESH), 
+    CELL_NORMSUM_H10KM  = sum(LINK_PROBA_H10KM), 
+    CELL_NORMSUM_H30KM  = sum(LINK_PROBA_H30KM), 
+    CELL_NORMSUM_H60KM  = sum(LINK_PROBA_H60KM), 
+    CELL_NORMSUM_HDISTR = sum(LINK_PROBA_HDISTR), 
+    CELL_NORMSUM_HCONTI = sum(LINK_PROBA_HCONTI), 
+    CELL_N_POTENTIAL_LINKS = length(na.omit(unique(LINK_POTENTIAL_COOP_ID))), 
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    # When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas ALL AS LIKELY (i.e. 1/number of potential links)
+    # because the point here is not to reflect unconditional probabilities to sell to a coop, but *conditional* probabilities, i.e. 
+    # the probability to sell to coops even very far, very unlikely, if we knew for sure that cocoa is sold to some coops. 
+    # In other words, if we knew cocoa is sold to coops and not other buyers, what coops would it be? 
+    # However, for heuristics, set it to zero, because this is the rule of heuristics. 
+    
+    LINK_PROBA_THRESH_NORMED = case_when(
+      CELL_NORMSUM_THRESH > 0 ~ LINK_PROBA_THRESH / CELL_NORMSUM_THRESH, 
+      TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+      ), 
+    # no need for a case_when here, because CELL_NORMSUM_HCONTI == 0 never happens 
+    LINK_PROBA_HCONTI_NORMED = LINK_PROBA_HCONTI / CELL_NORMSUM_HCONTI,
+    
+    LINK_PROBA_H10KM_NORMED = case_when(
+      CELL_NORMSUM_H10KM > 0 ~ LINK_PROBA_H10KM / CELL_NORMSUM_H10KM, 
+      TRUE ~ 0
+      ), 
+    LINK_PROBA_H30KM_NORMED = case_when(
+      CELL_NORMSUM_H30KM > 0 ~ LINK_PROBA_H30KM / CELL_NORMSUM_H30KM, 
+      TRUE ~ 0
+      ), 
+    LINK_PROBA_H60KM_NORMED = case_when(
+      CELL_NORMSUM_H60KM > 0 ~ LINK_PROBA_H60KM / CELL_NORMSUM_H60KM, 
+      TRUE ~ 0
+      ), 
+    LINK_PROBA_HDISTR_NORMED = case_when(
+      CELL_NORMSUM_HDISTR > 0 ~ LINK_PROBA_HDISTR / CELL_NORMSUM_HDISTR, 
+      TRUE ~ 0
+      )
+  )
+
+links$LINK_PROBA_THRESH_NORMED %>% summary() 
+links$LINK_PROBA_HCONTI_NORMED %>% summary() 
+links$LINK_PROBA_H60KM_NORMED %>% summary() 
+# links %>% 
+#   filter(round(CELL_UNCOND_NORMSUM_THRESH,10) != round(CELL_SHARE_COOP * CELL_NORMSUM_THRESH, 10)) %>% nrow()
+
+stopifnot(
+links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() == 0 
+)
+stopifnot(
+links %>% filter(is.na(LINK_PROBA_H60KM_NORMED)) %>% nrow() == 0 
+)
+
+links %>% filter(is.na(LINK_PROBA_THRESH_NORMED)) %>% nrow() 
+
+summary(links$CELL_NORMSUM_THRESH)
+# It is not anormal that these sums are higher than 1, that's precisely why we normalise actually. 
+
+# links %>% filter(CELL_NORMSUM_THRESH > 1) %>% View()
+
+
+stopifnot(
+  links$LINK_PROBA_THRESH_NORMED %>% sum(na.rm = T) %>% round(5) 
+  # + length(unique(pull(filter(links, CELL_NORMSUM_THRESH == 0), CELL_ID))) # that was for when we (wrongly) set conditional probas to 0 where normsum = 0
+  == 
+    length(unique(links$CELL_ID)) |
+    
+  links$LINK_PROBA_H60KM_NORMED %>% sum(na.rm = T) %>% round(5) +
+    length(unique(links$CELL_ID)) |
+
+  links$LINK_PROBA_HDISTR_NORMED %>% sum(na.rm = T) %>% round(5) +
+    length(unique(links$CELL_ID))
+)
+
+```
+
 
 ## Transformations for display
 ```{r}
@@ -139,24 +245,140 @@ cells_toplot = cells_toplot %>% left_join(cells %>% select(CELL_ID, CELL_ALL_CD_
 
 
 ```
-# Descriptive statistics
-## Development/prediction balance tests
- 
+# 5.1. PROFILING
+Helper functions
 ```{r}
+# Make heuristic probability variables 
+fn_make_heuristic_proba = function(links_data, heuristic_dist_km){
+# Determine, for every link, whether it exists under a given heuristic distance or not. 
+links_data = 
+  links_data %>% 
+  mutate(
+    !!as.symbol(paste0("LINK_PROBA_H",heuristic_dist_km,"KM")) := if_else(LINK_DISTANCE_METERS <= heuristic_dist_km*1e3, 1, 0),
+  )
+return(links_data)
+}
+
+# Normalize a link probability variable
+fn_normalize_link_proba = function(links_data, link_proba_to_normalize){
+  
+links_data = 
+  links_data %>% 
+  group_by(CELL_ID) %>% 
+  mutate(
+    NORMALISING_SUM = sum(link_proba_to_normalize), 
+  ) %>% 
+  ungroup() 
+ 
+# When denominator is null, i.e. all links in cell have probas = 0, then make the normalised probas ALL AS LIKELY (i.e. 1/number of potential links)
+    # because the point here is not to reflect unconditional probabilities to sell to a coop, but *conditional* probabilities, i.e. 
+    # the probability to sell to coops even very far, very unlikely, if we knew for sure that cocoa is sold to some coops. 
+    # In other words, if we knew cocoa is sold to coops and not other buyers, what coops would it be? 
+    # However, for heuristics, set it to zero, because this is the rule of heuristics. 
+if(link_proba_to_normalize == "LINK_PROBA_THRESH"){
+   links_data = 
+     links_data %>% 
+     mutate(
+      LINK_PROBA_THRESH_NORMED = case_when(
+        NORMALISING_SUM > 0 ~ LINK_PROBA_THRESH / NORMALISING_SUM, 
+        TRUE ~ 1 / CELL_N_POTENTIAL_LINKS
+        ))
+}
+if(link_proba_to_normalize == "LINK_PROBA_HCONTI"){
+links_data = 
+   links_data %>% 
+   mutate(
+    # no need for a case_when here, because CELL_NORMSUM_HCONTI == 0 never happens 
+    LINK_PROBA_HCONTI_NORMED = LINK_PROBA_HCONTI / CELL_NORMSUM_HCONTI
+   )
+}    
+if(grepl("KM", link_proba_to_normalize) | link_proba_to_normalize == "LINK_PROBA_HDISTR"){
+links_data = 
+   links_data %>% 
+   mutate(
+    !!as.symbol(paste0(link_proba_to_normalize,"_NORMED")) = case_when(
+      NORMALISING_SUM > 0 ~ !!as.symbol(link_proba_to_normalize) / NORMALISING_SUM, 
+      TRUE ~ 0
+      ))
+}
+
+stopifnot(
+links %>% filter(is.na(!!as.symbol(paste0(link_proba_to_normalize,"_NORMED")))) %>% nrow() == 0 
+)
+
+stopifnot(
+  links %>% select(link_proba_to_normalize) %>% sum(na.rm = T) %>% round(5)  == length(unique(links$CELL_ID)) 
+  # + length(unique(pull(filter(links, CELL_NORMSUM_THRESH == 0), CELL_ID))) # that was for when we (wrongly) set conditional probas to 0 where normsum = 0
+)
+  
+} 
+
+# Calculate the total area of the ICCSS for each coop, for a given link probability variable (which will be the modeled one, or heuristic ones). 
+fn_iccss_total = function(links_data, link_proba_var){
+  links_data
+}
+
+
+
+linked_coops = 
+  links %>% 
+  # add the LU vars produced ex post, on top of this script
+  left_join(cells %>% select(CELL_ID, CELL_FOREST_HA, CELL_ALL_CD_HA, CELL_NODEF_EXPANSION_HA), 
+            by = "CELL_ID") %>% 
+  summarise(.by = "LINK_POTENTIAL_COOP_ID", 
+            COOP_AREA_HA =            sum(cell_area_ha            * CELL_SHARE_COOP * LINK_PROBA_THRESH_NORMED)
+  )
 
 ```
 
-# B. Explanation
+
+## 5.1.1. Descriptive statistics
+Distribution of ICCSS in terms of total land
+
+## 5.1.2. Heuristics
+We need to determine, for every link, whether it exists under a given heuristic distance or not. 
+Then, formulate the IoU for a given probability threshold and heuristic distance. 
+Run the function across a vector of heuristic distances. 
+Plot the average across coops and CI95%. 
+
+```{r}
+# Additional heuristics
+links = 
+  links %>% 
+  mutate(
+    LINK_PROBA_HDISTR = if_else(CELL_DISTRICT_NAME == COOP_DISTRICT_NAME, 1, 0), 
+    LINK_PROBA_HCONTI = 1/LINK_DISTANCE_METERS
+  )
+
+links$LINK_PROBA_H10KM %>% summary()
+links$LINK_PROBA_H30KM %>% summary()
+links$LINK_PROBA_H60KM %>% summary()
+links$LINK_PROBA_HDISTR %>% summary()
+links$LINK_PROBA_HCONTI %>% summary()
+
+```
+
+## 5.1.3. Case studies
+Look at special cases 
+- Coops with very large ICCSS
+- Coops with many farmers
+- Coops with very small ICCSS
+- Coops with few farmers 
+- Coops with multiple BS
+- Coops clustered together (in cities)
+
+## 5.1.4. Feature importance and explanation
 All things variable importance and explanation here. 
 
+Regression of ICCSS on coop attributes 
 
-
-# C. Aggregate sourcing sheds 
+# 5.2. DOCUMENTING
+## 5.2.1. ACCSS 
 This uses mostly first stage results. 
 
-## Outside vs. Within
+### Outside vs. Within
 
-### Aggregate numbers
+#### Aggregate numbers
 
 ```{r}
 # The area of each LU category WITHIN the aggregate sourcing shed: 
@@ -219,7 +441,7 @@ out_tbl
 ```
 
 
-### Univariate map
+#### Univariate map
 Decide to have 3 or 4 bins in the end, based on final data. 
 ```{r}
 # cells_toplot$CELL_COCOA_SHARE %>% summary()
@@ -294,13 +516,13 @@ ggsave(
 
 
 
-### Bivariate maps
+#### Bivariate maps
 Use biscale package. Different vignettes, including on available bivariate palettes here: 
 https://cran.r-project.org/web/packages/biscale/index.html
 
 Use palettes with blue: BlueGold, BlueYl (similar), BlueOr, DkViolet2
 
-#### Cocoa x share
+##### Cocoa x share
 BlueYl
 ```{r}
 cells_toplot$CELL_COCOA_SHARE %>% summary()
@@ -368,7 +590,7 @@ ggsave(
 
 ```
 
-#### Forest x share
+##### Forest x share
 BlueOr
 ```{r}
 cells_toplot$CELL_FOREST_SHARE %>% summary()
@@ -423,7 +645,7 @@ forest_bivplot =
 forest_bivplot
 ```
 
-#### Other ag. land x share
+##### Other ag. land x share
 DkViolet2
 ```{r}
 cells_toplot$CELL_NODEF_EXPANSION_SHARE %>% summary()
@@ -479,7 +701,7 @@ avb_bivplot =
 avb_bivplot
 ```
 
-#### Multi-panel plot
+##### Multi-panel plot
 ```{r}
 multipanel_bivplot = 
   ggarrange(
@@ -508,7 +730,7 @@ ggsave(
 
 ```
 
-#### Past CD x share
+##### Past CD x share
 Bluegill
 ```{r}
 cells_toplot$CELL_ALL_CD_HA %>% summary()
@@ -581,15 +803,38 @@ pastcd_bivplot
 
 
 
-## Exclusive vs. Shared
+### Exclusive vs. Shared
 Use same coding as above, but with different bins and palettes  
 
+#### Number of linked coops 
+IS THIS THE RIGHT WAY TO COMPUTE IT? I AM NOT SURE 
+```{r}
+cell_nlinks = 
+  links_topredict %>% 
+  summarise(.by = "CELL_ID",
+            # CELL_N_LINKED_COOPS = sum(LINK_PROBA_THRESH_NORMED_CELLMAX > 0), 
+            CELL_N_LINKED_COOPS_ALT = sum(LINK_PROBA_THRESH_NORMED > 0)
+            )
 
-# D. Individual sourcing sheds
+cells_topredict = 
+  cells_topredict %>% 
+  left_join(cell_nlinks, 
+             by = "CELL_ID")
 
-## Distribute cell attributes on coops
+cell_nlinks$CELL_N_LINKED_COOPS %>% summary()
+cells_topredict$CELL_N_LINKED_COOPS %>% summary()
+
+rm(cell_nlinks)
+
+```
+
+
+# 5.2.2. ICCSS
+This is the hotspot section in the paper.
+
+Prepare ICCSS is equivalent to MAKING COOP EXPOSURES TO CELL ATTRIBUTES 
 This uses normalised probabilities from the perspective of the *cell*. 
-The idea is to export a coop-level data set with the weighted LU area in all sourcing sheds. 
+The idea is to get a coop-level data frame with the weighted LU area in all sourcing sheds. 
 Repeat for heuristic probabilities as well. 
 
 ```{r}
@@ -700,7 +945,7 @@ linked_coops$COOP_PROP_OF_ALL_CD_HA %>% summary()
 
 ```
 
-## Descriptives
+## Hotspots
 
 ### Total area
 ```{r}
@@ -1351,7 +1596,7 @@ coop_sheds_h60km =
 ```
 
 
-# E. Cell exposure to coop attributes
+# CELL EXPOSURE TO COOP ATTRIBUTES
 
 ## Proba from inverse distance  
 
