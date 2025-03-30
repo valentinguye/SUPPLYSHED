@@ -2338,13 +2338,17 @@ links_topredict$LINK_PROBA %>% summary()
 ```{r}
 # Identify the optimal class probability threshold, and apply it to every link
 
-# To be conservative regarding the extent of supply sheds, we have a preference for false negatives with regards to false positives. Thus, we choose a threshold that maximises the performance metric about false positives: we minimise the   
+# To be conservative regarding the extent of supply sheds, we have a preference for false negatives with regards to false positives.
+# I.e. we consider false positives as "expensive".
+# Thus, we choose the threshold based on the false positive rate (https://developers.google.com/machine-learning/crash-course/classification/accuracy-precision-recall)
+# But this metric is not available in thresholder!! 
+# Thus, we choose a threshold that maximises the performance metric about false positives: we minimise the   
 optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.05))
 # seq(0.0001, 0.001, by = 0.0001)
 
 (thresh = 
   optimal_thresholds %>% 
-  arrange(desc(Precision)) %>% 
+  arrange(desc(F1)) %>% 
   head(1) %>% 
   pull(prob_threshold))
 
