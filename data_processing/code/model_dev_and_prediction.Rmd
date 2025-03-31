@@ -88,6 +88,7 @@ dir.create(here("outputs", "familiar", "stage_2", "models"), recursive = TRUE)
 # This is to save bootstrapped predictions of the model 
 dir.create(here("temp_data", "predictions", "stage_1"), recursive = TRUE)
 
+
 ## Functions
 # Trase palettes etc. for plots
 source(here("code", "theme_trase.R"))
@@ -103,6 +104,9 @@ cell_area_ha =(100*MODEL_RESOLUTION_KM^2)
 
 xlabs = c(-8, -6, -4)
 ylabs = c(5, 7, 9)
+
+# Model development results - to report model performance
+stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
 
 ## Assets
 
@@ -1720,6 +1724,8 @@ perf_plot_stg1 =
   theme(title = element_text(face="bold"),
         plot.title = element_text(face="bold", size = 15))
 
+perf_plot_stg1
+
 ggsave(perf_plot_stg1, 
        filename = "perf_allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5.png", 
        path = here("outputs"),
@@ -1875,6 +1881,10 @@ all_or_used_features = varImp(model1_rfe$fit)$importance %>% row.names()
 #   )
 # model1_caret_cv$results
 
+# this can be removed once we have retrained 1st stage model. 
+# all_or_used_features = gsub("_TRI$", "_TRI_METER", all_or_used_features)
+# all_or_used_features = gsub("CELL_TRI_MM", "CELL_TRI_METER", all_or_used_features)
+
 aoa1 = 
   aoa(newdata = cells %>% select(all_of(all_or_used_features)),
       model = model1_rfe$fit)
@@ -1896,6 +1906,16 @@ datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_1ST_STAGE_ONLY)
 datasummary_crosstab(data = cells, CELL_IS_IN_AOA ~ CELL_BOTH_STAGES)
 
 cells %>% filter(CELL_BOTH_STAGES)
+
+mean_diff = list()
+for(var in all_or_used_features){
+  outaoa = cells %>% filter(!CELL_IS_IN_AOA) %>% pull(var) %>% mean(na.rm = TRUE)
+  inaoa  = cells %>% filter(CELL_IS_IN_AOA) %>% pull(var) %>% mean(na.rm = TRUE)
+  mean_diff[[var]] = abs(outaoa - inaoa) / inaoa
+  print( mean_diff[[var]] )
+}
+
+mean_diff %>% unlist() %>% sort()
 
 toplot = 
   cells %>% 
@@ -2238,6 +2258,21 @@ cells_topredict =
 ```
 
 
+```{r}
+# (Notes about the handling of nested data)
+
+# no-match rows get an empty list (NULL, of length 0)
+cells_topredict %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
+# These empty rows are removed when unnesting, with keep_empty = FALSE (the default)
+cells_un = 
+  cells_topredict %>% 
+  unnest(cols = CELL_SHARE_COOP_DRAWLIST, 
+         keep_empty = F)
+
+nrow(cells_un) / nrow(cells_topredict_nest)
+
+```
+
 
 ### Threshold
 1st stage threshold: whether the share of coop outlet is significantly different from zero
@@ -2246,7 +2281,6 @@ cells_topredict =
 
 # Set the prediction to 0 when it does not differ from 0 by more than the model average error. 
 # Performance metrics are stored here
-model1_perf_metrics = read.csv2(here(stage1_results, "performance", "performance_metric.csv"))
 model1_rmse = model1_perf_metrics$value %>% as.numeric() %>% sqrt()
 
 cells_topredict =
@@ -2285,21 +2319,6 @@ cells_topredict$CELL_SHARE_COOP_GTRMSE %>% summary()
 
 ```
 
-
-```{r}
-# (Notes about the handling of nested data)
-
-# no-match rows get an empty list (NULL, of length 0)
-cells_topredict %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
-# These empty rows are removed when unnesting, with keep_empty = FALSE (the default)
-cells_un = 
-  cells_topredict %>% 
-  unnest(cols = CELL_SHARE_COOP_DRAWLIST, 
-         keep_empty = F)
-
-nrow(cells_un) / nrow(cells_topredict_nest)
-
-```
 
 
 Determinist prediction - deprecated since now the prediction set does not have these cells. 
@@ -2593,9 +2612,6 @@ model1_date = "20250117092735"
 # famdat = readRDS(here(stage1_expdes_repo, "familiar_data", "20241128122859_random_forest_ranger_random_forest_ranger_permutation_1_1_ensemble_1_1_development_data.RDS"))
 
 collection = readRDS(here(stage1_expdes_repo, "familiar_collections", "pooled_data.RDS"))
-
-# Model development results - to report model performance
-stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
 
 # Models - to run predictions
 stage1_model_path = here(stage1_expdes_repo, 
