@@ -106,7 +106,7 @@ xlabs = c(-8, -6, -4)
 ylabs = c(5, 7, 9)
 
 # Model development results - to report model performance
-stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
+# stage1_results = here(stage1_expdes_repo, "results", "pooled_data")
 
 ## Assets
 
@@ -853,9 +853,19 @@ selected_cells_preds =
         `% of 5 nearest coops with corporate programmes` = CELL_PROP_5_NEAREST_COOP_HAS_SSI
          ) 
 
-datasummary_skim(selected_cells_preds)
-datasummary_skim(selected_cells_preds, 
-                 output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
+selected_cells_preds_tableplot = datasummary_skim(selected_cells_preds)
+
+# These do not work for some reasons
+# datasummary_skim(selected_cells_preds, 
+#                  output = here("outputs", "input_data_descriptives", paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.html")))
+# ggsave(selected_cells_preds_tableplot, 
+#        filename = paste0("stg1_",MODEL_RESOLUTION_KM,"km_features.jpeg"), 
+#        path = here("outputs", "input_data_descriptives"),
+#        width = 25, 
+#        height = 20,
+#        units = "cm")
+
+# So, to save, run selected_cells_preds_tableplot in Console with Rstudio dezoomed enough, and save it manually. 
 
 ```
 
@@ -948,14 +958,14 @@ selected_links_preds =
   # mutate(across(.cols = contains("_PROP_"), .fns = ~round(.x*100, 1))) %>% 
   mutate(LINK_DISTANCE_KM = LINK_DISTANCE_METERS*1e-3,
          LINK_TRAVEL_KM = LINK_TRAVEL_METERS*1e-3, 
-         LINK_TRAVEL_MINUTES = LINK_TRAVEL_MINUTES*1e-3, 
+         LINK_TRAVEL_MINUTES = LINK_TRAVEL_MINUTES,
          LINK_IS_EXISTING = if_else(LINK_IS_ACTUAL_COOP_class == "Actual_links","Yes","No")
          ) %>% 
   select(#Sample = SPLIT, 
          `Cell-coop link exists` = LINK_IS_EXISTING ,
-         `Eucl. distance to a coop (km)` = LINK_DISTANCE_KM, 
-         `Road distance to a coop (km)` = LINK_TRAVEL_KM, 
-         `Road duration to a coop (min)` = LINK_TRAVEL_MINUTES, 
+         `Eucl. distance to coop (km)` = LINK_DISTANCE_KM, 
+         `Road distance to coop (km)` = LINK_TRAVEL_KM, 
+         `Road duration to coop (min)` = LINK_TRAVEL_MINUTES, 
 
          `# buying stations within 72km` = CELL_N_BS_WITHIN_DIST, 
          `# coops in department` = CELL_N_COOP_IN_DPT,
@@ -983,11 +993,21 @@ selected_links_preds =
         ) 
 
 
-datasummary_skim(selected_links_preds, 
-                 fun_numeric = list(Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max))
-# , Histogram = function(x) hist(list(x))
+selected_links_preds_tableplot = 
+  datasummary_skim(selected_links_preds, 
+                 fun_numeric = list(Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max), 
+                 fmt = 2)
 
-datasummary_skim(selected_links_preds, fun_numeric = list(Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max),
+selected_links_preds_tableplot
+# ggsave(selected_links_preds_tableplot,
+#        filename = paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.jpeg"),
+#        path = here("outputs", "input_data_descriptives"),
+#        width = 25,
+#        height = 20,
+#        units = "cm")
+
+datasummary_skim(selected_links_preds, 
+                 fun_numeric = list(Mean = Mean, SD = SD, Min = Min, Median = Median, Max = Max),
                  output = here("outputs", "input_data_descriptives", paste0("stg2_",MODEL_RESOLUTION_KM,"km_features.html")))
 
 
@@ -1114,11 +1134,11 @@ tic()
 model1_rfe <- 
   rfe(form = stg1_formula_allfeatures, 
         data = stg1_development,
-        trControl = trainControl(method="LOOCV", returnResamp = "all"),
+        trControl = trainControl(method="boot", number = 20, returnResamp = "all"),
         method = "ranger", 
         importance="permutation", 
         num.trees = 500,
-        tuneLength=10,
+        tuneLength=5,
         # tuneGrid = data.frame(splitrule = "poisson",
         #                   min.node.size = 5,
         #                  mtry = c(8, 20, 40, 60, 77)
@@ -1141,8 +1161,7 @@ model1_rfe$fit
 model1_rfe$fit %>% getTrainPerf()
 
 saveRDS(model1_rfe, 
-        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_LOOCV_10tuneL_sizesevery15_cv5"))
-
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_20boot_10tuneL_sizesevery15_cv5"))
 
 ## EVALUATE 
 to_eval = model1_rfe$fit 
@@ -2354,6 +2373,7 @@ links_topredict$LINK_PROBA %>% summary()
 
 ### Threshold
 2nd stage threshold: whether the (still conditional and not normalised) proba that there is a link is higher than the threshold that minimises false positives. 
+NOT DOING IT ANYMORE BECAUSE NO REAL NEED FOR IT AND IT REQUIRES AN ADDITIONAL ARBITRARY CHOICE FOR THE METRIC TO USE (especially as FPR would be the most preferred one but is not available in caret::thresholder). 
 ```{r}
 # Identify the optimal class probability threshold, and apply it to every link
 
@@ -2365,17 +2385,17 @@ links_topredict$LINK_PROBA %>% summary()
 optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.05))
 # seq(0.0001, 0.001, by = 0.0001)
 
-(thresh = 
-  optimal_thresholds %>% 
-  arrange(desc(F1)) %>% 
-  head(1) %>% 
-  pull(prob_threshold))
-
-links_topredict = 
-  links_topredict %>% 
-  mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 
-                                     0, 
-                                     LINK_PROBA)) # returns NA for NA probas (!AoA)
+# (thresh = 
+#   optimal_thresholds %>% 
+#   arrange(desc(F1)) %>% 
+#   head(1) %>% 
+#   pull(prob_threshold))
+# 
+# links_topredict = 
+#   links_topredict %>% 
+#   mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 
+#                                      0, 
+#                                      LINK_PROBA)) # returns NA for NA probas (!AoA)
 ```
 
 

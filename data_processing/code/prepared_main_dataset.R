@@ -1085,7 +1085,7 @@ rm(only_potential_propt)
 # only_potential_coords %>% 
 #   filter(duplicated(PROEXT_LATITUDE, PROEXT_LONGITUDE, BUYER_LONGITUDE, BUYER_LATITUDE))
 
-write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
+# write.csv(only_potential_coords, here("temp_data", paste0("potential_links_",grid_size_m*1e-3,"km_coords.csv")))
 
 # old = read.csv(here("temp_data", "14012025_potential_links_4km_coords.csv"))
 # old %>% filter(!is.na(LINK_ID_OTHERS)) %>% nrow()
@@ -1100,94 +1100,94 @@ travel_times = read.csv(here("input_data", "IIASA", "complete.csv")) %>%
 
 ### ### ### Temporary strategy ### ### ### 
 ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### 
-
-# Add the extended coordinates (either producer or cell) to the main data
-# (Necessary if joining on other than LINK_ID. Otherwise not necessary.)
-potential_all = 
-  potential_all %>% 
-  left_join(only_potential_coords %>% select(LINK_ID, PROEXT_LONGITUDE, PROEXT_LATITUDE), 
-            by = "LINK_ID")
-
-# The link coordinates do not identify the links, because of the coops that are distinct (in IC2B) in spite of having the same coordinates. 
-# travel_times %>% distinct(PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE) %>% nrow() == nrow(travel_times) 
-# travel_times =
-#     travel_times %>%
-#     group_by(PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE) %>%
-#     mutate(N_DUPS_BY_COORD_PAIR = n()) %>%
-#     ungroup()
-# travel_times = travel_times %>% arrange(PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE, N_DUPS_BY_COORD_PAIR)
-# View(travel_times)
-# coopbs22 %>% filter(LONGITUDE==-7.362 & LATITUDE==6.747) %>% View("coops same place")
-
-# However, the coop ID in addition identifies almost all links. 
-# A few duplicates remain, when HH located at their village center have actual links with the same coops. 
-# These can be discriminated by LINK_ID_COOPS. 
-travel_times %>% 
-  distinct(CELL_ID, 
-           LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, 
-           PROEXT_LONGITUDE, PROEXT_LATITUDE,
-           BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
-  nrow() == nrow(travel_times)
-
-potential_all %>% 
-  distinct(CELL_ID, 
-           LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, 
-           PROEXT_LONGITUDE, PROEXT_LATITUDE,
-           BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
-  nrow() == nrow(potential_all)
-
-# dupfind =
-#     potential_all %>%
-#     group_by(CELL_ID, LINK_ID_COOPS, LINK_POTENTIAL_COOP_BS_ID, 
-#              PRO_LONGITUDE, PRO_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE) %>%
-#     mutate(N_DUPS_BY_COORD_PAIR = n()) %>%
-#     ungroup()
-# dupfind %>% arrange(PRO_LONGITUDE, PRO_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE, N_DUPS_BY_COORD_PAIR) %>% 
-#   select(intersect(names(travel_times), names(dupfind)), PRO_LONGITUDE, PRO_LATITUDE, N_DUPS_BY_COORD_PAIR, everything()) %>% 
-#   View()
-# Necessary otherwise does not match 
-potential_all = potential_all %>% mutate(PROEXT_LATITUDE=round(PROEXT_LATITUDE, 5), 
-                                         PROEXT_LONGITUDE=round(PROEXT_LONGITUDE, 5))
-
-travel_times = travel_times %>% mutate(PROEXT_LATITUDE=round(PROEXT_LATITUDE, 5), 
-                                       PROEXT_LONGITUDE=round(PROEXT_LONGITUDE, 5))
-
-potential_all = 
-  potential_all %>% 
-  left_join(travel_times %>% select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, 
-                                    PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE, 
-                                    LINK_TRAVEL_MINUTES = duration, LINK_TRAVEL_METERS = distance), 
-            by = join_by(
-                   CELL_ID,
-                   LINK_ID_COOPS,
-                   LINK_ID_OTHERS,
-                   LINK_POTENTIAL_COOP_BS_ID,
-                   PROEXT_LONGITUDE,
-                   PROEXT_LATITUDE,
-                   BUYER_LONGITUDE,
-                   BUYER_LATITUDE)
-            )
-
-# some_links = potential_all %>% sample_frac(0.1)
-# ggplot(some_links, aes(x = LINK_TRAVEL_METERS, y = LINK_DISTANCE_METERS)) +
-#   geom_point() +
-#   labs(title = "Scatter Plot of x vs y",
-#        x = "LINK_TRAVEL_METERS",
-#        y = "LINK_DISTANCE_METERS")
-
+# 
+# # Add the extended coordinates (either producer or cell) to the main data
+# # (Necessary if joining on other than LINK_ID. Otherwise not necessary.)
+# potential_all = 
+#   potential_all %>% 
+#   left_join(only_potential_coords %>% select(LINK_ID, PROEXT_LONGITUDE, PROEXT_LATITUDE), 
+#             by = "LINK_ID")
+# 
+# # The link coordinates do not identify the links, because of the coops that are distinct (in IC2B) in spite of having the same coordinates. 
+# # travel_times %>% distinct(PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE) %>% nrow() == nrow(travel_times) 
+# # travel_times =
+# #     travel_times %>%
+# #     group_by(PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE) %>%
+# #     mutate(N_DUPS_BY_COORD_PAIR = n()) %>%
+# #     ungroup()
+# # travel_times = travel_times %>% arrange(PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE, N_DUPS_BY_COORD_PAIR)
+# # View(travel_times)
+# # coopbs22 %>% filter(LONGITUDE==-7.362 & LATITUDE==6.747) %>% View("coops same place")
+# 
+# # However, the coop ID in addition identifies almost all links. 
+# # A few duplicates remain, when HH located at their village center have actual links with the same coops. 
+# # These can be discriminated by LINK_ID_COOPS. 
+# travel_times %>% 
+#   distinct(CELL_ID, 
+#            LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, 
+#            PROEXT_LONGITUDE, PROEXT_LATITUDE,
+#            BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
+#   nrow() == nrow(travel_times)
+# 
+# potential_all %>% 
+#   distinct(CELL_ID, 
+#            LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, 
+#            PROEXT_LONGITUDE, PROEXT_LATITUDE,
+#            BUYER_LONGITUDE, BUYER_LATITUDE) %>% 
+#   nrow() == nrow(potential_all)
+# 
+# # dupfind =
+# #     potential_all %>%
+# #     group_by(CELL_ID, LINK_ID_COOPS, LINK_POTENTIAL_COOP_BS_ID, 
+# #              PRO_LONGITUDE, PRO_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE) %>%
+# #     mutate(N_DUPS_BY_COORD_PAIR = n()) %>%
+# #     ungroup()
+# # dupfind %>% arrange(PRO_LONGITUDE, PRO_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE, N_DUPS_BY_COORD_PAIR) %>% 
+# #   select(intersect(names(travel_times), names(dupfind)), PRO_LONGITUDE, PRO_LATITUDE, N_DUPS_BY_COORD_PAIR, everything()) %>% 
+# #   View()
+# # Necessary otherwise does not match 
+# potential_all = potential_all %>% mutate(PROEXT_LATITUDE=round(PROEXT_LATITUDE, 5), 
+#                                          PROEXT_LONGITUDE=round(PROEXT_LONGITUDE, 5))
+# 
+# travel_times = travel_times %>% mutate(PROEXT_LATITUDE=round(PROEXT_LATITUDE, 5), 
+#                                        PROEXT_LONGITUDE=round(PROEXT_LONGITUDE, 5))
+# 
+# potential_all = 
+#   potential_all %>% 
+#   left_join(travel_times %>% select(CELL_ID, LINK_ID_COOPS, LINK_ID_OTHERS, LINK_POTENTIAL_COOP_BS_ID, 
+#                                     PROEXT_LONGITUDE, PROEXT_LATITUDE, BUYER_LONGITUDE, BUYER_LATITUDE, 
+#                                     LINK_TRAVEL_MINUTES = duration, LINK_TRAVEL_METERS = distance), 
+#             by = join_by(
+#                    CELL_ID,
+#                    LINK_ID_COOPS,
+#                    LINK_ID_OTHERS,
+#                    LINK_POTENTIAL_COOP_BS_ID,
+#                    PROEXT_LONGITUDE,
+#                    PROEXT_LATITUDE,
+#                    BUYER_LONGITUDE,
+#                    BUYER_LATITUDE)
+#             )
+# 
+# # some_links = potential_all %>% sample_frac(0.1)
+# # ggplot(some_links, aes(x = LINK_TRAVEL_METERS, y = LINK_DISTANCE_METERS)) +
+# #   geom_point() +
+# #   labs(title = "Scatter Plot of x vs y",
+# #        x = "LINK_TRAVEL_METERS",
+# #        y = "LINK_DISTANCE_METERS")
+# 
 ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### ### 
 # That's the simple way, just by LINK_ID, if the travel_times data has been prepared at IIASA with 
 # exactly the same data as used here. 
 
-# potential_all = 
-#   potential_all %>% 
-#   left_join(travel_times %>% select(LINK_ID, 
-#                                     LINK_TRAVEL_MINUTES = duration, LINK_TRAVEL_METERS = distance), 
-#             by = "LINK_ID")
+potential_all =
+  potential_all %>%
+  left_join(travel_times %>% select(LINK_ID,
+                                    LINK_TRAVEL_MINUTES = duration, LINK_TRAVEL_METERS = distance),
+            by = "LINK_ID")
 
-# This should be ~2635
+# This should be ~5000 now
 potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% nrow()
-# potential_all2 %>% select(starts_with("PROEXT"), everything()) %>% View()
+# potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% select(starts_with("PROEXT"), everything()) %>% View()
 
 # The unmatched links are those with no buyer coordinates in SC, KIT or WB data, and those with no potential link at all. 
 # potential_all %>% filter(is.na(LINK_TRAVEL_MINUTES)) %>% View()
@@ -1428,7 +1428,7 @@ if(!file.exists(dir_tri)){
                   weights = tri_area, 
                   progress = TRUE)
   
-  st_write(tri_coopbs_10km_buffer, dir_tri)
+  st_write(tri_coopbs_10km_buffer, dir_tri, append = FALSE)
   
 }
 tri_coopbs_10km_buffer = st_read(dir_tri)
@@ -1878,7 +1878,7 @@ stopifnot(
     group_by(CELL_ID) %>% 
     mutate(test = CELL_PROP_VOLUME_COOPS + CELL_PROP_VOLUME_OTHERS) %>% 
     ungroup() %>% 
-    pull(test) %>% unique() %>% na.omit() == 1
+    pull(test) %>% na.omit() %>% round(5) %>% unique() == 1
 )
 
 cell_depvars$CELL_PROP_VOLUME_COOPS %>% summary()
