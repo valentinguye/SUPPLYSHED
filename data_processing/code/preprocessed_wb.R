@@ -108,10 +108,29 @@ wb_sales21_cacao_hh =
 # This is the quantity sold in kg
 wb_sales21_cacao_hh$s16dq05c %>% summary()
 # There is no NA to impute. 
-# No crazy outlier either. 321 tonnes is plausible. 
 wb_sales21_cacao_hh = 
   wb_sales21_cacao_hh %>% 
   rename(LINK_VOLUME_KG = s16dq05c)
+
+# Remove outliers 
+# No crazy outlier either. 321 tonnes is plausible. 
+# But remove statistically defined outliers because performance with these data otherwise deteriorates  
+(vol_outliers = boxplot.stats(wb_sales21_cacao_hh$LINK_VOLUME_KG, coef = 2)$out %>% sort())
+
+wb_sales21_cacao_hh = 
+  wb_sales21_cacao_hh %>% 
+  mutate(LINK_VOLUME_KG = case_when(
+    LINK_VOLUME_KG %in% vol_outliers ~ NA, 
+    TRUE ~ LINK_VOLUME_KG
+  ))
+wb_sales21_cacao_hh$LINK_VOLUME_KG %>% summary()
+
+# Removes 5 villages
+wb_sales21_cacao_hh$grappe %>% unique() %>% length()
+wb_sales21_cacao_hh %>% filter(!is.na(LINK_VOLUME_KG)) %>% pull(grappe) %>% unique() %>% length()
+
+
+
 
 
 # Area ------

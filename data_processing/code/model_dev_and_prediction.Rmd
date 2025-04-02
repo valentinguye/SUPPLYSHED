@@ -1026,7 +1026,7 @@ This is simple because it does not do feature selection nor optimize hyper-param
 ```{r}
 stg1_mfit = ranger(data = stg1_development, 
                    # splitrule="beta",
-                   num.trees = 5000,
+                   # num.trees = 500,
                    # mtry = 30,
                    # min.node.size= 10,
                    # case.weights = stg1_development$CELL_REPRESENTATIVITY_WEIGHT,
@@ -1126,13 +1126,13 @@ ggplot(metric_resamples, aes(x = factor(metric, levels = c("RMSE", "MAE", "R2", 
 # 32h quand même, pour allfeatures_ranger_LOOCV_15tuneL_sizeseveryten_repeatedcv5x5
 # on peut faire moins de tuning la prochaine fois, et aussi sauver les resamples pour pouvoir étudier leur variabilité. 
 
-cl <- makePSOCKcluster(detectCores() - 1)
+cl <- makePSOCKcluster(detectCores() - 2)
 registerDoParallel(cl)
 getDoParWorkers()
 tic()
 
 model1_rfe <- 
-  rfe(form = stg1_formula_allfeatures, 
+  rfe(form = stg1_mformula_exofeatures, #stg1_formula_allfeatures, 
         data = stg1_development,
         trControl = trainControl(method="boot", number = 20, returnResamp = "all"),
         method = "ranger", 
@@ -1161,10 +1161,19 @@ model1_rfe$fit
 model1_rfe$fit %>% getTrainPerf()
 
 saveRDS(model1_rfe, 
-        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_20boot_10tuneL_sizesevery15_cv5"))
+        file = here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_20boot_10tuneL_sizesevery15_cv5_nootlwb"))
 
 ## EVALUATE 
 to_eval = model1_rfe$fit 
+# Make RSE manually 
+# Relative Squared Error is the ratio of the MSE to the mean of squared differences between observed and averaged outcome values.  
+avg_stg1_outcome = stg1_development$CELL_PROP_VOLUME_COOPS %>% mean()
+stg1_development = 
+  stg1_development %>% 
+  mutate(NAIVE_MODEL_SQUARED_ERROR = (CELL_PROP_VOLUME_COOPS - avg_stg1_outcome)^2)
+stg1_mean_squared_naive_error = mean(stg1_development$NAIVE_MODEL_SQUARED_ERROR)
+(to_eval$resample$RMSE^2 / stg1_mean_squared_naive_error)
+
 # Plot 
 metric_resamples = rbind(
   data.frame(distribution = to_eval$resample$RMSE, 
@@ -1685,7 +1694,7 @@ saveRDS(model2_caret_xgb_down,
 This block produces convenient finder objects to access familiar outputs. 
 ```{r}
 # Read caret model 
-model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5"))
+model1_rfe = readRDS(here("temp_data", "model", "caret", "stage_1", "allfeatures_ranger_20boot_10tuneL_sizesevery15_cv5_nootlwb"))
 
 ```
 
@@ -1746,7 +1755,7 @@ perf_plot_stg1 =
 perf_plot_stg1
 
 ggsave(perf_plot_stg1, 
-       filename = "perf_allfeatures_ranger_100boot632_15tuneL_sizeseveryten_repeatedcv5x5.png", 
+       filename = "perf_exofeatures_ranger_20boot_10tuneL_sizesevery15_cv5_nootlwb.png", 
        path = here("outputs"),
        width = 25, 
        height = 20,
@@ -2128,7 +2137,209 @@ cells_topredict$CELL_SHARE_COOP %>% summary()
 
 ```
 
-#### TEMP TESTS
+
+### Bootstrapped predictions 
+Run a prediction for each model built by a bootstrap
+
+- Time&memory benchmark for 1st stage: 13k cells x 100 bootstraps = 1.3M dataset. Prediction with one model = 156s., i.e. ~5h for 100 models.  Même pas en fait, car apparemment c'est vachement plus rapide avec un seul modèle (il doit utiliser tous les modèles quand il prédit avec l'ensemble, logique.)
+- Time&memory benchmark for 2nd stage: repeat the above on slices of the predict set, otherwise the stack will be very large (4M * n boostraps = 1.6bn obs for 400 boostraps). We could set up a foreach loop to run on slices in parallel.    
+
+```{r}
+# # this can be long, so run it only if output not available, or manually (if new model)
+# if(!file.exists(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))){
+#   m = 10
+#   temp_stack_list = list()
+#   cells_topredict_light = cells_topredict %>% select(CELL_ID)
+#   
+#   for(m in 1:length(indiv_model1_names)){#
+#     mdl = readRDS(here(stage1_model_path, indiv_model1_names[m]))
+#     
+#     # cells_topredict_light[,paste0("CELL_SHARE_COOP_DRAWS",m)] = predict(mdl, newdata = cells_topredict)$predicted_outcome
+#     cells_topredict_light$CELL_SHARE_COOP_DRAWS = predict(mdl, newdata = cells_topredict)$predicted_outcome
+#     
+#     cells_topredict_light$BOOTSTRAP_MODEL_IDX = as.integer(m)
+#     
+#     temp_stack_list[[m]] = cells_topredict_light
+#   }
+#   # From a list of 100 dataframes, make a dataframe with a column where each value is a list with 100 elements. 
+#   temp_stack_df = bind_rows(temp_stack_list)
+#   
+#   cells_topredict_nest = 
+#     temp_stack_df %>% 
+#     nest(
+#       CELL_SHARE_COOP_DRAWLIST = c(BOOTSTRAP_MODEL_IDX, CELL_SHARE_COOP_DRAWS),
+#       .by = CELL_ID)
+#   
+#   saveRDS(cells_topredict_nest, here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))
+# } else {
+#   cells_topredict_nest = readRDS(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))
+# }
+# 
+# # Join to the rest of predict data 
+# cells_topredict = 
+#   cells_topredict %>% 
+#   left_join(cells_topredict_nest %>% select(CELL_ID, CELL_SHARE_COOP_DRAWLIST), 
+#             by = "CELL_ID")
+# 
+# # (Notes about the handling of nested data)
+# 
+# # no-match rows get an empty list (NULL, of length 0)
+# cells_topredict %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
+# # These empty rows are removed when unnesting, with keep_empty = FALSE (the default)
+# cells_un = 
+#   cells_topredict %>% 
+#   unnest(cols = CELL_SHARE_COOP_DRAWLIST, 
+#          keep_empty = F)
+# 
+# nrow(cells_un) / nrow(cells_topredict_nest)
+```
+
+
+
+### Threshold
+1st stage threshold: whether the share of coop outlet is significantly different from zero
+```{r}
+# # Significantly, given the model error: 
+# 
+# # Set the prediction to 0 when it does not differ from 0 by more than the model average error. 
+# # Performance metrics are stored here
+# model1_rmse = model1_perf_metrics$value %>% as.numeric() %>% sqrt()
+# 
+# cells_topredict =
+#   cells_topredict %>% 
+#   mutate(
+#     CELL_SHARE_COOP_GTRMSE = if_else(CELL_SHARE_COOP < model1_rmse,
+#                                      0,
+#                                      CELL_SHARE_COOP)
+#     )
+#   
+# # This is when we will have a disitrution spread by the model error. 
+# # In each cell, conduct a one-sided t-test that the predicted share of coop outlet is positive. 
+#   # rowwise() %>% 
+#   # mutate(
+#   #   # CELL_SHARE_COOP_SE = sd(CELL_SHARE_COOP_DRAWLIST[["CELL_SHARE_COOP_DRAWS"]]) / sqrt(nrow(CELL_SHARE_COOP_DRAWLIST)), 
+#     # 
+#     # CELL_SHARE_COOP_LB = CELL_SHARE_COOP - 1.96 * CELL_SHARE_COOP_SE,
+#     
+#     # CELL_SHARE_COOP = if_else(CELL_SHARE_COOP_TTEST[["p.value"]] > 0.05,  
+#     #                                 0, 
+#     #                                 CELL_SHARE_COOP),
+# 
+# 
+# # cells_topredict$CELL_SHARE_COOP_DRAWLIST[[1456]]$CELL_SHARE_COOP_DRAWS %>% mean()
+# # cells_topredict$CELL_SHARE_COOP[1456]
+# # 
+# # cells_topredict$CELL_SHARE_COOP_DRAWLIST[[1456]]$CELL_SHARE_COOP_DRAWS %>% sd()/10
+# # cells_topredict$CELL_SHARE_COOP_SE[1456]
+# # cells_topredict$CELL_SHARE_COOP_TTEST[[1456]]$estimate  
+# 
+# cells_topredict$CELL_SHARE_COOP %>% summary()
+# # cells_topredict$CELL_SHARE_COOP_SE %>% summary()
+# # cells_topredict$CELL_SHARE_COOP_LB %>% summary()
+# # cells_topredict$CELL_SHARE_COOP %>% summary()
+# cells_topredict$CELL_SHARE_COOP_GTRMSE %>% summary()
+
+```
+
+
+
+Determinist prediction - deprecated since now the prediction set does not have these cells. 
+This is just where we are sure that cocoa can be sold to a cooperative because there is no coop. 
+```{r}
+# cells_topredict =
+#   cells_topredict %>% 
+#   mutate(CELL_SHARE_COOP = if_else(CELL_NO_POTENTIAL_LINK, 
+#                                           0, 
+#                                           CELL_SHARE_COOP))
+# 
+# cells_topredict$CELL_SHARE_COOP %>% summary()
+
+```
+
+
+## 2nd stage
+### Main prediction
+```{r}
+# Predict the existence that a link exists
+tic()
+links_topredict$LINK_PROBA = predict(model2_caret_xgb, 
+                                     newdata = links_topredict %>% select(all_of(model2_caret_xgb$finalModel$feature_names)), 
+                                     type = "prob")$Actual_links
+toc()
+
+# From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
+
+links_topredict$LINK_PROBA %>% summary()
+
+```
+
+
+### Threshold
+2nd stage threshold: whether the (still conditional and not normalised) proba that there is a link is higher than the threshold that minimises false positives. 
+NOT DOING IT ANYMORE BECAUSE NO REAL NEED FOR IT AND IT REQUIRES AN ADDITIONAL ARBITRARY CHOICE FOR THE METRIC TO USE (especially as FPR would be the most preferred one but is not available in caret::thresholder). 
+```{r}
+# Identify the optimal class probability threshold, and apply it to every link
+
+# To be conservative regarding the extent of supply sheds, we have a preference for false negatives with regards to false positives.
+# I.e. we consider false positives as "expensive".
+# Thus, we choose the threshold based on the false positive rate (https://developers.google.com/machine-learning/crash-course/classification/accuracy-precision-recall)
+# But this metric is not available in thresholder!! 
+# Thus, we choose a threshold that maximises the performance metric about false positives: we minimise the   
+# optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.05))
+# seq(0.0001, 0.001, by = 0.0001)
+
+# (thresh = 
+#   optimal_thresholds %>% 
+#   arrange(desc(F1)) %>% 
+#   head(1) %>% 
+#   pull(prob_threshold))
+# 
+# links_topredict = 
+#   links_topredict %>% 
+#   mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 
+#                                      0, 
+#                                      LINK_PROBA)) # returns NA for NA probas (!AoA)
+```
+
+
+Determinist prediction - deprecated since now the prediction set does not have these cells. 
+This is just where we are sure that no link can exist because there is no coop. 
+```{r}
+# links_topredict =
+#   links_topredict %>% 
+#   mutate(LINK_PROBA_THRESH = if_else(CELL_NO_POTENTIAL_LINK, 
+#                               0, 
+#                               LINK_PROBA_THRESH)) # it could also be 1 here, since we normalise then. But keep some variation between links_topredict with a positive proba. 
+# 
+# # After this, the number of links_topredict that are NA is 297074
+# links_topredict$LINK_PROBA_THRESH %>% summary()
+# # which is the same as the number of links_topredict in cells_topredict outside the AoA. 
+# n_links_outside_aoa = nrow(filter(links_topredict, !CELL_IS_IN_AOA)) 
+# 
+# stopifnot(
+#   links_topredict %>% filter(is.na(LINK_PROBA_THRESH)) %>% nrow() ==  n_links_outside_aoa
+# )
+# 
+# 
+# links_topredict$LINK_PROBA %>% quantile(seq(0.99, 1, 0.001), na.rm = T)
+# links_topredict$LINK_PROBA_THRESH %>% quantile(seq(0.999, 1, 0.0001), na.rm = T)
+
+```
+
+
+
+# EXPORT 
+```{r}
+saveRDS(cells_topredict, 
+        here("temp_data", "model", "cells_topredict.Rdata"))
+
+saveRDS(links_topredict, 
+        here("temp_data", "model", "links_topredict.Rdata"))
+```
+
+
+# DEPRECATED CODE   
+## Understand caret
 Alternative predictions
 ```{r}
 set.seed(8888)
@@ -2193,249 +2404,8 @@ cor.test(cells_topredict$CELL_SHARE_COOP_RANGER,
 
 ```
 
-Compare familiar to other packages in terms of predictions 
-```{r}
-cells_topredict = 
-  cells_topredict %>% 
-  mutate(CELL_SHARE_COOP_FAMIL = CELL_SHARE_COOP)
-
-# Familiar predictions are opposite to caret's and ranger's, which are both very similar.
-cor.test(cells_topredict$CELL_SHARE_COOP_FAMIL,
-         cells_topredict$CELL_SHARE_COOP_CARET)
-cor.test(cells_topredict$CELL_SHARE_COOP_FAMIL,
-         cells_topredict$CELL_SHARE_COOP_RANGER)
-cor.test(cells_topredict$CELL_SHARE_COOP_RANGER,
-         cells_topredict$CELL_SHARE_COOP_CARET)
-
-# Familiar is doing much worse on the training data ((by two orders of magnitude).
-cells_topredict %>% 
-  filter(CELL_IS_OBSERVED_COOPOUTLET) %>% 
-  mutate(
-    ERROR_FAMIL = CELL_PROP_VOLUME_COOPS - CELL_SHARE_COOP_FAMIL,
-    ERROR_CARET = CELL_PROP_VOLUME_COOPS - CELL_SHARE_COOP_CARET,
-    ERROR_RANGER = CELL_PROP_VOLUME_COOPS - CELL_SHARE_COOP_RANGER) %>% 
-  select(starts_with("ERROR")) %>% 
-  summary()
-# Familiar is on average much lower than the true share, while caret and ranger are higher
-
-cells_toplot = 
-  cells_topredict %>% 
-  mutate(
-   # Work on PERCENTAGE, not share, from here, for display. 
-    CELL_SHARE_COOP = 100*CELL_SHARE_COOP,
-    CELL_COCOA_SHARE = 100*CELL_COCOA_SHARE, 
-    # Round hectares
-    across(.cols = ends_with("_HA"), .fns = ~round(.x, 0))
-    )
 
 
-```
-
-### Bootstrapped predictions 
-Run a prediction for each model built by a bootstrap
-
-- Time&memory benchmark for 1st stage: 13k cells x 100 bootstraps = 1.3M dataset. Prediction with one model = 156s., i.e. ~5h for 100 models.  Même pas en fait, car apparemment c'est vachement plus rapide avec un seul modèle (il doit utiliser tous les modèles quand il prédit avec l'ensemble, logique.)
-- Time&memory benchmark for 2nd stage: repeat the above on slices of the predict set, otherwise the stack will be very large (4M * n boostraps = 1.6bn obs for 400 boostraps). We could set up a foreach loop to run on slices in parallel.    
-
-```{r}
-# this can be long, so run it only if output not available, or manually (if new model)
-if(!file.exists(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))){
-  m = 10
-  temp_stack_list = list()
-  cells_topredict_light = cells_topredict %>% select(CELL_ID)
-  
-  for(m in 1:length(indiv_model1_names)){#
-    mdl = readRDS(here(stage1_model_path, indiv_model1_names[m]))
-    
-    # cells_topredict_light[,paste0("CELL_SHARE_COOP_DRAWS",m)] = predict(mdl, newdata = cells_topredict)$predicted_outcome
-    cells_topredict_light$CELL_SHARE_COOP_DRAWS = predict(mdl, newdata = cells_topredict)$predicted_outcome
-    
-    cells_topredict_light$BOOTSTRAP_MODEL_IDX = as.integer(m)
-    
-    temp_stack_list[[m]] = cells_topredict_light
-  }
-  # From a list of 100 dataframes, make a dataframe with a column where each value is a list with 100 elements. 
-  temp_stack_df = bind_rows(temp_stack_list)
-  
-  cells_topredict_nest = 
-    temp_stack_df %>% 
-    nest(
-      CELL_SHARE_COOP_DRAWLIST = c(BOOTSTRAP_MODEL_IDX, CELL_SHARE_COOP_DRAWS),
-      .by = CELL_ID)
-  
-  saveRDS(cells_topredict_nest, here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))
-} else {
-  cells_topredict_nest = readRDS(here("temp_data", "predictions", "stage_1", "cells_topredict_nest.RDS"))
-}
-
-# Join to the rest of predict data 
-cells_topredict = 
-  cells_topredict %>% 
-  left_join(cells_topredict_nest %>% select(CELL_ID, CELL_SHARE_COOP_DRAWLIST), 
-            by = "CELL_ID")
-
-```
-
-
-```{r}
-# (Notes about the handling of nested data)
-
-# no-match rows get an empty list (NULL, of length 0)
-cells_topredict %>% filter(lengths(CELL_SHARE_COOP_DRAWLIST) == 0) %>% select(CELL_SHARE_COOP_DRAWLIST, everything()) %>% View()
-# These empty rows are removed when unnesting, with keep_empty = FALSE (the default)
-cells_un = 
-  cells_topredict %>% 
-  unnest(cols = CELL_SHARE_COOP_DRAWLIST, 
-         keep_empty = F)
-
-nrow(cells_un) / nrow(cells_topredict_nest)
-
-```
-
-
-### Threshold
-1st stage threshold: whether the share of coop outlet is significantly different from zero
-```{r}
-# Significantly, given the model error: 
-
-# Set the prediction to 0 when it does not differ from 0 by more than the model average error. 
-# Performance metrics are stored here
-model1_rmse = model1_perf_metrics$value %>% as.numeric() %>% sqrt()
-
-cells_topredict =
-  cells_topredict %>% 
-  mutate(
-    CELL_SHARE_COOP_GTRMSE = if_else(CELL_SHARE_COOP < model1_rmse,
-                                     0,
-                                     CELL_SHARE_COOP)
-    )
-  
-# This is when we will have a disitrution spread by the model error. 
-# In each cell, conduct a one-sided t-test that the predicted share of coop outlet is positive. 
-  # rowwise() %>% 
-  # mutate(
-  #   # CELL_SHARE_COOP_SE = sd(CELL_SHARE_COOP_DRAWLIST[["CELL_SHARE_COOP_DRAWS"]]) / sqrt(nrow(CELL_SHARE_COOP_DRAWLIST)), 
-    # 
-    # CELL_SHARE_COOP_LB = CELL_SHARE_COOP - 1.96 * CELL_SHARE_COOP_SE,
-    
-    # CELL_SHARE_COOP = if_else(CELL_SHARE_COOP_TTEST[["p.value"]] > 0.05,  
-    #                                 0, 
-    #                                 CELL_SHARE_COOP),
-
-
-# cells_topredict$CELL_SHARE_COOP_DRAWLIST[[1456]]$CELL_SHARE_COOP_DRAWS %>% mean()
-# cells_topredict$CELL_SHARE_COOP[1456]
-# 
-# cells_topredict$CELL_SHARE_COOP_DRAWLIST[[1456]]$CELL_SHARE_COOP_DRAWS %>% sd()/10
-# cells_topredict$CELL_SHARE_COOP_SE[1456]
-# cells_topredict$CELL_SHARE_COOP_TTEST[[1456]]$estimate  
-
-cells_topredict$CELL_SHARE_COOP %>% summary()
-# cells_topredict$CELL_SHARE_COOP_SE %>% summary()
-# cells_topredict$CELL_SHARE_COOP_LB %>% summary()
-# cells_topredict$CELL_SHARE_COOP %>% summary()
-cells_topredict$CELL_SHARE_COOP_GTRMSE %>% summary()
-
-```
-
-
-
-Determinist prediction - deprecated since now the prediction set does not have these cells. 
-This is just where we are sure that cocoa can be sold to a cooperative because there is no coop. 
-```{r}
-# cells_topredict =
-#   cells_topredict %>% 
-#   mutate(CELL_SHARE_COOP = if_else(CELL_NO_POTENTIAL_LINK, 
-#                                           0, 
-#                                           CELL_SHARE_COOP))
-# 
-# cells_topredict$CELL_SHARE_COOP %>% summary()
-
-```
-
-
-## 2nd stage
-### Main prediction
-```{r}
-# Predict the existence that a link exists
-tic()
-links_topredict$LINK_PROBA = predict(model2_caret_xgb, 
-                                     newdata = links_topredict %>% select(all_of(model2_caret_xgb$finalModel$feature_names)), 
-                                     type = "prob")$Actual_links
-toc()
-
-# From here, to shorten code, let's start a fresh naming convention for the target feature LINK_PROBA. 
-
-links_topredict$LINK_PROBA %>% summary()
-
-```
-
-
-### Threshold
-2nd stage threshold: whether the (still conditional and not normalised) proba that there is a link is higher than the threshold that minimises false positives. 
-NOT DOING IT ANYMORE BECAUSE NO REAL NEED FOR IT AND IT REQUIRES AN ADDITIONAL ARBITRARY CHOICE FOR THE METRIC TO USE (especially as FPR would be the most preferred one but is not available in caret::thresholder). 
-```{r}
-# Identify the optimal class probability threshold, and apply it to every link
-
-# To be conservative regarding the extent of supply sheds, we have a preference for false negatives with regards to false positives.
-# I.e. we consider false positives as "expensive".
-# Thus, we choose the threshold based on the false positive rate (https://developers.google.com/machine-learning/crash-course/classification/accuracy-precision-recall)
-# But this metric is not available in thresholder!! 
-# Thus, we choose a threshold that maximises the performance metric about false positives: we minimise the   
-optimal_thresholds = thresholder(model2_caret_xgb, threshold = seq(0, 1, by = 0.05))
-# seq(0.0001, 0.001, by = 0.0001)
-
-# (thresh = 
-#   optimal_thresholds %>% 
-#   arrange(desc(F1)) %>% 
-#   head(1) %>% 
-#   pull(prob_threshold))
-# 
-# links_topredict = 
-#   links_topredict %>% 
-#   mutate(LINK_PROBA_THRESH = if_else(LINK_PROBA < thresh, 
-#                                      0, 
-#                                      LINK_PROBA)) # returns NA for NA probas (!AoA)
-```
-
-
-Determinist prediction - deprecated since now the prediction set does not have these cells. 
-This is just where we are sure that no link can exist because there is no coop. 
-```{r}
-# links_topredict =
-#   links_topredict %>% 
-#   mutate(LINK_PROBA_THRESH = if_else(CELL_NO_POTENTIAL_LINK, 
-#                               0, 
-#                               LINK_PROBA_THRESH)) # it could also be 1 here, since we normalise then. But keep some variation between links_topredict with a positive proba. 
-# 
-# # After this, the number of links_topredict that are NA is 297074
-# links_topredict$LINK_PROBA_THRESH %>% summary()
-# # which is the same as the number of links_topredict in cells_topredict outside the AoA. 
-# n_links_outside_aoa = nrow(filter(links_topredict, !CELL_IS_IN_AOA)) 
-# 
-# stopifnot(
-#   links_topredict %>% filter(is.na(LINK_PROBA_THRESH)) %>% nrow() ==  n_links_outside_aoa
-# )
-# 
-# 
-# links_topredict$LINK_PROBA %>% quantile(seq(0.99, 1, 0.001), na.rm = T)
-# links_topredict$LINK_PROBA_THRESH %>% quantile(seq(0.999, 1, 0.0001), na.rm = T)
-
-```
-
-
-
-# EXPORT 
-```{r}
-saveRDS(cells_topredict, 
-        here("temp_data", "model", "cells_topredict.Rdata"))
-
-saveRDS(links_topredict, 
-        here("temp_data", "model", "links_topredict.Rdata"))
-```
-
-
-# DEPRECATED CODE   
 ## Balance tests
 Balance tests between 1st stage development and prediction data 
 ```{r}
@@ -2860,6 +2830,45 @@ ggsave(
 # stage1_vimp = here(stage1_expdes_repo, "variable_importance")
 # vimp = readRDS(here(stage1_vimp, "20241127134237_fs_random_forest_ranger_permutation.RDS"))
 # vimp_hp = readRDS(here(stage1_vimp, "random_forest_ranger", "20241127134237_hyperparameters_random_forest_ranger_1_1.RDS"))
+```
+
+
+Compare familiar to other packages in terms of predictions 
+```{r}
+cells_topredict = 
+  cells_topredict %>% 
+  mutate(CELL_SHARE_COOP_FAMIL = CELL_SHARE_COOP)
+
+# Familiar predictions are opposite to caret's and ranger's, which are both very similar.
+cor.test(cells_topredict$CELL_SHARE_COOP_FAMIL,
+         cells_topredict$CELL_SHARE_COOP_CARET)
+cor.test(cells_topredict$CELL_SHARE_COOP_FAMIL,
+         cells_topredict$CELL_SHARE_COOP_RANGER)
+cor.test(cells_topredict$CELL_SHARE_COOP_RANGER,
+         cells_topredict$CELL_SHARE_COOP_CARET)
+
+# Familiar is doing much worse on the training data ((by two orders of magnitude).
+cells_topredict %>% 
+  filter(CELL_IS_OBSERVED_COOPOUTLET) %>% 
+  mutate(
+    ERROR_FAMIL = CELL_PROP_VOLUME_COOPS - CELL_SHARE_COOP_FAMIL,
+    ERROR_CARET = CELL_PROP_VOLUME_COOPS - CELL_SHARE_COOP_CARET,
+    ERROR_RANGER = CELL_PROP_VOLUME_COOPS - CELL_SHARE_COOP_RANGER) %>% 
+  select(starts_with("ERROR")) %>% 
+  summary()
+# Familiar is on average much lower than the true share, while caret and ranger are higher
+
+cells_toplot = 
+  cells_topredict %>% 
+  mutate(
+   # Work on PERCENTAGE, not share, from here, for display. 
+    CELL_SHARE_COOP = 100*CELL_SHARE_COOP,
+    CELL_COCOA_SHARE = 100*CELL_COCOA_SHARE, 
+    # Round hectares
+    across(.cols = ends_with("_HA"), .fns = ~round(.x, 0))
+    )
+
+
 ```
 
 ### Explanation
