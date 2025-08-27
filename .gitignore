@@ -1,4 +1,11 @@
 .Rproj.user
 .Rhistory
 .RData
+.Rtmp
 .Ruserdata
+.tif
+.png
+input_data/
+temp_data/
+outputs/
+analyze_private_IC2B_files/
